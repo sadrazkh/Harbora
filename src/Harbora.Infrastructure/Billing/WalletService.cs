@@ -149,6 +149,54 @@ public sealed record ResourceCost(
 }
 
 /// <summary>
+/// One project's slice of a workspace's bill for a period, split further by environment
+/// (<see cref="Environments"/>) — see <see cref="WalletService.BreakdownByProjectAsync"/> for how it
+/// is built and why its total can never drift from <see cref="WalletService.BreakdownAsync"/>'s own.
+/// </summary>
+/// <param name="ProjectId">
+/// Null for the one synthetic bucket that is not a real project — see <see cref="IsUnassigned"/>.
+/// </param>
+/// <param name="ProjectName">Null exactly when <see cref="ProjectId"/> is null; the view names that
+/// bucket in whichever language it is rendering, the same way it names every other unmeasured state.</param>
+/// <param name="Forecast">
+/// This project's own slice of <see cref="CostForecast"/> — the same computation
+/// <see cref="WalletService.ForecastAsync(Guid,DateTimeOffset,DateTimeOffset,CancellationToken)"/>
+/// makes for the whole workspace, restricted to this project's resources, never a second formula.
+/// Null when the caller did not ask for one (a closed period, or a suspended workspace — the same gate
+/// <see cref="Harbora.Web.ViewModels.BillingPageViewModel.Forecast"/> already applies).
+/// </param>
+public sealed record ProjectCostGroup(
+    Guid? ProjectId,
+    string? ProjectName,
+    IReadOnlyList<EnvironmentCostGroup> Environments,
+    CostForecast? Forecast)
+{
+    /// <summary>The same figure summed twice: once here across environments, once inside each
+    /// environment across resources. Both additions are over the exact <see cref="ResourceCost"/> rows
+    /// <see cref="WalletService.BreakdownAsync"/> returned, so this can never disagree with the
+    /// workspace total — it is a partition of the same numbers, not a second query.</summary>
+    public long TotalMinor => Environments.Sum(e => e.TotalMinor);
+
+    /// <summary>
+    /// True for the one bucket that is not a project: the plan-minimum top-up (no resource at all),
+    /// a mail domain or mailbox (workspace-level, no project of their own), or a resource whose row
+    /// has since been deleted and so has no "current placement" left to ask. Never dropped from the
+    /// report — named and visible instead, so the groups still sum to the workspace total.
+    /// </summary>
+    public bool IsUnassigned => ProjectId is null;
+}
+
+/// <summary>One environment's slice of a <see cref="ProjectCostGroup"/> — see its own remarks.</summary>
+public sealed record EnvironmentCostGroup(
+    Guid? EnvironmentId,
+    string? EnvironmentName,
+    IReadOnlyList<ResourceCost> Costs,
+    CostForecast? Forecast)
+{
+    public long TotalMinor => Costs.Sum(c => c.TotalMinor);
+}
+
+/// <summary>
 /// Money in, and the bill that says where the money went.
 ///
 /// <para>
@@ -365,6 +413,217 @@ public sealed class WalletService(
     }
 
     /// <summary>
+    /// Where a resource currently sits — which project and which environment — or nothing when that
+    /// cannot be answered. Not persisted anywhere: this is resolved fresh, every call, from whichever
+    /// App/Volume/ManagedService rows still exist.
+    /// </summary>
+    private readonly record struct ResourcePlacement(
+        Guid? ProjectId, string? ProjectName, Guid? EnvironmentId, string? EnvironmentName)
+    {
+        public static readonly ResourcePlacement Unassigned = new(null, null, null, null);
+    }
+
+    /// <summary>
+    /// <see cref="ResourceCost.Id"/> to where that resource is placed <b>today</b>, for every id in
+    /// <paramref name="costs"/> that resolves to one.
+    ///
+    /// <para>
+    /// Keyed on the id alone, not on <c>(ResourceType, Id)</c> the way the ledger's own retry index
+    /// is. That pair exists on the ledger because <see cref="BilledResourceType.ServiceVolume"/>
+    /// deliberately reuses a <see cref="Harbora.Domain.Services.ManagedService"/>'s own id (see that
+    /// enum member's remarks) — and the two resolve to the identical placement anyway, since it is the
+    /// same row. Every other id here is a different table's own <c>Guid</c>, so a collision across
+    /// types is not a real possibility this reporting feature needs to guard against.
+    /// </para>
+    ///
+    /// <para>
+    /// An id with no entry is not an error: it is a plan-minimum line (no resource at all), a mail
+    /// domain or mailbox (workspace-level, no project), or a resource whose row has since been
+    /// deleted. <see cref="BreakdownByProjectAsync"/> reads a missing entry as "Unassigned" rather
+    /// than throwing.
+    /// </para>
+    /// </summary>
+    private async Task<Dictionary<Guid, ResourcePlacement>> ResolvePlacementAsync(
+        Guid workspaceId, IReadOnlyList<ResourceCost> costs, CancellationToken ct)
+    {
+        var appIds = costs.Where(c => c.Type == BilledResourceType.App && c.Id is not null)
+            .Select(c => c.Id!.Value).Distinct().ToList();
+        var volumeIds = costs.Where(c => c.Type == BilledResourceType.Volume && c.Id is not null)
+            .Select(c => c.Id!.Value).Distinct().ToList();
+        var serviceIds = costs.Where(c => c.Type is BilledResourceType.Service or BilledResourceType.ServiceVolume
+                                           && c.Id is not null)
+            .Select(c => c.Id!.Value).Distinct().ToList();
+
+        var environmentIdByResource = new Dictionary<Guid, Guid>();
+
+        if (appIds.Count > 0)
+            foreach (var a in await db.Apps.IgnoreQueryFilters().AsNoTracking()
+                         .Where(a => a.WorkspaceId == workspaceId && appIds.Contains(a.Id))
+                         .Select(a => new { a.Id, a.EnvironmentId })
+                         .ToListAsync(ct))
+                environmentIdByResource[a.Id] = a.EnvironmentId;
+
+        if (volumeIds.Count > 0)
+            // A volume has no workspace or environment of its own — both live on the app it hangs off.
+            foreach (var v in await db.Volumes.IgnoreQueryFilters().AsNoTracking()
+                         .Where(v => volumeIds.Contains(v.Id) && v.App!.WorkspaceId == workspaceId)
+                         .Select(v => new { v.Id, EnvironmentId = v.App!.EnvironmentId })
+                         .ToListAsync(ct))
+                environmentIdByResource[v.Id] = v.EnvironmentId;
+
+        if (serviceIds.Count > 0)
+            foreach (var s in await db.ManagedServices.IgnoreQueryFilters().AsNoTracking()
+                         .Where(s => s.WorkspaceId == workspaceId && serviceIds.Contains(s.Id))
+                         .Select(s => new { s.Id, s.EnvironmentId })
+                         .ToListAsync(ct))
+                environmentIdByResource[s.Id] = s.EnvironmentId;
+
+        if (environmentIdByResource.Count == 0) return new Dictionary<Guid, ResourcePlacement>();
+
+        var environmentIds = environmentIdByResource.Values.Distinct().ToList();
+        var environments = await db.Environments.IgnoreQueryFilters().AsNoTracking()
+            .Where(e => e.WorkspaceId == workspaceId && environmentIds.Contains(e.Id))
+            .Select(e => new { e.Id, e.Name, e.ProjectId, ProjectName = e.Project!.Name })
+            .ToListAsync(ct);
+        var environmentById = environments.ToDictionary(e => e.Id);
+
+        var placement = new Dictionary<Guid, ResourcePlacement>();
+        foreach (var (resourceId, environmentId) in environmentIdByResource)
+        {
+            // The environment itself missing would mean an App/ManagedService points at a row that no
+            // longer exists — App.EnvironmentId is a required foreign key (see App's own remarks), so
+            // this should not happen. Resolved to Unassigned rather than thrown on: a report answering
+            // a data-integrity question it was not asked is worse than one that names the gap as
+            // "could not be placed" and keeps running.
+            if (environmentById.TryGetValue(environmentId, out var env))
+                placement[resourceId] = new ResourcePlacement(env.ProjectId, env.ProjectName, env.Id, env.Name);
+        }
+        return placement;
+    }
+
+    /// <summary>
+    /// The exact rows <see cref="BreakdownAsync"/> already returns, partitioned by the project and
+    /// environment each resource is placed in <b>today</b> — never re-summed, so a group's
+    /// <see cref="ProjectCostGroup.TotalMinor"/> can never drift from the workspace total: it is the
+    /// same numbers, sorted into buckets. <c>groups.Sum(g =&gt; g.TotalMinor)</c> always equals
+    /// <c>(await BreakdownAsync(...)).Sum(c =&gt; c.TotalMinor)</c>.
+    ///
+    /// <para>
+    /// <b>Attribution follows where a resource sits now, not where it sat when the hour was charged.</b>
+    /// A <see cref="BillingLedgerEntry"/> carries a resource type, an id and a copy of the resource's
+    /// name — deliberately never a project or an environment, the same reason it never joins back to
+    /// the resource for its name (see <see cref="BreakdownAsync"/>'s own remarks: the row might not
+    /// exist by the time anybody reads the bill). So there is no record of which project an hour
+    /// belonged to at the moment it was billed, only of which project the resource belongs to right
+    /// now. A workload moved from staging to production carries its whole history into production the
+    /// next time this is read — the view says so beside the section, the same way the forecast card
+    /// says its own number is an estimate. Recording project and environment on every ledger line at
+    /// write time would answer the other question, but that is a schema change to
+    /// <see cref="BillingLedgerEntry"/> this reporting feature does not make.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Nothing is dropped.</b> Three kinds of spend cannot be attributed to a project: the
+    /// plan-minimum top-up (no resource at all — <see cref="ResourceCost.Id"/> is null), a mail domain
+    /// or mailbox (workspace-level, no project of their own), and a resource whose row has since been
+    /// deleted. All three land in exactly one <see cref="ProjectCostGroup"/> with a null
+    /// <see cref="ProjectCostGroup.ProjectId"/> — visible, named "Unassigned" by the view, and counted
+    /// in the sum above — rather than quietly missing from a report whose whole value is adding up.
+    /// </para>
+    ///
+    /// <para>
+    /// <paramref name="includeForecast"/> gates the same, more expensive question
+    /// <see cref="ForecastAsync(Guid,DateTimeOffset,DateTimeOffset,CancellationToken)"/> already gates
+    /// for the whole workspace — a closed period or a suspended workspace has nothing to project — so
+    /// the caller passes exactly the condition it already computed rather than this method repeating
+    /// it. Each group's forecast is the identical <see cref="BurnRate"/>/<see cref="CostForecast"/>
+    /// arithmetic, restricted to that group's own resources; never a second formula for "what will
+    /// this cost".
+    /// </para>
+    /// </summary>
+    public async Task<IReadOnlyList<ProjectCostGroup>> BreakdownByProjectAsync(
+        Guid workspaceId, DateTimeOffset from, DateTimeOffset to, bool includeForecast, CancellationToken ct)
+    {
+        var costs = await BreakdownAsync(workspaceId, from, to, ct);
+        if (costs.Count == 0) return [];
+
+        var placement = await ResolvePlacementAsync(workspaceId, costs, ct);
+        var resolvedIds = placement.Keys.ToHashSet();
+
+        ResourcePlacement KeyOf(ResourceCost c) =>
+            c.Id is { } id && placement.TryGetValue(id, out var p) ? p : ResourcePlacement.Unassigned;
+
+        var environmentBuckets = costs
+            .GroupBy(KeyOf)
+            .Select(g => (Key: g.Key, Costs: (IReadOnlyList<ResourceCost>)g
+                .OrderBy(c => c.TotalMinor).ThenBy(c => c.Name, StringComparer.Ordinal).ToList()))
+            .ToList();
+
+        var projectGroups = new List<ProjectCostGroup>();
+        foreach (var projectBucket in environmentBuckets.GroupBy(e => (e.Key.ProjectId, e.Key.ProjectName)))
+        {
+            var isUnassignedProject = projectBucket.Key.ProjectId is null;
+            var environments = new List<EnvironmentCostGroup>();
+
+            foreach (var env in projectBucket)
+            {
+                CostForecast? environmentForecast = null;
+                if (includeForecast)
+                {
+                    environmentForecast = isUnassignedProject
+                        ? await ForecastAsync(workspaceId, from, to, UnassignedResourceFilter(resolvedIds), ct)
+                        : await ForecastAsync(workspaceId, from, to,
+                            ResourceIdFilter(env.Costs.Where(c => c.Id is not null).Select(c => c.Id!.Value)), ct);
+                }
+                environments.Add(new EnvironmentCostGroup(env.Key.EnvironmentId, env.Key.EnvironmentName, env.Costs, environmentForecast));
+            }
+
+            CostForecast? projectForecast = null;
+            if (includeForecast)
+            {
+                projectForecast = isUnassignedProject
+                    ? await ForecastAsync(workspaceId, from, to, UnassignedResourceFilter(resolvedIds), ct)
+                    : await ForecastAsync(workspaceId, from, to,
+                        ResourceIdFilter(environments.SelectMany(e => e.Costs)
+                            .Where(c => c.Id is not null).Select(c => c.Id!.Value)), ct);
+            }
+
+            projectGroups.Add(new ProjectCostGroup(
+                projectBucket.Key.ProjectId, projectBucket.Key.ProjectName, environments, projectForecast));
+        }
+
+        // Unassigned last, however large — "here is the money nothing else accounts for" is a
+        // footnote a customer reads after the projects they recognise, not the headline of their bill.
+        return projectGroups
+            .OrderBy(p => p.IsUnassigned)
+            .ThenByDescending(p => p.TotalMinor)
+            .ThenBy(p => p.ProjectName, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    /// <summary>A filter for <see cref="ForecastAsync(Guid,DateTimeOffset,DateTimeOffset,Func{IQueryable{BillingLedgerEntry},IQueryable{BillingLedgerEntry}},CancellationToken)"/>
+    /// that keeps only lines charged against one of <paramref name="resourceIds"/>.</summary>
+    private static Func<IQueryable<BillingLedgerEntry>, IQueryable<BillingLedgerEntry>> ResourceIdFilter(
+        IEnumerable<Guid> resourceIds)
+    {
+        var set = resourceIds.ToHashSet();
+        return q => q.Where(l => l.ResourceId != null && set.Contains(l.ResourceId.Value));
+    }
+
+    /// <summary>
+    /// The Unassigned group's own filter: a line with no resource at all (the plan minimum), or one
+    /// charged against a resource that never resolved to a project (a mail domain, a mailbox, or a
+    /// deleted app/database) — <paramref name="resolvedResourceIds"/> is every id that DID resolve,
+    /// so this is exactly its complement.
+    /// </summary>
+    private static Func<IQueryable<BillingLedgerEntry>, IQueryable<BillingLedgerEntry>> UnassignedResourceFilter(
+        IEnumerable<Guid> resolvedResourceIds)
+    {
+        var set = resolvedResourceIds.ToHashSet();
+        return q => q.Where(l => l.ResourceId == null || !set.Contains(l.ResourceId.Value));
+    }
+
+    /// <summary>
     /// The least number of distinct hours this workspace has to have been billed for before
     /// <see cref="ForecastAsync"/> will project anything.
     ///
@@ -412,26 +671,45 @@ public sealed class WalletService(
     /// only thing keeping two customers' figures apart.
     /// </para>
     /// </summary>
-    public async Task<CostForecast> ForecastAsync(
-        Guid workspaceId, DateTimeOffset periodFrom, DateTimeOffset periodTo, CancellationToken ct)
+    public Task<CostForecast> ForecastAsync(
+        Guid workspaceId, DateTimeOffset periodFrom, DateTimeOffset periodTo, CancellationToken ct) =>
+        // Every resource the workspace has, which is what "no filter" means — see the private
+        // overload below, the one place this arithmetic actually lives.
+        ForecastAsync(workspaceId, periodFrom, periodTo, static q => q, ct);
+
+    /// <summary>
+    /// Same computation as the public overload above, restricted to whichever ledger lines
+    /// <paramref name="resourceFilter"/> lets through. This is the whole of how
+    /// <see cref="BreakdownByProjectAsync"/> gives each project and environment group its own burn
+    /// rate and projection: it calls this, once per group, with a filter naming that group's own
+    /// resources — never a second copy of the arithmetic above it. The public overload is exactly
+    /// this method asked with a filter that keeps everything, which is why it is a one-line wrapper
+    /// rather than its own implementation.
+    /// </summary>
+    private async Task<CostForecast> ForecastAsync(
+        Guid workspaceId, DateTimeOffset periodFrom, DateTimeOffset periodTo,
+        Func<IQueryable<BillingLedgerEntry>, IQueryable<BillingLedgerEntry>> resourceFilter,
+        CancellationToken ct)
     {
         var now = clock.UtcNow;
 
         // Already a fact, not a forecast, so it is read and returned even when there is not enough
         // history to project the rest of the period.
-        var spentSoFarMinor = -(await db.BillingLedger.IgnoreQueryFilters().AsNoTracking()
+        var spentSoFarMinor = -(await resourceFilter(db.BillingLedger.IgnoreQueryFilters().AsNoTracking()
             .Where(l => l.WorkspaceId == workspaceId
                         && l.BillingHour >= periodFrom && l.BillingHour < periodTo
-                        && (l.Kind == LedgerKind.Charge || l.Kind == LedgerKind.PlanMinimumTopUp))
+                        && (l.Kind == LedgerKind.Charge || l.Kind == LedgerKind.PlanMinimumTopUp)))
             .SumAsync(l => (long?)l.AmountMinor, ct) ?? 0);
 
         // Every hour this workspace has ever actually been charged for, not only this period's — a
         // wallet that has run for months has earned the platform's confidence on the first day of a
         // new one, and gating on the period alone would make every workspace on the install look
-        // brand new at midnight on the 1st.
-        var chargedHours = await db.BillingLedger.IgnoreQueryFilters().AsNoTracking()
+        // brand new at midnight on the 1st. Scoped to the group's own resources for the same reason:
+        // a project created yesterday has not earned that confidence just because the workspace it
+        // lives in has.
+        var chargedHours = await resourceFilter(db.BillingLedger.IgnoreQueryFilters().AsNoTracking()
             .Where(l => l.WorkspaceId == workspaceId
-                        && (l.Kind == LedgerKind.Charge || l.Kind == LedgerKind.PlanMinimumTopUp))
+                        && (l.Kind == LedgerKind.Charge || l.Kind == LedgerKind.PlanMinimumTopUp)))
             .Select(l => l.BillingHour)
             .Distinct()
             .ToListAsync(ct);
@@ -453,9 +731,9 @@ public sealed class WalletService(
         // No rows for the hour sums to null, and null becomes zero here rather than "unknown": once
         // MinimumHistoryHours has been cleared, a silent hour is trusted as a real one that cost
         // nothing, not as data this method failed to find.
-        var burnRateMinor = Math.Max(0L, -(await db.BillingLedger.IgnoreQueryFilters().AsNoTracking()
+        var burnRateMinor = Math.Max(0L, -(await resourceFilter(db.BillingLedger.IgnoreQueryFilters().AsNoTracking()
             .Where(l => l.WorkspaceId == workspaceId && l.BillingHour == lastEndedHour
-                        && (l.Kind == LedgerKind.Charge || l.Kind == LedgerKind.PlanMinimumTopUp))
+                        && (l.Kind == LedgerKind.Charge || l.Kind == LedgerKind.PlanMinimumTopUp)))
             .SumAsync(l => (long?)l.AmountMinor, ct) ?? 0));
 
         // Whole hours between now and the end of the period. The current, still-running hour is
@@ -474,6 +752,10 @@ public sealed class WalletService(
                 : spentSoFarMinor + burnRateMinor * hoursRemaining;
         }
 
+        // The whole wallet's balance, unfiltered, even when this call is for one group. There is one
+        // pool of money, not one per project — a group's RunwayHours/RunwayDate answer "how long would
+        // the whole balance last at only this group's rate", which stays a true statement about a
+        // shared balance; it is not a segmented sub-balance nothing here invented.
         var balanceMinor = await db.Wallets.IgnoreQueryFilters().AsNoTracking()
             .Where(w => w.WorkspaceId == workspaceId)
             .Select(w => (long?)w.BalanceMinor).FirstOrDefaultAsync(ct) ?? 0;
