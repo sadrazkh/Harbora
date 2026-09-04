@@ -44,6 +44,9 @@ public static class JobDispatcher
         JobKind.BillingHour =>
             scope.GetRequiredService<BillingRunHandler>().ExecuteAsync(job.TargetId, ct),
 
+        JobKind.DatabaseMaintenance =>
+            scope.GetRequiredService<DatabaseMaintenanceService>().RunAsync(job.TargetId, ct),
+
         _ => throw new NotSupportedException($"No handler is registered for job kind {job.Kind}.")
     };
 }

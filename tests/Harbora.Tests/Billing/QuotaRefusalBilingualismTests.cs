@@ -342,6 +342,8 @@ public class QuotaRefusalBilingualismTests
             // 3.1's PITR toggle/restore actions are not exercised by these quota-refusal tests either.
             walArchiving: null!,
             pitrRestore: null!,
+            // 2.3's scheduled-maintenance actions are not exercised by these quota-refusal tests either.
+            maintenance: null!,
             clock: clock)
         {
             ControllerContext = new ControllerContext { HttpContext = RequestWithServices() }

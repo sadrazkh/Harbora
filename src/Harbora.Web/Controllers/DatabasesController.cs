@@ -49,6 +49,7 @@ public sealed partial class DatabasesController(
     IServerEngineFactory engines,
     Harbora.Infrastructure.Backups.WalArchivingService walArchiving,
     Harbora.Infrastructure.Backups.PitrRestoreService pitrRestore,
+    Harbora.Infrastructure.Services.DatabaseMaintenanceService maintenance,
     Harbora.Application.Abstractions.ISystemClock clock) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;

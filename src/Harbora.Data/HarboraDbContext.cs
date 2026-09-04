@@ -96,6 +96,14 @@ public class HarboraDbContext : DbContext
     /// <summary>A logical database inside a <see cref="ManagedService"/> instance (D1, 2026-08-25
     /// shared-databases plan) — see <see cref="Harbora.Domain.Services.ManagedServiceDatabase"/>.</summary>
     public DbSet<Harbora.Domain.Services.ManagedServiceDatabase> ManagedServiceDatabases => Set<Harbora.Domain.Services.ManagedServiceDatabase>();
+    /// <summary>A recurring VACUUM/ANALYZE/REINDEX/OPTIMIZE rule for one logical database (2.3,
+    /// round-2 market-gaps plan) — see <see cref="Harbora.Domain.Services.DatabaseMaintenanceSchedule"/>.</summary>
+    public DbSet<Harbora.Domain.Services.DatabaseMaintenanceSchedule> DatabaseMaintenanceSchedules =>
+        Set<Harbora.Domain.Services.DatabaseMaintenanceSchedule>();
+    /// <summary>One maintenance run and its outcome — see
+    /// <see cref="Harbora.Domain.Services.DatabaseMaintenanceRun"/>.</summary>
+    public DbSet<Harbora.Domain.Services.DatabaseMaintenanceRun> DatabaseMaintenanceRuns =>
+        Set<Harbora.Domain.Services.DatabaseMaintenanceRun>();
     public DbSet<BackupDestination> BackupDestinations => Set<BackupDestination>();
     public DbSet<Backup> Backups => Set<Backup>();
     public DbSet<BackupDownloadToken> BackupDownloadTokens => Set<BackupDownloadToken>();
@@ -913,6 +921,29 @@ public class HarboraDbContext : DbContext
             e.HasIndex(x => new { x.ManagedServiceId, x.Name }).IsUnique();
             e.HasOne(x => x.ManagedService).WithMany(s => s.Databases).HasForeignKey(x => x.ManagedServiceId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // --- scheduled database maintenance (2.3, round-2 market-gaps plan) ---
+        // Cascade on the logical database for both, the same reasoning ManagedServiceDatabase's own
+        // Cascade above already gives: a schedule or a run history means nothing once the logical
+        // database they describe is gone, and LogicalDatabaseService.DeleteAsync already refuses to
+        // remove a database still attached to an app — nothing here needs its own refusal to keep a
+        // maintenance history from outliving the row it is about.
+        b.Entity<Harbora.Domain.Services.DatabaseMaintenanceSchedule>(e =>
+        {
+            e.HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+            // One schedule per (database, operation): a second VACUUM schedule on the same database
+            // would silently race the first rather than replace it.
+            e.HasIndex(x => new { x.ManagedServiceDatabaseId, x.Operation }).IsUnique();
+            e.HasOne<Harbora.Domain.Services.ManagedServiceDatabase>().WithMany()
+                .HasForeignKey(x => x.ManagedServiceDatabaseId).OnDelete(DeleteBehavior.Cascade);
+        });
+        b.Entity<Harbora.Domain.Services.DatabaseMaintenanceRun>(e =>
+        {
+            e.HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+            e.HasIndex(x => new { x.ManagedServiceDatabaseId, x.CreatedAt });
+            e.HasOne<Harbora.Domain.Services.ManagedServiceDatabase>().WithMany()
+                .HasForeignKey(x => x.ManagedServiceDatabaseId).OnDelete(DeleteBehavior.Cascade);
         });
 
         // --- point-in-time recovery (3.1, round-2 market-gaps plan) ---

@@ -76,6 +76,11 @@ public static class JobExecutionPolicy
         // behind NotificationOptions.DeliveryTimeout, not a competing budget.
         JobKind.EventDelivery => TimeSpan.FromMinutes(2),
 
+        // VACUUM FULL/REINDEX rewrite the table/index and can legitimately run for a long time on a
+        // large one; the statement itself imposes no timeout of its own, so this is the only backstop
+        // it will ever have. Generous for the same reason JobKind.Backup's own six hours is.
+        JobKind.DatabaseMaintenance => TimeSpan.FromHours(6),
+
         // A kind appended to the enum without a deadline still gets one. "For ever" is the defect
         // this class exists to remove, so it cannot be the default.
         _ => TimeSpan.FromHours(1)
@@ -120,6 +125,12 @@ public static class JobExecutionPolicy
         // a webhook endpoint or Telegram chat still refusing after three attempts, thirty-one
         // minutes apart, needs a person, not a fourth try.
         JobKind.EventDelivery => 3,
+
+        // VACUUM FULL in particular takes an ACCESS EXCLUSIVE lock; a run the worker killed at its own
+        // deadline may have been mid-rewrite, and retrying that blind is not obviously safer than
+        // leaving it for an operator to look at and press "run now" on again. The run's own row already
+        // records the failure with the engine's own words, so nothing is lost by stopping at one.
+        JobKind.DatabaseMaintenance => 1,
 
         // Unknown work is assumed to have side effects, which is the safe assumption to be wrong about.
         _ => 1

@@ -3,6 +3,7 @@ using System;
 using Harbora.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Harbora.Data.Migrations
 {
     [DbContext(typeof(HarboraDbContext))]
-    partial class HarboraDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260904050713_DatabaseMaintenance")]
+    partial class DatabaseMaintenance
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -4976,9 +4979,6 @@ namespace Harbora.Data.Migrations
                     b.Property<bool>("PitrEnabled")
                         .HasColumnType("boolean");
 
-                    b.Property<Guid?>("PrimaryManagedServiceId")
-                        .HasColumnType("uuid");
-
                     b.Property<string>("RedisEvictionPolicy")
                         .HasColumnType("text");
 
@@ -5034,8 +5034,6 @@ namespace Harbora.Data.Migrations
 
                     b.HasIndex("EnvironmentId");
 
-                    b.HasIndex("PrimaryManagedServiceId");
-
                     b.ToTable("ManagedServices");
                 });
 
@@ -5083,46 +5081,6 @@ namespace Harbora.Data.Migrations
                         .IsUnique();
 
                     b.ToTable("ManagedServiceDatabases");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Services.ReplicationLagStatus", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<int>("ConsecutiveFailures")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<double?>("LagSeconds")
-                        .HasColumnType("double precision");
-
-                    b.Property<DateTimeOffset?>("LastAttemptAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("LastError")
-                        .HasColumnType("text");
-
-                    b.Property<DateTimeOffset?>("LastSuccessAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("ManagedServiceId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("WorkspaceId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ManagedServiceId")
-                        .IsUnique();
-
-                    b.ToTable("ReplicationLagStatuses");
                 });
 
             modelBuilder.Entity("Harbora.Domain.Settings.Setting", b =>
@@ -6961,14 +6919,7 @@ namespace Harbora.Data.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
-                    b.HasOne("Harbora.Domain.Services.ManagedService", "PrimaryManagedService")
-                        .WithMany("Replicas")
-                        .HasForeignKey("PrimaryManagedServiceId")
-                        .OnDelete(DeleteBehavior.Restrict);
-
                     b.Navigation("Environment");
-
-                    b.Navigation("PrimaryManagedService");
                 });
 
             modelBuilder.Entity("Harbora.Domain.Services.ManagedServiceDatabase", b =>
@@ -6980,15 +6931,6 @@ namespace Harbora.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("ManagedService");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Services.ReplicationLagStatus", b =>
-                {
-                    b.HasOne("Harbora.Domain.Services.ManagedService", null)
-                        .WithMany()
-                        .HasForeignKey("ManagedServiceId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
                 });
 
             modelBuilder.Entity("Harbora.Domain.Status.StatusIncident", b =>
@@ -7278,8 +7220,6 @@ namespace Harbora.Data.Migrations
                     b.Navigation("Apps");
 
                     b.Navigation("Databases");
-
-                    b.Navigation("Replicas");
                 });
 
             modelBuilder.Entity("Harbora.Domain.Services.ManagedServiceDatabase", b =>

@@ -219,6 +219,42 @@ public sealed class DatabaseGrantExecutor(
         return RunAsync(service, networkName, command, "enable the vector extension", ct);
     }
 
+    /// <summary>
+    /// Runs one maintenance statement — VACUUM/VACUUM FULL/ANALYZE/REINDEX (PostgreSQL) or OPTIMIZE
+    /// TABLE (MySQL/MariaDB) — against one logical database (2.3, round-2 market-gaps plan). The same
+    /// one-off seam every other statement in this class runs through, with one deliberate difference:
+    /// <see cref="RunAsync"/> never returns the client's own stdout/stderr because several of its
+    /// callers' statements carry a fresh password, and quoting the client's output back to a caller
+    /// would quote the password with it. Nothing built by <see cref="DatabaseMaintenanceSql.Build"/>
+    /// ever contains a secret, so this can — and must, per this feature's own requirement that a
+    /// failure "repeat the engine's own error" — hand the engine's own words back rather than a
+    /// generic refusal.
+    /// </summary>
+    public async Task<(bool Ok, string? Error, TimeSpan Duration)> MaintainAsync(
+        ManagedService service, string networkName, string database,
+        DatabaseMaintenanceOperation operation, CancellationToken ct)
+    {
+        if (!DatabaseMaintenanceSql.Supports(service.Type))
+            return (false, DatabaseMaintenanceSql.UnsupportedReason(service.Type), TimeSpan.Zero);
+
+        if (!DatabaseMaintenanceSql.SupportsOperation(service.Type, operation))
+            return (false, DatabaseMaintenanceSql.UnsupportedOperationReason(service.Type, operation), TimeSpan.Zero);
+
+        var command = DatabaseMaintenanceSql.Build(
+            service.Type, operation, service.ContainerName, service.InternalPort, service.Username, database);
+
+        if (command is null)
+            return (false, "That database's name cannot be used in a statement.", TimeSpan.Zero);
+
+        var what = $"run {DatabaseMaintenanceSql.Label(operation)} on '{database}'";
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var run = await RunCapturedAsync(service, networkName, command, what, ct);
+        stopwatch.Stop();
+
+        return (run.Ok, run.Error, stopwatch.Elapsed);
+    }
+
     public async Task<(bool Ok, string? Error)> DropAsync(
         ManagedService service, string networkName, string username, CancellationToken ct)
     {
@@ -313,6 +349,76 @@ public sealed class DatabaseGrantExecutor(
             // Cancellation lands here too, and deliberately so. A cancelled token after the client
             // was started tells us nothing about what the database did with the statement, and
             // rethrowing would replace this sentence with a stack trace on somebody's error page.
+            logger.LogWarning(ex, "Could not {What} on {Service}.", what, service.Name);
+            return (false,
+                $"Harbora lost contact with the database while trying to {what}, so whether that " +
+                "happened is not known.", false);
+        }
+    }
+
+    /// <summary>
+    /// <see cref="RunAsync"/>'s twin for a statement that carries no secret — see
+    /// <see cref="MaintainAsync"/>'s own remarks on why only this one is allowed to quote the client's
+    /// output back to its caller. Every other decision (which server, which credential, which
+    /// exceptions mean what) is identical, so this is intentionally the same shape rather than a
+    /// smaller one — a maintenance statement can fail to reach the database in exactly the ways a
+    /// grant can.
+    /// </summary>
+    private async Task<(bool Ok, string? Error, bool Answered)> RunCapturedAsync(
+        ManagedService service, string networkName, GrantCommand command, string what, CancellationToken ct)
+    {
+        string adminPassword;
+        try { adminPassword = protector.Unprotect(service.EncryptedPassword); }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The admin password for {Service} could not be decrypted.", service.Name);
+            return (false, "This database's own credentials could not be read.", true);
+        }
+
+        IDockerEngine docker;
+        try
+        {
+            docker = await engines.ResolveAsync(service.ServerId, ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not reach the server holding {Service} to {What}.", service.Name, what);
+            return (false,
+                $"The server holding '{service.Name}' could not be reached, so nothing was attempted " +
+                $"to {what}. {ex.Message}", true);
+        }
+
+        var output = new System.Text.StringBuilder();
+        try
+        {
+            var exit = await docker.RunOneOffAsync(new DockerOneOffRequest(
+                Image: command.Image,
+                Command: command.Command,
+                Binds: [],
+                Env: DatabaseGrantSql.Environment(service.Type, adminPassword),
+                NetworkMode: networkName),
+                new Deployments.InlineProgress<string>(line => { lock (output) output.AppendLine(line); }), ct);
+
+            var text = Deployments.LogText.Clean(output.ToString()).Trim();
+
+            if (exit == 0) return (true, null, true);
+
+            // The engine's own words, quoted rather than summarised — the requirement this exists to
+            // satisfy: a failure must name which statement, on which database, and what the engine
+            // said, and "the database refused" on its own tells an operator nothing actionable.
+            return (false,
+                text.Length == 0
+                    ? $"The database refused to {what}."
+                    : $"The database refused to {what}: {text}",
+                true);
+        }
+        catch (NodeCapabilityException ex)
+        {
+            logger.LogWarning(ex, "Could not {What} on {Service}: the node it runs on has no one-off verb.", what, service.Name);
+            return (false, $"'{service.Name}' runs on a node that cannot {what}: {ex.Message}", true);
+        }
+        catch (Exception ex)
+        {
             logger.LogWarning(ex, "Could not {What} on {Service}.", what, service.Name);
             return (false,
                 $"Harbora lost contact with the database while trying to {what}, so whether that " +

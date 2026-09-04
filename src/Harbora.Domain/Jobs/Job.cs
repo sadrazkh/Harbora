@@ -48,7 +48,18 @@ public enum JobKind
     /// (<c>EventDispatcher</c>, not <c>NotificationService</c>) against a different retry budget.
     /// Appended, never renumbered.
     /// </summary>
-    EventDelivery = 12
+    EventDelivery = 12,
+
+    /// <summary>
+    /// One VACUUM/ANALYZE/REINDEX/OPTIMIZE run against one logical database (2.3, round-2 market-gaps
+    /// plan). The target is a <c>Harbora.Domain.Services.DatabaseMaintenanceRun</c> row, the same "row
+    /// IS the queue" shape <see cref="BackupSnapshot"/> already uses — and, like a deployment, it
+    /// excludes on something other than its own target: two maintenance runs of one logical database
+    /// must not run beside each other, but every run is a fresh row, so
+    /// <c>IJobQueue.EnqueueExclusiveAsync</c> is called with the database's own id. Appended, never
+    /// renumbered.
+    /// </summary>
+    DatabaseMaintenance = 13
 }
 
 public enum JobStatus

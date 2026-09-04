@@ -294,6 +294,11 @@ public static class DependencyInjection
         // D1 (2026-08-25 shared-databases plan): logical databases inside one instance, built on the
         // same grant executor rather than a second creation route.
         services.AddScoped<Services.LogicalDatabaseService>();
+        // 2.3 (round-2 market-gaps plan): scheduled VACUUM/ANALYZE/REINDEX/OPTIMIZE, run through the
+        // same grant executor's one-off seam. The scheduler is the queueing half of BackupScheduler's
+        // own shape, ticking a cron schedule rather than an interval.
+        services.AddScoped<Services.DatabaseMaintenanceService>();
+        services.AddHostedService<Services.DatabaseMaintenanceScheduler>();
         services.AddHostedService<Services.DatabaseAccessSweeper>();
         services.AddHostedService<Storage.BucketMeasurementSweeper>();
         services.AddScoped<Maintenance.DiskCleanupService>();
