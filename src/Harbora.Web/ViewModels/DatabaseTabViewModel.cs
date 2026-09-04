@@ -67,6 +67,42 @@ public sealed record ReplicaRowViewModel(
     Harbora.Infrastructure.Backups.ReplicaLagView Lag);
 
 /// <summary>
+/// One maintenance operation on one logical database (2.3, round-2 market-gaps plan) — one row per
+/// (database, operation) pair, since <see cref="Label"/>/<see cref="Description"/>/<see cref="IsOnline"/>
+/// differ per operation and the panel must show each one's own cost rather than one undifferentiated
+/// "maintenance" button. <see cref="ScheduleId"/> null means this operation has no recurring schedule
+/// on this database yet — never a fabricated "not scheduled" row that also claims a status.
+/// </summary>
+public sealed record DatabaseMaintenanceRowViewModel(
+    Guid DatabaseId,
+    string DatabaseName,
+    Harbora.Domain.Services.DatabaseMaintenanceOperation Operation,
+    string Label,
+    string Description,
+    bool IsOnline,
+    Guid? ScheduleId,
+    string? ScheduleCron,
+    string? ScheduleTimezone,
+    bool ScheduleEnabled,
+    DateTimeOffset? NextRunAt,
+    Harbora.Domain.Services.DatabaseMaintenanceRunStatus? LastRunStatus,
+    DateTimeOffset? LastRunAt,
+    TimeSpan? LastRunDuration,
+    string? LastRunError,
+    IReadOnlyList<DatabaseMaintenanceRunHistoryEntry> RecentRuns);
+
+/// <summary>
+/// One past run, for the panel's small history strip beside each operation — three real states
+/// (<c>Succeeded</c>/<c>Failed</c>/<c>Running</c>) and nothing else; a slot with no run to show is
+/// simply absent from the list rather than padded out with a row that claims a status it never had.
+/// </summary>
+public sealed record DatabaseMaintenanceRunHistoryEntry(
+    Harbora.Domain.Services.DatabaseMaintenanceRunStatus Status,
+    DateTimeOffset At,
+    TimeSpan? Duration,
+    string? Error);
+
+/// <summary>
 /// What the database shell's header and tab strip need, on every tab. Mirrors <see cref="AppTabViewModel"/>.
 ///
 /// <para>
@@ -189,6 +225,27 @@ public sealed class DatabaseOverviewViewModel : DatabaseTabViewModel
     /// ever fail.
     /// </summary>
     public bool CanManageLogicalDatabasesLocally { get; init; }
+
+    /// <summary>
+    /// 2.3 (round-2 market-gaps plan): one row per (logical database, maintenance operation) this
+    /// engine offers — see <see cref="DatabaseMaintenanceRowViewModel"/>. Empty both when the engine
+    /// has no maintenance story at all and when it has one but no logical database exists yet;
+    /// <see cref="MaintenanceSupported"/> is what tells those two apart.
+    /// </summary>
+    public IReadOnlyList<DatabaseMaintenanceRowViewModel> Maintenance { get; init; } = [];
+
+    /// <summary>Whether this engine has any maintenance story at all — PostgreSQL and MySQL/MariaDB
+    /// do; everything else is refused by name (<c>DatabaseMaintenanceSql.Supports</c>).</summary>
+    public bool MaintenanceSupported { get; init; }
+
+    /// <summary>Why this engine has none, shown in place of the section rather than beside an empty
+    /// one — the same idiom <see cref="LogicalDatabasesUnsupportedReason"/> already uses.</summary>
+    public string? MaintenanceUnsupportedReason { get; init; }
+
+    /// <summary>Whether this installation can actually reach the engine to run maintenance right now —
+    /// <c>DatabaseMaintenanceService.CanRunLocally</c>, the same gate
+    /// <see cref="CanManageLogicalDatabasesLocally"/> already applies to logical databases.</summary>
+    public bool CanRunMaintenanceLocally { get; init; }
 
     /// <summary>
     /// 1.7 (pgvector-as-option plan): whether this PostgreSQL instance is set to run a pgvector-

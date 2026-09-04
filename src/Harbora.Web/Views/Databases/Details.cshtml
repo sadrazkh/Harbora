@@ -1,7 +1,9 @@
 ﻿@model DatabaseOverviewViewModel
 @using Harbora.Domain.Common
 @using Harbora.Domain.Backups
+@using Harbora.Domain.Services
 @using Harbora.Infrastructure.Backups
+@using Harbora.Infrastructure.Services
 @{
     // The header and breadcrumb now live in _Shell.cshtml, which is typed to DatabaseTabViewModel
     // rather than to the raw row — this local alias is what lets the rest of this file go on reading
@@ -273,6 +275,162 @@ else if (moving)
                             : "This installation cannot reach that instance's own engine yet, so creating a new database here is not available.")
                     </p>
                 }
+            }
+        }
+        <partial name="Design/_PanelEnd" />
+
+        @{
+            // 2.3 (round-2 market-gaps plan): VACUUM/ANALYZE/REINDEX (PostgreSQL) and OPTIMIZE TABLE
+            // (MySQL/MariaDB), on demand or on a schedule, per logical database — the maintenance
+            // nobody remembers until the disk alert fires.
+            var scheduledMaintenancePanel = new PanelModel(isFa ? "نگهداری زمان‌بندی‌شده" : "Scheduled maintenance");
+        }
+        <partial name="Design/_PanelStart" model="scheduledMaintenancePanel" />
+
+        @if (!Model.MaintenanceSupported)
+        {
+            <p class="text-xs leading-5 text-ink-faint" data-maintenance-unsupported="@db.Type">
+                @Model.MaintenanceUnsupportedReason
+            </p>
+        }
+        else if (Model.Maintenance.Count == 0)
+        {
+            <partial name="Design/_EmptyState" model="@(new EmptyStateModel("settings-2",
+                isFa ? "هنوز پایگاه‌دادهٔ منطقی‌ای برای نگهداری وجود ندارد." : "No logical database to maintain yet."))" />
+        }
+        else
+        {
+            <p class="mb-3 text-xs leading-5 text-ink-faint">
+                @(isFa
+                    ? "هر عملیات با هزینهٔ خودش نشان داده می‌شود — برخی آنلاین‌اند، برخی جدول را برای مدتی قفل می‌کنند."
+                    : "Each operation shows its own cost — some run online, some lock the table for a while.")
+            </p>
+
+            <div class="overflow-x-auto" data-maintenance-table>
+                <table class="resource-table min-w-[860px]">
+                    <thead>
+                        <tr>
+                            <th>@(isFa ? "پایگاه‌داده" : "Database")</th>
+                            <th>@(isFa ? "عملیات" : "Operation")</th>
+                            <th>@(isFa ? "چه می‌کند و چه هزینه‌ای دارد" : "What it does, and what it costs")</th>
+                            <th>@(isFa ? "آخرین اجرا" : "Last run")</th>
+                            <th>@(isFa ? "زمان‌بندی" : "Schedule")</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var row in Model.Maintenance)
+                        {
+                            <tr data-maintenance-row="@row.DatabaseId" data-maintenance-operation="@((int)row.Operation)">
+                                <td class="table-primary font-mono" dir="ltr">@row.DatabaseName</td>
+                                <td>
+                                    <span class="resource-status @(row.IsOnline ? "is-ok" : "is-warn")" dir="ltr">
+                                        <i></i>@row.Label
+                                    </span>
+                                    <div class="table-secondary">
+                                        @(row.IsOnline ? (isFa ? "آنلاین و ایمن" : "Online and safe") : (isFa ? "قفل می‌کند" : "Locks the table"))
+                                    </div>
+                                </td>
+                                <td class="text-[11px] leading-4 text-ink-faint max-w-[260px]">@row.Description</td>
+                                <td data-maintenance-last-run-state="@(row.LastRunStatus is null ? "not-measured" : "has-data")">
+                                    @if (row.LastRunStatus is null)
+                                    {
+                                        <span class="text-ink-faint">@(isFa ? "هرگز اجرا نشده" : "never run")</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="resource-status @(row.LastRunStatus == DatabaseMaintenanceRunStatus.Succeeded ? "is-ok" : row.LastRunStatus == DatabaseMaintenanceRunStatus.Failed ? "is-danger" : "is-info")">
+                                            <i></i>@row.LastRunStatus
+                                        </span>
+                                        @if (row.LastRunAt is { } lastAt)
+                                        {
+                                            <div class="table-secondary" dir="ltr">@lastAt.LocalDateTime.ToString(Dates.Stamp)</div>
+                                        }
+                                        @if (row.LastRunDuration is { } duration)
+                                        {
+                                            <div class="table-secondary" dir="ltr">@((int)duration.TotalSeconds)s</div>
+                                        }
+                                        @if (row.LastRunStatus == DatabaseMaintenanceRunStatus.Failed && row.LastRunError is not null)
+                                        {
+                                            <div class="mt-1 text-[11px] text-danger break-all" dir="ltr">@row.LastRunError</div>
+                                        }
+                                        @if (row.RecentRuns.Count > 0)
+                                        {
+                                            <div class="mt-1 flex gap-1" data-maintenance-history title="@(isFa ? "سه اجرای اخیر" : "Last three runs")">
+                                                @foreach (var past in row.RecentRuns)
+                                                {
+                                                    <span class="h-1.5 w-1.5 rounded-full @(past.Status == DatabaseMaintenanceRunStatus.Succeeded ? "bg-ok" : past.Status == DatabaseMaintenanceRunStatus.Failed ? "bg-danger" : "bg-info")"
+                                                          data-maintenance-history-run="@past.Status"
+                                                          title="@($"{past.Status} · {past.At.LocalDateTime.ToString(Dates.Stamp)}" + (past.Error is null ? "" : $" · {past.Error}"))"></span>
+                                                }
+                                            </div>
+                                        }
+                                    }
+                                </td>
+                                <td data-maintenance-schedule-state="@(row.ScheduleId is null ? "empty" : "has-data")">
+                                    @if (Model.CanManage)
+                                    {
+                                        <form asp-action="SaveMaintenanceSchedule" asp-route-id="@db.Id" asp-route-databaseId="@row.DatabaseId"
+                                              method="post" class="flex items-center gap-1" data-maintenance-schedule-form>
+                                            @Html.AntiForgeryToken()
+                                            <input type="hidden" name="operation" value="@((int)row.Operation)" />
+                                            <input name="schedule" dir="ltr" autocomplete="off"
+                                                   value="@row.ScheduleCron" placeholder="0 3 * * 0"
+                                                   class="w-24 rounded-lg bg-canvas border border-line px-2 py-1 text-[11px] font-mono" />
+                                            <label class="inline-flex items-center gap-1 text-[11px] text-ink-faint">
+                                                <input type="checkbox" name="enabled" value="true" checked="@row.ScheduleEnabled" />
+                                                @(isFa ? "فعال" : "On")
+                                            </label>
+                                            <button class="btn-ghost px-2 py-0.5 text-[11px]">@(isFa ? "ذخیره" : "Save")</button>
+                                        </form>
+                                        @if (row.NextRunAt is { } nextRunAt)
+                                        {
+                                            <div class="mt-0.5 text-[11px] text-ink-faint" dir="ltr">@(isFa ? "بعدی " : "next ")@nextRunAt.LocalDateTime.ToString(Dates.Stamp)</div>
+                                        }
+                                        @if (row.ScheduleId is { } scheduleId)
+                                        {
+                                            <form asp-action="DeleteMaintenanceSchedule" asp-route-id="@db.Id" asp-route-databaseId="@row.DatabaseId"
+                                                  asp-route-scheduleId="@scheduleId" method="post" class="mt-0.5">
+                                                @Html.AntiForgeryToken()
+                                                <button class="btn-ghost px-2 py-0.5 text-[11px] text-danger">@(isFa ? "حذف" : "Remove")</button>
+                                            </form>
+                                        }
+                                    }
+                                    else
+                                    {
+                                        <span class="text-ink-faint">@(row.ScheduleId is null ? "—" : row.ScheduleCron)</span>
+                                    }
+                                </td>
+                                <td class="text-end whitespace-nowrap">
+                                    @if (Model.CanManage && Model.CanRunMaintenanceLocally)
+                                    {
+                                        <form asp-action="RunMaintenance" asp-route-id="@db.Id" asp-route-databaseId="@row.DatabaseId"
+                                              method="post" class="inline" data-maintenance-run-form
+                                              data-confirm="@(row.IsOnline
+                                                  ? ""
+                                                  : (isFa
+                                                      ? $"{row.Label} روی «{row.DatabaseName}» جدول را قفل می‌کند تا پایان اجرا. ادامه می‌دهید؟"
+                                                      : $"{row.Label} on \"{row.DatabaseName}\" locks the table until it finishes. Continue?"))"
+                                              onsubmit="@(row.IsOnline ? null : "return confirm(this.dataset.confirm);")">
+                                            @Html.AntiForgeryToken()
+                                            <input type="hidden" name="operation" value="@((int)row.Operation)" />
+                                            <button class="btn-secondary px-2 py-1 text-xs">@(isFa ? "اجرای اکنون" : "Run now")</button>
+                                        </form>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            @if (Model.CanManage && !Model.CanRunMaintenanceLocally)
+            {
+                <p class="mt-3 text-[11px] leading-4 text-warn" data-maintenance-unreachable>
+                    @(isFa
+                        ? "این نصب هنوز نمی‌تواند به موتور این نمونه برسد، پس اجرای نگهداری اینجا در دسترس نیست."
+                        : "This installation cannot reach that instance's own engine yet, so running maintenance here is not available.")
+                </p>
             }
         }
         <partial name="Design/_PanelEnd" />

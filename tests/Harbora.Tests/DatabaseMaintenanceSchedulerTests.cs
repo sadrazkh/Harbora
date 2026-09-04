@@ -38,6 +38,8 @@ public class DatabaseMaintenanceSchedulerTests : IDisposable
         services.AddSingleton(Microsoft.Extensions.Options.Options.Create(new HarboraRuntimeOptions()));
         services.AddSingleton(Microsoft.Extensions.Options.Options.Create(
             new Harbora.Infrastructure.Billing.BillingOptions()));
+        services.AddScoped<Harbora.Application.Abstractions.IBillingGate,
+            Harbora.Infrastructure.Billing.BillingGate>();
         services.AddSingleton<IJobQueue>(new NoopJobQueue());
         services.AddScoped<DatabaseGrantExecutor>();
         services.AddScoped<ManagedServiceEngine>();

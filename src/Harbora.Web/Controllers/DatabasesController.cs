@@ -199,7 +199,12 @@ public sealed partial class DatabasesController(
                     ? Harbora.Infrastructure.Backups.ReplicationLagPresenter.Compute(
                         await db.ReplicationLagStatuses.AsNoTracking()
                             .FirstOrDefaultAsync(s => s.ManagedServiceId == service.Id, ct), clock.UtcNow)
-                    : null
+                    : null,
+                Maintenance = await BuildMaintenanceRowsAsync(service, ct),
+                MaintenanceSupported = DatabaseMaintenanceSql.Supports(service.Type),
+                MaintenanceUnsupportedReason = DatabaseMaintenanceSql.Supports(service.Type)
+                    ? null : DatabaseMaintenanceSql.UnsupportedReason(service.Type),
+                CanRunMaintenanceLocally = maintenance.CanRunLocally
             };
         }
 
@@ -300,6 +305,11 @@ public sealed partial class DatabasesController(
             LogicalDatabasesUnsupportedReason = logicalSupported
                 ? null : Harbora.Infrastructure.Services.DatabaseGrantSql.UnsupportedReason(service.Type),
             CanManageLogicalDatabasesLocally = logicalDatabases.CanCreateLocally,
+            Maintenance = await BuildMaintenanceRowsAsync(service, ct),
+            MaintenanceSupported = DatabaseMaintenanceSql.Supports(service.Type),
+            MaintenanceUnsupportedReason = DatabaseMaintenanceSql.Supports(service.Type)
+                ? null : DatabaseMaintenanceSql.UnsupportedReason(service.Type),
+            CanRunMaintenanceLocally = maintenance.CanRunLocally,
             PgVectorEnabled = service.PgVectorEnabled,
             PgVectorUnpublished = service.HasUnpublishedChanges,
             // 3.1 (round-2 market-gaps plan): computed fresh on every render, never cached — a stale
@@ -411,6 +421,71 @@ public sealed partial class DatabasesController(
         }).ToList();
     }
 
+    /// <summary>
+    /// One row per (logical database, maintenance operation) this engine offers (2.3, round-2
+    /// market-gaps plan) — see <see cref="DatabaseMaintenanceRowViewModel"/>. Reads the most recent
+    /// runs across every logical database on this instance and keeps only the freshest one per
+    /// (database, operation) pair, rather than a second query per row.
+    /// </summary>
+    private async Task<IReadOnlyList<DatabaseMaintenanceRowViewModel>> BuildMaintenanceRowsAsync(
+        ManagedService service, CancellationToken ct)
+    {
+        var operations = DatabaseMaintenanceSql.OperationsFor(service.Type);
+        if (operations.Count == 0) return [];
+
+        var databases = await db.ManagedServiceDatabases.AsNoTracking()
+            .Where(d => d.ManagedServiceId == service.Id)
+            .OrderByDescending(d => d.IsDefault).ThenBy(d => d.Name)
+            .ToListAsync(ct);
+        if (databases.Count == 0) return [];
+
+        var databaseIds = databases.Select(d => d.Id).ToList();
+
+        var schedules = await db.DatabaseMaintenanceSchedules.AsNoTracking()
+            .Where(s => databaseIds.Contains(s.ManagedServiceDatabaseId))
+            .ToListAsync(ct);
+
+        // Most recent runs across every database/operation on this instance. Grouped in memory below
+        // for the freshest one per pair — a full history page can query DatabaseMaintenanceRuns
+        // directly rather than this overview needing a second round trip per row.
+        var recentRuns = await db.DatabaseMaintenanceRuns.AsNoTracking()
+            .Where(r => databaseIds.Contains(r.ManagedServiceDatabaseId))
+            .OrderByDescending(r => r.CreatedAt)
+            .Take(200)
+            .ToListAsync(ct);
+
+        var rows = new List<DatabaseMaintenanceRowViewModel>();
+        foreach (var d in databases)
+        {
+            foreach (var operation in operations)
+            {
+                var schedule = schedules.FirstOrDefault(
+                    s => s.ManagedServiceDatabaseId == d.Id && s.Operation == operation);
+                var pairRuns = recentRuns
+                    .Where(r => r.ManagedServiceDatabaseId == d.Id && r.Operation == operation)
+                    .Take(3)
+                    .Select(r => new DatabaseMaintenanceRunHistoryEntry(
+                        r.Status, r.FinishedAt ?? r.StartedAt ?? r.CreatedAt,
+                        r is { StartedAt: { } s, FinishedAt: { } f } ? f - s : null, r.Error))
+                    .ToList();
+                var lastRun = recentRuns.FirstOrDefault(
+                    r => r.ManagedServiceDatabaseId == d.Id && r.Operation == operation);
+
+                rows.Add(new DatabaseMaintenanceRowViewModel(
+                    d.Id, d.Name, operation,
+                    DatabaseMaintenanceSql.Label(operation),
+                    DatabaseMaintenanceSql.Describe(operation),
+                    DatabaseMaintenanceSql.IsOnline(operation),
+                    schedule?.Id, schedule?.Schedule, schedule?.Timezone, schedule?.Enabled ?? false,
+                    schedule?.NextRunAt,
+                    lastRun?.Status, lastRun?.FinishedAt ?? lastRun?.StartedAt,
+                    lastRun is { StartedAt: { } started, FinishedAt: { } finished } ? finished - started : null,
+                    lastRun?.Error,
+                    pairRuns));
+            }
+        }
+        return rows;
+    }
 
     /// <summary>One row, built the same way for the list and for a database's own page.</summary>
     private static DatabaseRowViewModel Row(
