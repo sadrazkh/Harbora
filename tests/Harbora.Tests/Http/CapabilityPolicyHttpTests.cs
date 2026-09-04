@@ -206,4 +206,103 @@ public class CapabilityPolicyHttpTests(HarboraHttpFixture fixture)
             "another project's app answers the same as one that is not there");
         Panel.Deployments.Queued.Should().NotContain(r => r.AppId == otherApp);
     }
+
+    // ---- 5.1 (per-app and per-service grants, HARBORA-0035) ----
+
+    /// <summary>
+    /// The narrowing one level past project scoping: named to one app, not to the project it lives
+    /// in. Deliberately no project- or environment-level grant at all here — the whole point is that
+    /// the app-level grant reaches on its own.
+    /// </summary>
+    [Fact]
+    public async Task A_developer_scoped_to_one_app_cannot_reach_a_sibling_app_in_the_same_project()
+    {
+        var developer = Panel.GivenUser(
+            fixture.WorkspaceId, "cap-app-scoped@example.com", SystemRole.Member, scopedToProjects: true);
+
+        var sharedProject = Guid.CreateVersion7();
+        var sharedEnvironment = Guid.CreateVersion7();
+
+        Panel.Seed(db =>
+        {
+            db.Projects.Add(new Harbora.Domain.Projects.Project
+            { Id = sharedProject, WorkspaceId = fixture.WorkspaceId, Name = "Shop", Slug = "cap-app-shop" });
+            db.Environments.Add(new Harbora.Domain.Projects.Environment
+            {
+                Id = sharedEnvironment, WorkspaceId = fixture.WorkspaceId,
+                ProjectId = sharedProject, Name = "Production", Slug = "production"
+            });
+        });
+
+        var theirApp = GivenApp("cap-marketing-site", sharedEnvironment);
+        var siblingApp = GivenApp("cap-payroll-api", sharedEnvironment);
+
+        Panel.Seed(db => db.ProjectGrants.Add(new ProjectGrant
+        {
+            WorkspaceId = fixture.WorkspaceId,
+            UserId = developer.Id,
+            ProjectId = sharedProject,
+            AppId = theirApp,
+            Role = SystemRole.Member
+        }));
+
+        var client = await Panel.SignedInAs("198.51.100.190", "cap-app-scoped@example.com");
+
+        var allowed = await DeployAsync(client, theirApp);
+        var refused = await DeployAsync(client, siblingApp);
+
+        allowed.StatusCode.Should().Be(HttpStatusCode.Found,
+            "the app-level grant reaches this app with no project-wide grant behind it at all");
+        allowed.RedirectPath().Should().StartWith("/Deployments/Details");
+
+        refused.StatusCode.Should().Be(HttpStatusCode.NotFound,
+            "a sibling app in the same project answers the same as one that is not there — " +
+            "the grant named one app, not the project it happens to live in");
+        Panel.Deployments.Queued.Should().NotContain(r => r.AppId == siblingApp);
+    }
+
+    /// <summary>
+    /// Listing has to agree with acting: a member granted one app must not be shown — and so learn
+    /// the existence and name of — a sibling app in the same project that nobody granted them.
+    /// </summary>
+    [Fact]
+    public async Task A_developer_scoped_to_one_app_does_not_see_a_sibling_app_in_the_apps_list()
+    {
+        var developer = Panel.GivenUser(
+            fixture.WorkspaceId, "cap-app-list@example.com", SystemRole.Member, scopedToProjects: true);
+
+        var sharedProject = Guid.CreateVersion7();
+        var sharedEnvironment = Guid.CreateVersion7();
+
+        Panel.Seed(db =>
+        {
+            db.Projects.Add(new Harbora.Domain.Projects.Project
+            { Id = sharedProject, WorkspaceId = fixture.WorkspaceId, Name = "Shop", Slug = "cap-app-list-shop" });
+            db.Environments.Add(new Harbora.Domain.Projects.Environment
+            {
+                Id = sharedEnvironment, WorkspaceId = fixture.WorkspaceId,
+                ProjectId = sharedProject, Name = "Production", Slug = "production"
+            });
+        });
+
+        var visibleApp = GivenApp("cap-list-visible", sharedEnvironment);
+        var hiddenApp = GivenApp("cap-list-hidden", sharedEnvironment);
+
+        Panel.Seed(db => db.ProjectGrants.Add(new ProjectGrant
+        {
+            WorkspaceId = fixture.WorkspaceId,
+            UserId = developer.Id,
+            ProjectId = sharedProject,
+            AppId = visibleApp,
+            Role = SystemRole.Member
+        }));
+
+        var client = await Panel.SignedInAs("198.51.100.191", "cap-app-list@example.com");
+
+        var html = await (await client.GetAsync("/apps")).Content.ReadAsStringAsync();
+
+        html.Should().Contain("cap-list-visible", "the granted app must still appear in the list");
+        html.Should().NotContain("cap-list-hidden",
+            "a sibling app in the same project that nobody granted them must not be named on the page");
+    }
 }

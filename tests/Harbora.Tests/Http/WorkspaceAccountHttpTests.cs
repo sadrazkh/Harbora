@@ -139,6 +139,53 @@ public sealed class WorkspaceAccountHttpTests(HarboraHttpFixture fixture)
             .Any(g => g.WorkspaceId == team.Id && g.UserId == member.Id && g.ProjectId == project.Id)).Should().BeTrue();
     }
 
+    /// <summary>
+    /// 5.1 (per-app and per-service grants, HARBORA-0035): the same form, but the "specific app"
+    /// picker rather than the project one — <c>WorkspacesController.AddProjectGrant</c> resolves
+    /// <c>projectId</c>/<c>environmentId</c> from the app itself and ignores whatever the other two
+    /// fields posted, the way <c>environmentId</c> already overrides a posted <c>projectId</c>.
+    /// </summary>
+    [Fact]
+    public async Task Workspace_owner_can_grant_a_member_access_to_one_named_app()
+    {
+        var ownerEmail = $"scope-app-owner-{Guid.NewGuid():N}@example.com";
+        var memberEmail = $"scope-app-member-{Guid.NewGuid():N}@example.com";
+        Panel.GivenUser(fixture.WorkspaceId, ownerEmail, SystemRole.Member);
+        var member = Panel.GivenUser(fixture.WorkspaceId, memberEmail, SystemRole.Member);
+        var client = await Panel.SignedInAs("198.51.100.192", ownerEmail);
+        var token = await client.AntiforgeryTokenFrom("/workspaces");
+        await client.PostFormAsync("/workspaces/create", token, ("name", "App Grant Team"));
+        var team = Panel.Read(db => db.Workspaces.IgnoreQueryFilters()
+            .Single(w => w.Name == "App Grant Team" && w.OwnerUser!.Email == ownerEmail));
+        Panel.Seed(db => db.WorkspaceMembers.Add(new Harbora.Domain.Identity.WorkspaceMember
+        {
+            WorkspaceId = team.Id, UserId = member.Id, Role = WorkspaceRole.Member
+        }));
+        var project = Panel.Read(db => db.Projects.IgnoreQueryFilters().Single(p => p.WorkspaceId == team.Id));
+        var environment = Panel.Read(db => db.Environments.IgnoreQueryFilters()
+            .Single(e => e.WorkspaceId == team.Id));
+        var app = new Harbora.Domain.Apps.App
+        {
+            WorkspaceId = team.Id, EnvironmentId = environment.Id, Name = "marketing-site", Slug = "app-grant-marketing",
+            SourceType = Harbora.Domain.Common.AppSourceType.PrebuiltImage, PrebuiltImage = "ghcr.io/example/site:1.0"
+        };
+        Panel.Seed(db => db.Apps.Add(app));
+
+        token = await client.AntiforgeryTokenFrom("/workspaces");
+        await client.PostFormAsync($"/workspaces/members/{member.Id}/scope", token, ("scoped", "true"));
+        token = await client.AntiforgeryTokenFrom("/workspaces");
+        await client.PostFormAsync($"/workspaces/members/{member.Id}/grants", token,
+            ("appId", app.Id.ToString()), ("role", "Member"));
+
+        var grant = Panel.Read(db => db.ProjectGrants.IgnoreQueryFilters()
+            .Single(g => g.WorkspaceId == team.Id && g.UserId == member.Id));
+        grant.AppId.Should().Be(app.Id);
+        grant.ProjectId.Should().Be(project.Id,
+            "resolved from the app itself, the same way an environment grant resolves its own project");
+        grant.ServiceId.Should().BeNull();
+        grant.EnvironmentId.Should().BeNull("a resource-level grant carries no environment of its own");
+    }
+
     [Fact]
     public async Task Shared_workspace_ownership_can_be_transferred_to_an_active_member()
     {

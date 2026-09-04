@@ -92,6 +92,75 @@ public sealed class AppScopeGrantCleanupTests
             "the same contractor's whole-project grant has nothing to do with this app and must survive");
     }
 
+    /// <summary>
+    /// Both tenancy directions in one pass, the CONSTRAINTS.md rule for any cleanup that reads with
+    /// <c>IgnoreQueryFilters()</c>: the workspace whose app was deleted loses that grant, and a
+    /// second workspace's own grant — pointing at its own, still-alive app — is untouched. The
+    /// cleanup query filters by <c>AppId</c> alone, which is already tenant-safe by construction
+    /// (two different apps can never share a Guid), but the explicit
+    /// <c>WorkspaceId == app.WorkspaceId</c> conjunction is proven here rather than assumed.
+    /// </summary>
+    [Fact]
+    public async Task Deleting_an_app_in_one_workspace_does_not_touch_a_grant_in_another_workspace()
+    {
+        await using var db = NewDb();
+        var (workspaceA, serverA, projectA, environmentA) = SeedPlacement(db);
+        var workspaceB = new Workspace { Name = "widgets", Slug = "widgets" };
+        var serverB = new Harbora.Domain.Servers.Server { Name = "local-b", Hostname = "b.localhost", IsLocal = true };
+        var projectB = new Harbora.Domain.Projects.Project { WorkspaceId = workspaceB.Id, Name = "widgets", Slug = "widgets" };
+        var environmentB = new Harbora.Domain.Projects.Environment
+        {
+            WorkspaceId = workspaceB.Id, ProjectId = projectB.Id, Name = "Production", Slug = "production", IsDefault = true
+        };
+        db.Workspaces.Add(workspaceB);
+        db.Servers.Add(serverB);
+        db.Projects.Add(projectB);
+        db.Environments.Add(environmentB);
+
+        var appA = new App
+        {
+            WorkspaceId = workspaceA.Id, ServerId = serverA.Id, EnvironmentId = environmentA.Id,
+            Name = "api-a", Slug = "api-a", SourceType = AppSourceType.PrebuiltImage, PrebuiltImage = "ghcr.io/example/a:1.0"
+        };
+        var appB = new App
+        {
+            WorkspaceId = workspaceB.Id, ServerId = serverB.Id, EnvironmentId = environmentB.Id,
+            Name = "api-b", Slug = "api-b", SourceType = AppSourceType.PrebuiltImage, PrebuiltImage = "ghcr.io/example/b:1.0"
+        };
+        db.Apps.AddRange(appA, appB);
+
+        var grantA = new ProjectGrant
+        {
+            WorkspaceId = workspaceA.Id, UserId = Guid.CreateVersion7(), ProjectId = projectA.Id, AppId = appA.Id,
+            Role = SystemRole.Member
+        };
+        var grantB = new ProjectGrant
+        {
+            WorkspaceId = workspaceB.Id, UserId = Guid.CreateVersion7(), ProjectId = projectB.Id, AppId = appB.Id,
+            Role = SystemRole.Member
+        };
+        db.ProjectGrants.AddRange(grantA, grantB);
+        await db.SaveChangesAsync();
+
+        var docker = new FakeDockerEngine();
+        var service = new AppOperationsService(
+            db,
+            new FakeServerEngineFactory(docker),
+            new RecordingProxyEngine(() => db.Routes.IgnoreQueryFilters().AsNoTracking().ToList()),
+            new BillingGate(db, Options.Create(new BillingOptions())),
+            new HostPortAllocator(db, TestIngress.Registry(), NullLogger<HostPortAllocator>.Instance),
+            NullLogger<AppOperationsService>.Instance);
+
+        await service.DeleteAsync(appA.Id, removeVolumes: false, CancellationToken.None);
+
+        (await db.ProjectGrants.IgnoreQueryFilters().AnyAsync(g => g.Id == grantA.Id)).Should().BeFalse(
+            "the right tenant: workspace A's own app was deleted, so its own grant must go with it");
+        (await db.ProjectGrants.IgnoreQueryFilters().AnyAsync(g => g.Id == grantB.Id)).Should().BeTrue(
+            "the wrong tenant: workspace B's app is untouched, so its grant must survive");
+        (await db.Apps.IgnoreQueryFilters().AnyAsync(a => a.Id == appB.Id)).Should().BeTrue(
+            "workspace B's app itself was never asked about");
+    }
+
     [Fact]
     public async Task Deleting_a_managed_service_removes_grants_that_named_it_but_leaves_the_users_other_grants()
     {

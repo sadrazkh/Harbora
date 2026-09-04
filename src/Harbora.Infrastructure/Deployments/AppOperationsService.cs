@@ -425,7 +425,8 @@ public sealed class AppOperationsService(
         // HarboraDbContext's own remarks by the DbSet). Left behind, a grant naming a deleted app
         // is a permission that grants nothing and a row nobody can ever explain; loaded and removed
         // rather than ExecuteDeleteAsync for the same reason the routes just above are.
-        var appGrants = await db.ProjectGrants.IgnoreQueryFilters().Where(g => g.AppId == appId).ToListAsync(ct);
+        var appGrants = await db.ProjectGrants.IgnoreQueryFilters()
+            .Where(g => g.AppId == appId && g.WorkspaceId == app.WorkspaceId).ToListAsync(ct);
         db.ProjectGrants.RemoveRange(appGrants);
         db.Apps.Remove(app); // cascades env vars, domains, deployments, volumes
         await db.SaveChangesAsync(ct);

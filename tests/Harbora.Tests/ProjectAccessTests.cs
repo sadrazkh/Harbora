@@ -253,4 +253,19 @@ public class ProjectAccessTests
         ProjectAccess.Describe(AppGrant(Shop, MarketingSite), "Shop", "Production", "marketing-site")
             .Should().Be("Member on Shop · marketing-site");
     }
+
+    [Fact]
+    public void An_administrator_reaches_an_app_even_when_only_somebody_elses_grant_names_it()
+    {
+        // The owner/admin bypass in Allows is checked before any grant — project-, environment- or
+        // resource-scoped — is even looked at, so an app-level grant existing for a colleague must
+        // not accidentally narrow what an administrator themselves can reach.
+        var someoneElsesGrant = new[] { AppGrant(Shop, MarketingSite, SystemRole.Viewer) };
+
+        foreach (var role in new[] { SystemRole.Owner, SystemRole.Admin })
+        {
+            ProjectAccess.Allows(role, scopedToProjects: true, someoneElsesGrant, OfApp(Shop, PayrollApi), Capabilities.AppsDeploy)
+                .Should().BeTrue($"{role} is never scoped, whatever grants exist for anyone else");
+        }
+    }
 }

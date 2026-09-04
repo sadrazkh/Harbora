@@ -546,6 +546,14 @@ public sealed partial class TenantsController(
         var projectName = projects.ToDictionary(p => p.Id, p => p.Name);
         var environmentName = projects.SelectMany(p => p.Environments).ToDictionary(e => e.Id, e => e.Name);
 
+        // 5.1 (per-app grants, HARBORA-0035): a resource-scoped grant reads by the app or service's
+        // own name — WorkspacesController.Index's own reasoning, applied here so the provider console
+        // never shows one as if it covered the whole project instead of the one thing it names.
+        var appName = await db.Apps.IgnoreQueryFilters().Where(a => a.WorkspaceId == id)
+            .ToDictionaryAsync(a => a.Id, a => a.Name, ct);
+        var serviceName = await db.ManagedServices.IgnoreQueryFilters().Where(s => s.WorkspaceId == id)
+            .ToDictionaryAsync(s => s.Id, s => s.Name, ct);
+
         var grants = await db.ProjectGrants.IgnoreQueryFilters().Where(g => g.WorkspaceId == id).ToListAsync(ct);
 
         var members = rows.Select(r => new TenantMember(r.Id, r.Email, r.DisplayName, r.Role.ToString(), r.IsActive)
@@ -555,7 +563,12 @@ public sealed partial class TenantsController(
                 .Select(g => (g.Id, Harbora.Domain.Authorization.ProjectAccess.Describe(
                     g,
                     projectName.GetValueOrDefault(g.ProjectId, "(deleted project)"),
-                    g.EnvironmentId is { } e ? environmentName.GetValueOrDefault(e, "(deleted environment)") : null)))
+                    g.EnvironmentId is { } e ? environmentName.GetValueOrDefault(e, "(deleted environment)") : null,
+                    g.AppId is { } grantAppId
+                        ? appName.GetValueOrDefault(grantAppId, "(deleted app)")
+                        : g.ServiceId is { } grantServiceId
+                            ? serviceName.GetValueOrDefault(grantServiceId, "(deleted service)")
+                            : null)))
                 .ToList()
         }).ToList();
 
