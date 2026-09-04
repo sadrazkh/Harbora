@@ -86,7 +86,7 @@ public class RegistryCredentialsHttpTests(HarboraHttpFixture fixture)
     public async Task Creating_a_credential_encrypts_the_secret_at_rest()
     {
         Panel.GivenUser(fixture.WorkspaceId, "rc-create@example.com", SystemRole.Owner);
-        var client = await Panel.SignedInAs("203.0.113.160", "rc-create@example.com");
+        var client = await Panel.SignedInAs("198.51.100.100", "rc-create@example.com");
 
         var token = await client.AntiforgeryTokenFrom("/registry-credentials");
         var response = await client.PostFormAsync("/registry-credentials", token,
@@ -102,7 +102,7 @@ public class RegistryCredentialsHttpTests(HarboraHttpFixture fixture)
     public async Task The_registry_host_is_normalized_to_lower_case_and_trimmed()
     {
         Panel.GivenUser(fixture.WorkspaceId, "rc-normalize@example.com", SystemRole.Owner);
-        var client = await Panel.SignedInAs("203.0.113.161", "rc-normalize@example.com");
+        var client = await Panel.SignedInAs("198.51.100.101", "rc-normalize@example.com");
 
         var token = await client.AntiforgeryTokenFrom("/registry-credentials");
         await client.PostFormAsync("/registry-credentials", token,
@@ -116,7 +116,7 @@ public class RegistryCredentialsHttpTests(HarboraHttpFixture fixture)
     {
         SeedCredential("dup-test.example.com");
         Panel.GivenUser(fixture.WorkspaceId, "rc-dup@example.com", SystemRole.Owner);
-        var client = await Panel.SignedInAs("203.0.113.162", "rc-dup@example.com");
+        var client = await Panel.SignedInAs("198.51.100.102", "rc-dup@example.com");
 
         var token = await client.AntiforgeryTokenFrom("/registry-credentials");
         var response = await client.PostFormAsync("/registry-credentials", token,
@@ -134,7 +134,7 @@ public class RegistryCredentialsHttpTests(HarboraHttpFixture fixture)
     {
         var id = SeedCredential("mask-test.example.com", secret: "topsecrettoken");
         Panel.GivenUser(fixture.WorkspaceId, "rc-mask@example.com", SystemRole.Owner);
-        var client = await Panel.SignedInAs("203.0.113.163", "rc-mask@example.com");
+        var client = await Panel.SignedInAs("198.51.100.103", "rc-mask@example.com");
 
         var maskedHtml = await (await client.GetAsync("/registry-credentials")).Content.ReadAsStringAsync();
         maskedHtml.Should().NotContain("topsecrettoken", "the ciphertext must never decrypt onto the page by default");
@@ -149,7 +149,7 @@ public class RegistryCredentialsHttpTests(HarboraHttpFixture fixture)
     {
         var id = SeedCredential("blank-update.example.com:5000", username: "old-user", secret: "original-secret");
         Panel.GivenUser(fixture.WorkspaceId, "rc-update-blank@example.com", SystemRole.Owner);
-        var client = await Panel.SignedInAs("203.0.113.164", "rc-update-blank@example.com");
+        var client = await Panel.SignedInAs("198.51.100.104", "rc-update-blank@example.com");
 
         var before = Panel.Read(db => db.RegistryCredentials.Single(c => c.Id == id).EncryptedSecret);
 
@@ -168,7 +168,7 @@ public class RegistryCredentialsHttpTests(HarboraHttpFixture fixture)
     {
         var id = SeedCredential("rotate-test.example.com:5000", secret: "original-secret");
         Panel.GivenUser(fixture.WorkspaceId, "rc-rotate@example.com", SystemRole.Owner);
-        var client = await Panel.SignedInAs("203.0.113.165", "rc-rotate@example.com");
+        var client = await Panel.SignedInAs("198.51.100.105", "rc-rotate@example.com");
 
         var before = Panel.Read(db => db.RegistryCredentials.Single(c => c.Id == id).EncryptedSecret);
 
@@ -190,7 +190,7 @@ public class RegistryCredentialsHttpTests(HarboraHttpFixture fixture)
         var id = SeedCredential("delete-refused.example.com");
         SeedApp("checkout", "delete-refused.example.com/acme/checkout:1.0");
         Panel.GivenUser(fixture.WorkspaceId, "rc-delete-refused@example.com", SystemRole.Owner);
-        var client = await Panel.SignedInAs("203.0.113.166", "rc-delete-refused@example.com");
+        var client = await Panel.SignedInAs("198.51.100.106", "rc-delete-refused@example.com");
 
         var token = await client.AntiforgeryTokenFrom("/registry-credentials");
         var response = await client.PostFormAsync($"/registry-credentials/{id}/delete", token);
@@ -212,7 +212,7 @@ public class RegistryCredentialsHttpTests(HarboraHttpFixture fixture)
         // existence must not block the delete.
         SeedApp("uses-elsewhere", "elsewhere.example.com/acme/uses-elsewhere:1.0");
         Panel.GivenUser(fixture.WorkspaceId, "rc-delete-unrelated@example.com", SystemRole.Owner);
-        var client = await Panel.SignedInAs("203.0.113.167", "rc-delete-unrelated@example.com");
+        var client = await Panel.SignedInAs("198.51.100.107", "rc-delete-unrelated@example.com");
 
         var token = await client.AntiforgeryTokenFrom("/registry-credentials");
         var response = await client.PostFormAsync($"/registry-credentials/{id}/delete", token);
@@ -226,7 +226,7 @@ public class RegistryCredentialsHttpTests(HarboraHttpFixture fixture)
     {
         var id = SeedCredential("unused.example.com");
         Panel.GivenUser(fixture.WorkspaceId, "rc-delete-clean@example.com", SystemRole.Owner);
-        var client = await Panel.SignedInAs("203.0.113.168", "rc-delete-clean@example.com");
+        var client = await Panel.SignedInAs("198.51.100.108", "rc-delete-clean@example.com");
 
         var token = await client.AntiforgeryTokenFrom("/registry-credentials");
         var response = await client.PostFormAsync($"/registry-credentials/{id}/delete", token);
@@ -239,7 +239,7 @@ public class RegistryCredentialsHttpTests(HarboraHttpFixture fixture)
     public async Task A_viewer_cannot_create_a_credential()
     {
         Panel.GivenUser(fixture.WorkspaceId, "rc-viewer@example.com", SystemRole.Viewer);
-        var client = await Panel.SignedInAs("203.0.113.169", "rc-viewer@example.com");
+        var client = await Panel.SignedInAs("198.51.100.109", "rc-viewer@example.com");
 
         var token = await client.AntiforgeryTokenFrom("/registry-credentials");
         var response = await client.PostFormAsync("/registry-credentials", token,
@@ -264,7 +264,7 @@ public class RegistryCredentialsHttpTests(HarboraHttpFixture fixture)
             });
         });
         Panel.GivenUser(fixture.WorkspaceId, "rc-tenancy@example.com", SystemRole.Owner);
-        var client = await Panel.SignedInAs("203.0.113.170", "rc-tenancy@example.com");
+        var client = await Panel.SignedInAs("198.51.100.110", "rc-tenancy@example.com");
 
         var html = await (await client.GetAsync("/registry-credentials")).Content.ReadAsStringAsync();
         html.Should().NotContain("not-yours.example.com");
