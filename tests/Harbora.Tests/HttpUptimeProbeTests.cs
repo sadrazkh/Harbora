@@ -110,15 +110,24 @@ public class HttpUptimeProbeTests
     private sealed class RawHttpServer : IAsyncDisposable
     {
         private readonly TcpListener _listener;
-        private readonly CancellationTokenSource _cts = new();
+        private readonly CancellationTokenSource _cts;
         private readonly Task _loop;
 
         public Uri Url { get; }
 
-        private RawHttpServer(TcpListener listener, Task loop)
+        /// <summary>
+        /// <paramref name="cts"/> is the one the loop is actually waiting on, and it has to be — this
+        /// field used to be its own <c>new()</c> while both factories handed their loop a different,
+        /// local source. Disposing then cancelled a token nobody was listening to and awaited a loop
+        /// parked on <c>Task.Delay(Timeout.Infinite)</c> that could never wake, so the whole test host
+        /// stopped exiting: every test passed, and then `dotnet test` hung past ten minutes. The test
+        /// proving a hanging target cannot stall the checker was stalling the runner instead.
+        /// </summary>
+        private RawHttpServer(TcpListener listener, CancellationTokenSource cts, Func<CancellationToken, Task> loop)
         {
             _listener = listener;
-            _loop = loop;
+            _cts = cts;
+            _loop = Task.Run(() => loop(cts.Token));
             var port = ((IPEndPoint)listener.LocalEndpoint).Port;
             Url = new Uri($"http://127.0.0.1:{port}/");
         }
@@ -127,27 +136,25 @@ public class HttpUptimeProbeTests
         {
             var listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();
-            var cts = new CancellationTokenSource();
 
-            async Task LoopAsync()
+            async Task LoopAsync(CancellationToken ct)
             {
                 try
                 {
-                    while (!cts.IsCancellationRequested)
+                    while (!ct.IsCancellationRequested)
                     {
-                        using var client = await listener.AcceptTcpClientAsync(cts.Token);
+                        using var client = await listener.AcceptTcpClientAsync(ct);
                         using var stream = client.GetStream();
-                        var request = await ReadRequestLineAsync(stream, cts.Token);
+                        var request = await ReadRequestLineAsync(stream, ct);
                         var (status, body) = respond(request);
-                        await WriteResponseAsync(stream, status, body, cts.Token);
+                        await WriteResponseAsync(stream, status, body, ct);
                     }
                 }
                 catch (OperationCanceledException) { }
                 catch (ObjectDisposedException) { }
             }
 
-            var server = new RawHttpServer(listener, Task.Run(LoopAsync));
-            return Task.FromResult(server);
+            return Task.FromResult(new RawHttpServer(listener, new CancellationTokenSource(), LoopAsync));
         }
 
         /// <summary>Accepts a connection and then never answers — the server this test file exists for.</summary>
@@ -155,22 +162,20 @@ public class HttpUptimeProbeTests
         {
             var listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();
-            var cts = new CancellationTokenSource();
 
-            async Task LoopAsync()
+            async Task LoopAsync(CancellationToken ct)
             {
                 try
                 {
-                    using var client = await listener.AcceptTcpClientAsync(cts.Token);
+                    using var client = await listener.AcceptTcpClientAsync(ct);
                     // Hold the connection open, silently, until the test disposes this server.
-                    await Task.Delay(Timeout.Infinite, cts.Token);
+                    await Task.Delay(Timeout.Infinite, ct);
                 }
                 catch (OperationCanceledException) { }
                 catch (ObjectDisposedException) { }
             }
 
-            var server = new RawHttpServer(listener, Task.Run(LoopAsync));
-            return Task.FromResult(server);
+            return Task.FromResult(new RawHttpServer(listener, new CancellationTokenSource(), LoopAsync));
         }
 
         private static async Task<string> ReadRequestLineAsync(NetworkStream stream, CancellationToken ct)
