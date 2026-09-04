@@ -19,7 +19,7 @@ namespace Harbora.Tests;
 /// rather than a rendered sentence, the same rule every other HTTP test in this suite follows.
 /// </summary>
 [Collection(HarboraHttpCollection.Name)]
-public class SignupTrialCreditHttpTests(HarboraHttpFixture fixture)
+public class SignupTrialCreditHttpTests(HarboraHttpFixture fixture) : IDisposable
 {
     private HarboraWebFactory Panel => fixture.Panel;
     private const string Path = "/admin/settings";
@@ -27,13 +27,24 @@ public class SignupTrialCreditHttpTests(HarboraHttpFixture fixture)
     private static async Task<IDocument> ParseAsync(string html) =>
         await BrowsingContext.New(Configuration.Default).OpenAsync(req => req.Content(html));
 
-    /// <summary>The setting is platform-wide, not per-workspace — cleared before every test sets its own.</summary>
-    private void SeedAmount(long? amountMinor)
+    /// <summary>
+    /// Both the setting and the vouchers it has already produced, because this feature's whole
+    /// surface is platform-wide: the amount is one row for the whole install, and "how much has
+    /// been issued" counts every trial-credit voucher in it, whichever test created it.
+    ///
+    /// <para>
+    /// Clearing the vouchers too is what makes <c>nothing_issued</c> a statement about this test's
+    /// own world rather than about whatever ran before it in the collection.
+    /// </para>
+    /// </summary>
+    private void Reset(long? amountMinor)
     {
         Panel.Seed(db =>
         {
             db.Settings.RemoveRange(
                 db.Settings.IgnoreQueryFilters().Where(s => s.Key == SettingKeys.SignupTrialCreditMinor));
+            db.BillingVouchers.RemoveRange(
+                db.BillingVouchers.IgnoreQueryFilters().Where(v => v.IsTrialCredit));
             if (amountMinor is { } minor)
                 db.Settings.Add(new Setting
                 {
@@ -42,6 +53,18 @@ public class SignupTrialCreditHttpTests(HarboraHttpFixture fixture)
                 });
         });
     }
+
+    private void SeedAmount(long? amountMinor) => Reset(amountMinor);
+
+    /// <summary>
+    /// Every class in this collection shares one panel and one database, so an amount left
+    /// configured here is still configured when the next class registers a user — and that user
+    /// silently collects it. That is not hypothetical: this class left 50,000 behind, and
+    /// <c>WorkspaceAccountHttpTests</c>, which asserts a brand-new wallet is empty, found 50,000 in
+    /// it. Clearing before each test is not enough; the last test to run has to leave the install
+    /// as it found it.
+    /// </summary>
+    public void Dispose() => Reset(null);
 
     [Fact]
     public async Task The_unset_shipped_default_shows_as_zero_and_nothing_issued()
