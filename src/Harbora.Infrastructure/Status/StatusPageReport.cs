@@ -2,6 +2,7 @@ using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
+using Harbora.Domain.Monitoring;
 using Harbora.Infrastructure.Deployments;
 using Harbora.Infrastructure.Monitoring;
 using Microsoft.EntityFrameworkCore;
@@ -69,6 +70,17 @@ public sealed class StatusPageReport(HarboraDbContext db, LifecycleHistory lifec
             .Where(a => appIds.Contains(a.Id) && a.WorkspaceId == workspace.Id)
             .ToDictionaryAsync(a => a.Id, ct);
 
+        // 2.1 (2026-09 market-gaps round two): the fix this whole class exists for now has a source.
+        // Before this, PublicAppState came from App.Status alone — what Harbora believes it started,
+        // never from anything that actually answered a request. IgnoreQueryFilters() + the explicit
+        // WorkspaceId == below, the same shape every other read in this class already uses: this is an
+        // anonymous request with no ambient scope, not a background sweep, so it is one workspace's own
+        // checks, never every tenant's.
+        var probes = await db.UptimeChecks.IgnoreQueryFilters().AsNoTracking()
+            .Where(c => appIds.Contains(c.AppId) && c.WorkspaceId == workspace.Id
+                        && c.IsEnabled && c.LastOutcome != null)
+            .ToDictionaryAsync(c => c.AppId, c => c.LastOutcome!.Value, ct);
+
         var since = clock.UtcNow.AddDays(-30);
         var componentViews = new List<PublicComponentView>();
         foreach (var component in components)
@@ -80,7 +92,8 @@ public sealed class StatusPageReport(HarboraDbContext db, LifecycleHistory lifec
             if (!apps.TryGetValue(component.AppId, out var app)) continue;
 
             var hasEverServed = app.ActiveDeploymentId.HasValue;
-            var state = StatusPageHealth.Resolve(app.Status, hasEverServed, app.MaintenanceMode);
+            var probeOutcome = probes.TryGetValue(app.Id, out var outcome) ? outcome : (UptimeCheckOutcome?)null;
+            var state = StatusPageHealth.Resolve(app.Status, hasEverServed, app.MaintenanceMode, probeOutcome);
 
             var containerName = await ResolveContainerNameAsync(app, ct);
             var uptime = MetricDisplay.For(

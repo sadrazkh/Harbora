@@ -424,6 +424,11 @@ public static class DependencyInjection
         services.AddHostedService<Monitoring.MetricsCollectorHostedService>();
         // Raises the SSL-expiry alert the rule engine has always offered but nothing ever fired.
         services.AddHostedService<Monitoring.CertificateWatcher>();
+        // 2.1 (2026-09 market-gaps round two): the only HTTP probe of a customer's app used to be
+        // HealthDiagnosis, once, at the end of a deploy. This asks again, on an interval, from outside —
+        // see UptimeCheck's own doc for why that vantage point is the panel and not each node.
+        services.AddScoped<Application.Abstractions.IUptimeProbe, Monitoring.HttpUptimeProbe>();
+        services.AddHostedService<Monitoring.UptimeChecker>();
 
         // N5 (2026-08-16 notification-system spec, "noise control"): per-user preferences, the digest
         // job and the weekly report. The service reads/writes NotificationPreference directly; the

@@ -1,4 +1,5 @@
 using Harbora.Domain.Common;
+using Harbora.Domain.Monitoring;
 
 namespace Harbora.Infrastructure.Status;
 
@@ -58,9 +59,32 @@ public static class StatusPageHealth
     /// "degraded" because its containers are momentarily unobserved, and is not "operational" because
     /// AppStatus still says Running underneath the redirect.
     /// </param>
-    public static PublicAppState Resolve(AppStatus status, bool hasEverServed, bool maintenanceMode)
+    /// <param name="latestProbeOutcome">
+    /// 2.1 (2026-09 market-gaps round two): the app's own <c>UptimeCheck.LastOutcome</c>, when one is
+    /// configured and has run at least once — null otherwise (no check configured, or configured but
+    /// never yet run). <b>This is the fix for the exact gap 2.1 was written to close</b>: before this
+    /// parameter existed, every state below came from <paramref name="status"/> alone — what Harbora
+    /// believes it started, never from anything that actually answered a request. When this is not
+    /// null it overrides everything below except maintenance mode, because an outside-in probe result is
+    /// strictly more informative than a deploy-time status column about "is this thing answering
+    /// visitors right now" — that is the one question a status page exists to answer.
+    /// <see cref="UptimeCheckOutcome.CouldNotRun"/> maps to <see cref="PublicAppState.Unknown"/>,
+    /// deliberately — never <see cref="PublicAppState.Operational"/> (a green dot for a probe that
+    /// never fired) and never <see cref="PublicAppState.Degraded"/> (blaming the app for a question the
+    /// checker never managed to ask it).
+    /// </param>
+    public static PublicAppState Resolve(
+        AppStatus status, bool hasEverServed, bool maintenanceMode, UptimeCheckOutcome? latestProbeOutcome = null)
     {
         if (maintenanceMode) return PublicAppState.Maintenance;
+
+        if (latestProbeOutcome is { } probe)
+            return probe switch
+            {
+                UptimeCheckOutcome.Up => PublicAppState.Operational,
+                UptimeCheckOutcome.Down => PublicAppState.Degraded,
+                _ => PublicAppState.Unknown
+            };
 
         return status switch
         {

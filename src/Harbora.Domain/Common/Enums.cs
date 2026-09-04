@@ -310,7 +310,30 @@ public enum AlertEvent
     /// computation.
     /// </para>
     /// </summary>
-    QuotaWarning = 10
+    QuotaWarning = 10,
+
+    /// <summary>
+    /// A periodic outside-in HTTP probe of an app (2.1, 2026-09 market-gaps round two) did not get what
+    /// it was configured to expect — wrong status, a missing body match, a refused connection, or a
+    /// timeout. Appended, for the same reason as the members above it.
+    ///
+    /// <para>
+    /// Carries its own per-rule opt-in flag, <c>Alert.OnUptimeCheckFailed</c>, the same shape as
+    /// <see cref="AppCrashed"/>/<see cref="DiskWarning"/> rather than <see cref="ThresholdBreached"/>'s
+    /// <c>AppId</c>+<c>Metric</c> shape: this condition is raised per app, by name, the moment a probe
+    /// fails — there is no percentage line to configure, and every rule opted in hears about every
+    /// app's failing probe the same way every disk-warning rule already hears about every node's disk.
+    /// </para>
+    ///
+    /// <para>
+    /// <c>UptimeCheckOutcome.CouldNotRun</c> (<c>Harbora.Domain.Monitoring</c>) deliberately does
+    /// <em>not</em> raise or clear this condition — a probe that never got to ask the question is not
+    /// evidence the app answered wrongly, and treating it as one would either open a false incident on
+    /// a checker hiccup or silently resolve a real, still-standing one. See
+    /// <c>Harbora.Infrastructure.Monitoring.UptimeChecker</c> for where that is decided.
+    /// </para>
+    /// </summary>
+    UptimeCheckFailed = 11
 }
 
 /// <summary>

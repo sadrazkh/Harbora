@@ -28,6 +28,14 @@ public class Alert : BaseEntity
     /// </summary>
     public bool OnQuotaWarning { get; set; } = true;
 
+    /// <summary>
+    /// 2.1 (2026-09 market-gaps round two): fires when an outside-in <c>UptimeCheck</c> fails —
+    /// <see cref="AlertEvent.UptimeCheckFailed"/>. Same shape as <see cref="OnAppCrashed"/>/
+    /// <see cref="OnDiskWarning"/>: the condition already names the one app it is about, so there is
+    /// nothing here for a threshold's <see cref="AppId"/>+<see cref="Metric"/> pair to add.
+    /// </summary>
+    public bool OnUptimeCheckFailed { get; set; } = true;
+
     public bool IsEnabled { get; set; } = true;
 
     // ---- Per-application threshold (optional) ----

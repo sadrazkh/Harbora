@@ -3,6 +3,7 @@ using System;
 using Harbora.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Harbora.Data.Migrations
 {
     [DbContext(typeof(HarboraDbContext))]
-    partial class HarboraDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260904022505_UptimeChecks")]
+    partial class UptimeChecks
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -550,15 +553,6 @@ namespace Harbora.Data.Migrations
 
                     b.Property<int>("Kind")
                         .HasColumnType("integer");
-
-                    b.Property<bool>("LogRetentionBudgetCapped")
-                        .HasColumnType("boolean");
-
-                    b.Property<int>("LogRetentionDays")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTimeOffset?>("LogRetentionEnabledAt")
-                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("MaintenanceMessage")
                         .HasColumnType("text");
@@ -2722,43 +2716,6 @@ namespace Harbora.Data.Migrations
                     b.HasIndex("WorkspaceId", "CreatedAt");
 
                     b.ToTable("Jobs");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Logging.AppLogLine", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("AppId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("ContainerId")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<int>("SizeBytes")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Text")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTimeOffset>("Timestamp")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("WorkspaceId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Timestamp");
-
-                    b.HasIndex("AppId", "Timestamp");
-
-                    b.HasIndex("AppId", "ContainerId", "Timestamp");
-
-                    b.ToTable("AppLogLines");
                 });
 
             modelBuilder.Entity("Harbora.Domain.Mail.MailDomain", b =>
@@ -6538,15 +6495,6 @@ namespace Harbora.Data.Migrations
                     b.Navigation("User");
 
                     b.Navigation("Workspace");
-                });
-
-            modelBuilder.Entity("Harbora.Domain.Logging.AppLogLine", b =>
-                {
-                    b.HasOne("Harbora.Domain.Apps.App", null)
-                        .WithMany()
-                        .HasForeignKey("AppId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
                 });
 
             modelBuilder.Entity("Harbora.Domain.Mail.MailDomain", b =>

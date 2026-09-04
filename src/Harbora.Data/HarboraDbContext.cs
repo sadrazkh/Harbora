@@ -137,6 +137,8 @@ public class HarboraDbContext : DbContext
     public DbSet<Alert> Alerts => Set<Alert>();
     public DbSet<AlertIncident> AlertIncidents => Set<AlertIncident>();
     public DbSet<AlertDedupMark> AlertDedupMarks => Set<AlertDedupMark>();
+    public DbSet<UptimeCheck> UptimeChecks => Set<UptimeCheck>();
+    public DbSet<UptimeCheckResult> UptimeCheckResults => Set<UptimeCheckResult>();
     public DbSet<Harbora.Domain.Notifications.NotificationDelivery> NotificationDeliveries =>
         Set<Harbora.Domain.Notifications.NotificationDelivery>();
     public DbSet<Harbora.Domain.Notifications.UserNotification> UserNotifications =>
@@ -636,6 +638,25 @@ public class HarboraDbContext : DbContext
         {
             e.HasIndex(x => new { x.WorkspaceId, x.Condition, x.SubjectRef, x.ClosedAt });
             e.HasIndex(x => new { x.WorkspaceId, x.ClosedAt, x.OpenedAt });
+        });
+
+        // 2.1 (2026-09 market-gaps round two): one row per app. UptimeChecker.CheckDueAsync's own read
+        // is "which checks are due", so NextCheckAt leads; the unique AppId index is what makes "one
+        // outside-in check per app" a real constraint rather than a convention nothing enforces.
+        b.Entity<UptimeCheck>(e =>
+        {
+            e.HasIndex(x => x.AppId).IsUnique();
+            e.HasIndex(x => new { x.IsEnabled, x.NextCheckAt });
+            e.Property(x => x.LastDetail).HasMaxLength(1000);
+        });
+
+        // The app page and the public status page both ask "this app's own history, newest first" —
+        // never a cross-app query, so AppId leads and CheckedAt narrows, the same shape
+        // StatusIncident's own index gives StatusPageReport's per-page read.
+        b.Entity<UptimeCheckResult>(e =>
+        {
+            e.HasIndex(x => new { x.AppId, x.CheckedAt });
+            e.Property(x => x.Detail).HasMaxLength(1000);
         });
 
         // N2 (2026-08-16 notification-system spec): the persisted replacement for AlertThrottle.
@@ -1464,7 +1485,17 @@ public class HarboraDbContext : DbContext
         // the same "on" every other event flag already ships with, not the CLR false the ALTER TABLE
         // would otherwise backfill.
         b.Entity<Alert>().Property(x => x.OnQuotaWarning).HasDefaultValue(true);
+        // 2.1 (2026-09 market-gaps round two): same reasoning as OnQuotaWarning immediately above — an
+        // installation with Alert rows that predate this column gets the same "on" every other event
+        // flag ships with, not the CLR false the ALTER TABLE would otherwise backfill.
+        b.Entity<Alert>().Property(x => x.OnUptimeCheckFailed).HasDefaultValue(true);
         b.Entity<AlertIncident>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        // 2.1 (2026-09 market-gaps round two): filtered the same way Alert/AlertIncident are —
+        // UptimeChecker is a sessionless background path and scopes every write explicitly by
+        // check.WorkspaceId with IgnoreQueryFilters(), never relying on this filter's always-Guid.Empty
+        // ambient ID; the settings screen and the app page both read under the normal signed-in scope.
+        b.Entity<UptimeCheck>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<UptimeCheckResult>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
         // P6 (2026-08-20 platform-options plan): unlike NotificationDelivery, every EventSubscription
         // and EventDelivery row always belongs to exactly one workspace (no platform-level rows), so
         // both are filtered the same way Alert/AlertIncident are. The background dispatcher scopes

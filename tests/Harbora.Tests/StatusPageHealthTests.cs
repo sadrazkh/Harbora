@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Harbora.Domain.Common;
+using Harbora.Domain.Monitoring;
 using Harbora.Infrastructure.Status;
 using Xunit;
 
@@ -73,5 +74,55 @@ public class StatusPageHealthTests
             .Should().Be(PublicAppState.Maintenance);
         StatusPageHealth.Resolve(status, hasEverServed: false, maintenanceMode: true)
             .Should().Be(PublicAppState.Maintenance);
+    }
+
+    // ---- 2.1 (2026-09 market-gaps round two): a real outside-in probe overrides App.Status --------
+    //
+    // This is the fix 2.1 exists for: before latestProbeOutcome existed, every state above came from
+    // what Harbora believes it started, never from anything that actually answered a request.
+
+    [Fact]
+    public void A_passing_probe_reads_operational_even_though_App_Status_alone_would_not_say_so()
+    {
+        // AppStatus.Deploying + hasEverServed:false alone reads Unknown (see the test above it) — a
+        // real passing probe is stronger evidence than that combination and must win.
+        StatusPageHealth.Resolve(AppStatus.Deploying, hasEverServed: false, maintenanceMode: false,
+                latestProbeOutcome: UptimeCheckOutcome.Up)
+            .Should().Be(PublicAppState.Operational);
+    }
+
+    [Fact]
+    public void A_failing_probe_reads_degraded_even_though_App_Status_says_Running()
+    {
+        // The exact scenario 2.1's brief names: a container running happily while its app answers
+        // nothing (or the wrong thing) to every request must not look healthy.
+        StatusPageHealth.Resolve(AppStatus.Running, hasEverServed: true, maintenanceMode: false,
+                latestProbeOutcome: UptimeCheckOutcome.Down)
+            .Should().Be(PublicAppState.Degraded);
+    }
+
+    [Fact]
+    public void A_probe_that_could_not_run_reads_unknown_never_a_green_dot_and_never_a_failure()
+    {
+        StatusPageHealth.Resolve(AppStatus.Running, hasEverServed: true, maintenanceMode: false,
+                latestProbeOutcome: UptimeCheckOutcome.CouldNotRun)
+            .Should().Be(PublicAppState.Unknown);
+    }
+
+    [Fact]
+    public void Maintenance_mode_still_outranks_a_probe_result()
+    {
+        StatusPageHealth.Resolve(AppStatus.Running, hasEverServed: true, maintenanceMode: true,
+                latestProbeOutcome: UptimeCheckOutcome.Down)
+            .Should().Be(PublicAppState.Maintenance);
+    }
+
+    [Fact]
+    public void No_probe_configured_falls_back_to_the_AppStatus_derivation_unchanged()
+    {
+        // The default parameter (no probe result at all) must reproduce every pre-2.1 test above —
+        // apps with no UptimeCheck configured are not worse off than before this sub-project shipped.
+        StatusPageHealth.Resolve(AppStatus.Running, hasEverServed: true, maintenanceMode: false)
+            .Should().Be(PublicAppState.Operational);
     }
 }

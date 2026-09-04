@@ -111,6 +111,7 @@
                           <label class="flex items-center gap-1"><input type="checkbox" name="onDiskWarning" value="true" checked="@a.OnDiskWarning"> disk warning</label>
                           <label class="flex items-center gap-1"><input type="checkbox" name="onBackupFailed" value="true" checked="@a.OnBackupFailed"> backup failed</label>
                           <label class="flex items-center gap-1"><input type="checkbox" name="onQuotaWarning" value="true" checked="@a.OnQuotaWarning"> @(isFa ? "نزدیک شدن به سقف پلن" : "nearing plan limit")</label>
+                          <label class="flex items-center gap-1"><input type="checkbox" name="onUptimeCheckFailed" value="true" checked="@a.OnUptimeCheckFailed"> @(isFa ? "بررسی دوره‌ای ناموفق" : "uptime check failed")</label>
                       </div>
 
                       <details class="sm:col-span-2" open="@hasThreshold">
@@ -186,6 +187,7 @@
                 <label class="flex items-center gap-1"><input type="checkbox" name="onDiskWarning" value="true" checked> disk warning</label>
                 <label class="flex items-center gap-1"><input type="checkbox" name="onBackupFailed" value="true" checked> backup failed</label>
                 <label class="flex items-center gap-1"><input type="checkbox" name="onQuotaWarning" value="true" checked> @(isFa ? "نزدیک شدن به سقف پلن" : "nearing plan limit")</label>
+                <label class="flex items-center gap-1"><input type="checkbox" name="onUptimeCheckFailed" value="true" checked> @(isFa ? "بررسی دوره‌ای ناموفق" : "uptime check failed")</label>
             </div>
             @* Optional second half. Left empty, this is exactly the event-driven rule it always
                was; filled in, the same channel also fires when one app holds above a line. *@

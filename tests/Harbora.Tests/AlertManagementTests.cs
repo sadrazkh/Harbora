@@ -80,7 +80,7 @@ public class AlertManagementTests
             name: "cpu watch", channel: AlertChannel.Webhook, minSeverity: AlertSeverity.Warning,
             webhookUrl: "https://hooks.example/x", telegramToken: null, telegramChatId: null,
             smtpHost: null, smtpPort: 0, smtpUser: null, smtpPassword: null, emailFrom: null, emailTo: null,
-            onDeployFailed: true, onAppCrashed: true, onSslExpiring: false, onDiskWarning: true, onBackupFailed: true, onQuotaWarning: true,
+            onDeployFailed: true, onAppCrashed: true, onSslExpiring: false, onDiskWarning: true, onBackupFailed: true, onQuotaWarning: true, onUptimeCheckFailed: true,
             appId: appId, metric: AlertMetric.CpuPercent, thresholdPercent: null, sustainedMinutes: 5,
             ct: default);
 
@@ -98,7 +98,7 @@ public class AlertManagementTests
             name: "half", channel: AlertChannel.Webhook, minSeverity: AlertSeverity.Warning,
             webhookUrl: "https://hooks.example/x", telegramToken: null, telegramChatId: null,
             smtpHost: null, smtpPort: 0, smtpUser: null, smtpPassword: null, emailFrom: null, emailTo: null,
-            onDeployFailed: true, onAppCrashed: true, onSslExpiring: false, onDiskWarning: true, onBackupFailed: true, onQuotaWarning: true,
+            onDeployFailed: true, onAppCrashed: true, onSslExpiring: false, onDiskWarning: true, onBackupFailed: true, onQuotaWarning: true, onUptimeCheckFailed: true,
             appId: Guid.CreateVersion7(), metric: null, thresholdPercent: null, sustainedMinutes: 5,
             ct: default);
 
@@ -116,7 +116,7 @@ public class AlertManagementTests
             name: "event only", channel: AlertChannel.Webhook, minSeverity: AlertSeverity.Warning,
             webhookUrl: "https://hooks.example/x", telegramToken: null, telegramChatId: null,
             smtpHost: null, smtpPort: 0, smtpUser: null, smtpPassword: null, emailFrom: null, emailTo: null,
-            onDeployFailed: true, onAppCrashed: true, onSslExpiring: false, onDiskWarning: true, onBackupFailed: true, onQuotaWarning: true,
+            onDeployFailed: true, onAppCrashed: true, onSslExpiring: false, onDiskWarning: true, onBackupFailed: true, onQuotaWarning: true, onUptimeCheckFailed: true,
             appId: null, metric: null, thresholdPercent: null, sustainedMinutes: 5,
             ct: default);
 
@@ -134,7 +134,7 @@ public class AlertManagementTests
             name: "cpu watch", channel: AlertChannel.Webhook, minSeverity: AlertSeverity.Warning,
             webhookUrl: "https://hooks.example/x", telegramToken: null, telegramChatId: null,
             smtpHost: null, smtpPort: 0, smtpUser: null, smtpPassword: null, emailFrom: null, emailTo: null,
-            onDeployFailed: true, onAppCrashed: true, onSslExpiring: false, onDiskWarning: true, onBackupFailed: true, onQuotaWarning: true,
+            onDeployFailed: true, onAppCrashed: true, onSslExpiring: false, onDiskWarning: true, onBackupFailed: true, onQuotaWarning: true, onUptimeCheckFailed: true,
             appId: appId, metric: AlertMetric.CpuPercent, thresholdPercent: 85, sustainedMinutes: 10,
             ct: default);
 
@@ -199,7 +199,7 @@ public class AlertManagementTests
             rule.Id, name: "renamed", channel: AlertChannel.Webhook, minSeverity: AlertSeverity.Critical,
             webhookUrl: null, telegramToken: null, telegramChatId: null,
             smtpHost: null, smtpPort: 0, smtpUser: null, smtpPassword: null, emailFrom: null, emailTo: null,
-            onDeployFailed: true, onAppCrashed: true, onSslExpiring: true, onDiskWarning: true, onBackupFailed: true, onQuotaWarning: true,
+            onDeployFailed: true, onAppCrashed: true, onSslExpiring: true, onDiskWarning: true, onBackupFailed: true, onQuotaWarning: true, onUptimeCheckFailed: true,
             appId: null, metric: null, thresholdPercent: null, sustainedMinutes: 5, ct: default);
 
         var saved = db.Alerts.Single(a => a.Id == rule.Id);
@@ -219,7 +219,7 @@ public class AlertManagementTests
             rule.Id, name: rule.Name, channel: AlertChannel.Webhook, minSeverity: rule.MinSeverity,
             webhookUrl: "https://new.example/hook", telegramToken: null, telegramChatId: null,
             smtpHost: null, smtpPort: 0, smtpUser: null, smtpPassword: null, emailFrom: null, emailTo: null,
-            onDeployFailed: true, onAppCrashed: true, onSslExpiring: true, onDiskWarning: true, onBackupFailed: true, onQuotaWarning: true,
+            onDeployFailed: true, onAppCrashed: true, onSslExpiring: true, onDiskWarning: true, onBackupFailed: true, onQuotaWarning: true, onUptimeCheckFailed: true,
             appId: null, metric: null, thresholdPercent: null, sustainedMinutes: 5, ct: default);
 
         var saved = db.Alerts.Single(a => a.Id == rule.Id);
@@ -242,7 +242,7 @@ public class AlertManagementTests
             rule.Id, name: rule.Name, channel: AlertChannel.Email, minSeverity: rule.MinSeverity,
             webhookUrl: null, telegramToken: null, telegramChatId: null,
             smtpHost: null, smtpPort: 0, smtpUser: null, smtpPassword: "new-pass", emailFrom: null, emailTo: null,
-            onDeployFailed: true, onAppCrashed: true, onSslExpiring: true, onDiskWarning: true, onBackupFailed: true, onQuotaWarning: true,
+            onDeployFailed: true, onAppCrashed: true, onSslExpiring: true, onDiskWarning: true, onBackupFailed: true, onQuotaWarning: true, onUptimeCheckFailed: true,
             appId: null, metric: null, thresholdPercent: null, sustainedMinutes: 5, ct: default);
 
         var saved = db.Alerts.Single(a => a.Id == rule.Id);
@@ -265,7 +265,7 @@ public class AlertManagementTests
             rule.Id, name: rule.Name, channel: AlertChannel.Telegram, minSeverity: rule.MinSeverity,
             webhookUrl: null, telegramToken: null, telegramChatId: null,
             smtpHost: null, smtpPort: 0, smtpUser: null, smtpPassword: null, emailFrom: null, emailTo: null,
-            onDeployFailed: true, onAppCrashed: true, onSslExpiring: true, onDiskWarning: true, onBackupFailed: true, onQuotaWarning: true,
+            onDeployFailed: true, onAppCrashed: true, onSslExpiring: true, onDiskWarning: true, onBackupFailed: true, onQuotaWarning: true, onUptimeCheckFailed: true,
             appId: null, metric: null, thresholdPercent: null, sustainedMinutes: 5, ct: default);
 
         var saved = db.Alerts.Single(a => a.Id == rule.Id);
@@ -284,7 +284,7 @@ public class AlertManagementTests
             rule.Id, name: rule.Name, channel: AlertChannel.Telegram, minSeverity: rule.MinSeverity,
             webhookUrl: null, telegramToken: "bot-token", telegramChatId: "12345",
             smtpHost: null, smtpPort: 0, smtpUser: null, smtpPassword: null, emailFrom: null, emailTo: null,
-            onDeployFailed: true, onAppCrashed: true, onSslExpiring: true, onDiskWarning: true, onBackupFailed: true, onQuotaWarning: true,
+            onDeployFailed: true, onAppCrashed: true, onSslExpiring: true, onDiskWarning: true, onBackupFailed: true, onQuotaWarning: true, onUptimeCheckFailed: true,
             appId: null, metric: null, thresholdPercent: null, sustainedMinutes: 5, ct: default);
 
         var saved = db.Alerts.Single(a => a.Id == rule.Id);
@@ -306,7 +306,7 @@ public class AlertManagementTests
             rule.Id, name: rule.Name, channel: AlertChannel.Webhook, minSeverity: rule.MinSeverity,
             webhookUrl: null, telegramToken: null, telegramChatId: null,
             smtpHost: null, smtpPort: 0, smtpUser: null, smtpPassword: null, emailFrom: null, emailTo: null,
-            onDeployFailed: true, onAppCrashed: true, onSslExpiring: true, onDiskWarning: true, onBackupFailed: true, onQuotaWarning: true,
+            onDeployFailed: true, onAppCrashed: true, onSslExpiring: true, onDiskWarning: true, onBackupFailed: true, onQuotaWarning: true, onUptimeCheckFailed: true,
             appId: appId, metric: AlertMetric.MemoryPercent, thresholdPercent: 70, sustainedMinutes: 15, ct: default);
 
         var saved = db.Alerts.Single(a => a.Id == rule.Id);
@@ -329,7 +329,7 @@ public class AlertManagementTests
             rule.Id, name: rule.Name, channel: AlertChannel.Webhook, minSeverity: rule.MinSeverity,
             webhookUrl: null, telegramToken: null, telegramChatId: null,
             smtpHost: null, smtpPort: 0, smtpUser: null, smtpPassword: null, emailFrom: null, emailTo: null,
-            onDeployFailed: true, onAppCrashed: true, onSslExpiring: true, onDiskWarning: true, onBackupFailed: true, onQuotaWarning: true,
+            onDeployFailed: true, onAppCrashed: true, onSslExpiring: true, onDiskWarning: true, onBackupFailed: true, onQuotaWarning: true, onUptimeCheckFailed: true,
             appId: appId, metric: AlertMetric.MemoryPercent, thresholdPercent: null, sustainedMinutes: 5, ct: default);
 
         var saved = db.Alerts.Single(a => a.Id == rule.Id);
@@ -349,7 +349,7 @@ public class AlertManagementTests
             rule.Id, name: "hijacked", channel: AlertChannel.Webhook, minSeverity: AlertSeverity.Critical,
             webhookUrl: null, telegramToken: null, telegramChatId: null,
             smtpHost: null, smtpPort: 0, smtpUser: null, smtpPassword: null, emailFrom: null, emailTo: null,
-            onDeployFailed: true, onAppCrashed: true, onSslExpiring: true, onDiskWarning: true, onBackupFailed: true, onQuotaWarning: true,
+            onDeployFailed: true, onAppCrashed: true, onSslExpiring: true, onDiskWarning: true, onBackupFailed: true, onQuotaWarning: true, onUptimeCheckFailed: true,
             appId: null, metric: null, thresholdPercent: null, sustainedMinutes: 5, ct: default);
 
         response.Should().BeOfType<NotFoundResult>();

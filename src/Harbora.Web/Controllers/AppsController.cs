@@ -813,6 +813,15 @@ public sealed partial class AppsController(
         var hasBackupRepository = await db.BackupRepositories.AsNoTracking()
             .AnyAsync(r => r.WorkspaceId == WorkspaceId && r.IsEnabled, ct);
 
+        // ---- outside-in uptime check (2.1, 2026-09 market-gaps round two) ----
+        var uptimeCheck = await db.UptimeChecks.AsNoTracking()
+            .FirstOrDefaultAsync(c => c.AppId == app.Id && c.WorkspaceId == WorkspaceId, ct);
+        var recentUptimeResults = await db.UptimeCheckResults.AsNoTracking()
+            .Where(r => r.AppId == app.Id && r.WorkspaceId == WorkspaceId)
+            .OrderByDescending(r => r.CheckedAt)
+            .Take(20)
+            .ToListAsync(ct);
+
         // The Overview tab, wrapped for the shared shell: _Shell.cshtml is typed to AppTabViewModel,
         // so what reaches View() has to be an instance of it rather than the raw entity Details used
         // to receive directly.
@@ -843,6 +852,8 @@ public sealed partial class AppsController(
             LiveContainer = liveContainer,
             UptimePercent30d = uptimePercent30d,
             RestartCount30d = restartCount30d,
+            UptimeCheck = uptimeCheck,
+            RecentUptimeResults = recentUptimeResults,
             BackupVolumes = backupVolumes,
             HasBackupRepository = hasBackupRepository
         });
@@ -996,6 +1007,49 @@ public sealed partial class AppsController(
             ? (IsFa ? "محافظت اعمال شد." : "Protection applied.")
             : (IsFa ? "پیکربندی پروکسی اعمال نشد: " : "The proxy configuration was not applied: ") + applied.Error;
 
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    /// <summary>
+    /// 2.1 (2026-09 market-gaps round two): creates or updates this app's outside-in HTTP check —
+    /// interval, path, expected status, optional body match. One row per app (see <c>UptimeCheck</c>'s
+    /// own doc for why it is not on <c>App</c> directly), so this both creates the first-ever check and
+    /// edits an existing one through the same action, the same "no separate create/edit route" shape
+    /// <c>SetProtection</c> above already gives per-app configuration that is either present or not.
+    /// </summary>
+    [HttpPost("/apps/{id:guid}/uptime-check")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AlertsManage)]
+    public async Task<IActionResult> SaveUptimeCheck(
+        Guid id, bool isEnabled, string? path, int expectedStatus, string? bodyContains,
+        int intervalSeconds, int timeoutSeconds, CancellationToken ct)
+    {
+        var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
+        if (app is null) return NotFound();
+
+        var check = await db.UptimeChecks.FirstOrDefaultAsync(c => c.AppId == id && c.WorkspaceId == WorkspaceId, ct);
+        if (check is null)
+        {
+            check = new UptimeCheck { WorkspaceId = WorkspaceId, AppId = id };
+            db.UptimeChecks.Add(check);
+        }
+
+        check.IsEnabled = isEnabled;
+        check.Path = string.IsNullOrWhiteSpace(path) ? "/" : path.Trim();
+        check.ExpectedStatus = expectedStatus is >= 100 and <= 599 ? expectedStatus : 200;
+        check.BodyContains = string.IsNullOrWhiteSpace(bodyContains) ? null : bodyContains.Trim();
+        check.IntervalSeconds = Math.Clamp(intervalSeconds <= 0 ? 60 : intervalSeconds, 30, 24 * 60 * 60);
+        check.TimeoutSeconds = Math.Clamp(timeoutSeconds <= 0 ? 10 : timeoutSeconds, 1, 60);
+        // A change takes effect on the very next tick, not whenever whatever interval was configured
+        // before this edit happens to next elapse.
+        check.NextCheckAt = null;
+
+        await db.SaveChangesAsync(ct);
+
+        await audit.LogAsync("app.uptime_check_saved", "app",
+            $"{app.Name}: enabled={isEnabled}, path={check.Path}", ClientIp, workspaceId: WorkspaceId, ct: ct);
+
+        TempData["Message"] = IsFa ? "بررسی دوره‌ای ذخیره شد." : "Uptime check saved.";
         return RedirectToAction(nameof(Details), new { id });
     }
 

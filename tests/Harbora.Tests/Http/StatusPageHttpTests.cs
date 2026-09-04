@@ -273,6 +273,118 @@ public class StatusPageHttpTests(HarboraHttpFixture fixture)
         html.Should().Contain("data-status-component-state=\"maintenance\"");
     }
 
+    // ---- 2.1 (2026-09 market-gaps round two): the probe result, not App.Status, decides the state --
+
+    [Fact]
+    public async Task A_failing_probe_reads_degraded_even_though_App_Status_says_running()
+    {
+        // The exact gap 2.1 closes: a container running happily while its app answers the wrong thing
+        // to every request must not look healthy on the page a customer's own visitors read.
+        var (workspaceId, environmentId, host) = GivenWorkspace("probe-down-page");
+        var appId = Guid.CreateVersion7();
+        var pageId = Guid.CreateVersion7();
+        Panel.Seed(db =>
+        {
+            db.Apps.Add(new App
+            {
+                Id = appId, WorkspaceId = workspaceId, EnvironmentId = environmentId,
+                Name = "quietly-broken", Slug = "quietly-broken", Kind = ServiceKind.Web,
+                SourceType = AppSourceType.PrebuiltImage, PrebuiltImage = "ghcr.io/example/broken:1.0",
+                Status = AppStatus.Running
+            });
+            db.StatusPages.Add(new StatusPage { Id = pageId, WorkspaceId = workspaceId, IsEnabled = true });
+            db.StatusPageComponents.Add(new StatusPageComponent
+            {
+                WorkspaceId = workspaceId, StatusPageId = pageId, AppId = appId,
+                DisplayName = "Quietly broken", SortOrder = 0
+            });
+            db.UptimeChecks.Add(new Harbora.Domain.Monitoring.UptimeCheck
+            {
+                WorkspaceId = workspaceId, AppId = appId, IsEnabled = true,
+                LastOutcome = Harbora.Domain.Monitoring.UptimeCheckOutcome.Down,
+                LastCheckedAt = DateTimeOffset.UtcNow, LastHttpStatus = 503,
+                LastDetail = "answered 503, expected 200."
+            });
+        });
+        var client = Panel.ClientFrom("198.51.100.120");
+
+        var html = await (await client.GetWithHostAsync("/", host)).Content.ReadAsStringAsync();
+
+        html.Should().Contain("data-status-component-state=\"degraded\"",
+            "App.Status says Running, but the outside-in probe says the app is not answering — the probe must win");
+    }
+
+    [Fact]
+    public async Task A_probe_that_could_not_run_reads_unknown_never_operational_and_never_degraded()
+    {
+        var (workspaceId, environmentId, host) = GivenWorkspace("probe-could-not-run-page");
+        var appId = Guid.CreateVersion7();
+        var pageId = Guid.CreateVersion7();
+        Panel.Seed(db =>
+        {
+            db.Apps.Add(new App
+            {
+                Id = appId, WorkspaceId = workspaceId, EnvironmentId = environmentId,
+                Name = "unmeasured", Slug = "unmeasured", Kind = ServiceKind.Web,
+                SourceType = AppSourceType.PrebuiltImage, PrebuiltImage = "ghcr.io/example/unmeasured:1.0",
+                Status = AppStatus.Running
+            });
+            db.StatusPages.Add(new StatusPage { Id = pageId, WorkspaceId = workspaceId, IsEnabled = true });
+            db.StatusPageComponents.Add(new StatusPageComponent
+            {
+                WorkspaceId = workspaceId, StatusPageId = pageId, AppId = appId,
+                DisplayName = "Unmeasured", SortOrder = 0
+            });
+            db.UptimeChecks.Add(new Harbora.Domain.Monitoring.UptimeCheck
+            {
+                WorkspaceId = workspaceId, AppId = appId, IsEnabled = true,
+                LastOutcome = Harbora.Domain.Monitoring.UptimeCheckOutcome.CouldNotRun,
+                LastCheckedAt = DateTimeOffset.UtcNow, LastDetail = "no public domain configured for this app."
+            });
+        });
+        var client = Panel.ClientFrom("198.51.100.121");
+
+        var html = await (await client.GetWithHostAsync("/", host)).Content.ReadAsStringAsync();
+
+        html.Should().Contain("data-status-component-state=\"unknown\"",
+            "a probe that never got to ask the question is neither a pass nor a confirmed failure");
+    }
+
+    [Fact]
+    public async Task A_passing_probe_reads_operational_the_same_as_App_Status_running_alone()
+    {
+        var (workspaceId, environmentId, host) = GivenWorkspace("probe-up-page");
+        var appId = Guid.CreateVersion7();
+        var pageId = Guid.CreateVersion7();
+        Panel.Seed(db =>
+        {
+            db.Apps.Add(new App
+            {
+                Id = appId, WorkspaceId = workspaceId, EnvironmentId = environmentId,
+                Name = "healthy", Slug = "healthy", Kind = ServiceKind.Web,
+                SourceType = AppSourceType.PrebuiltImage, PrebuiltImage = "ghcr.io/example/healthy:1.0",
+                Status = AppStatus.Running
+            });
+            db.StatusPages.Add(new StatusPage { Id = pageId, WorkspaceId = workspaceId, IsEnabled = true });
+            db.StatusPageComponents.Add(new StatusPageComponent
+            {
+                WorkspaceId = workspaceId, StatusPageId = pageId, AppId = appId,
+                DisplayName = "Healthy", SortOrder = 0
+            });
+            db.UptimeChecks.Add(new Harbora.Domain.Monitoring.UptimeCheck
+            {
+                WorkspaceId = workspaceId, AppId = appId, IsEnabled = true,
+                LastOutcome = Harbora.Domain.Monitoring.UptimeCheckOutcome.Up,
+                LastCheckedAt = DateTimeOffset.UtcNow, LastHttpStatus = 200, LastDetail = "answered 200."
+            });
+        });
+        var client = Panel.ClientFrom("198.51.100.122");
+
+        var html = await (await client.GetWithHostAsync("/", host)).Content.ReadAsStringAsync();
+
+        html.Should().Contain("data-status-component-state=\"operational\"");
+    }
+
     // ---- manual incident notes ----------------------------------------------------------------
 
     [Fact]

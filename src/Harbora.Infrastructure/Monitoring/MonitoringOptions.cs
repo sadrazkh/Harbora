@@ -136,4 +136,15 @@ public sealed class MonitoringOptions
     public double QuotaAlertIntervalHours { get; set; } = 1;
 
     internal TimeSpan QuotaAlertInterval => TimeSpan.FromHours(Math.Max(0, QuotaAlertIntervalHours));
+
+    /// <summary>
+    /// How long between uptime-check-failed notifications for the same app while it stays down (2.1,
+    /// 2026-09 market-gaps round two) — the same "nag once per interval, not once per tick" reasoning as
+    /// <see cref="DiskAlertIntervalHours"/>, at an app's own grain. Minutes rather than hours, unlike its
+    /// siblings above: an app answering nothing to real visitors is a more urgent fact than a node's
+    /// disk creeping upward, and a customer should not wait an hour to be told twice.
+    /// </summary>
+    public double UptimeAlertIntervalMinutes { get; set; } = 15;
+
+    internal TimeSpan UptimeAlertInterval => TimeSpan.FromMinutes(Math.Max(0, UptimeAlertIntervalMinutes));
 }

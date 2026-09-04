@@ -113,6 +113,8 @@ public class NotificationTemplateCensusTests
             ("ServiceName", "orders-db"), ("Reason", "image pull timed out")),
         AlertEvent.QuotaWarning => NotificationEventData.Create(evt,
             ("Summary", "Apps at 90% (9/10)"), ("SummaryFa", "اپلیکیشن در 90٪ (9/10)"), ("Percent", "90")),
+        AlertEvent.UptimeCheckFailed => NotificationEventData.Create(evt,
+            ("AppName", "shop"), ("Detail", "https://shop.example.com/ answered 503, expected 200.")),
         AlertEvent.PlatformAnnouncement => NotificationEventData.Create(evt,
             ("Title", "Scheduled maintenance"), ("Body", "The panel will be briefly unavailable tonight."),
             ("TitleFa", "تعمیرات برنامه‌ریزی‌شده"), ("BodyFa", "پنل امشب برای مدت کوتاهی در دسترس نخواهد بود.")),

@@ -436,6 +436,132 @@
             </dl>
         </section>
 
+        @* ---- outside-in uptime check (2.1, 2026-09 market-gaps round two) ----
+           Different from the "live status"/"uptime (30 days)" rows above: those come from the
+           container's own liveness, sampled from inside the platform. This is the app answering (or
+           not) an HTTP request on its own public domain — the only HTTP probe that used to exist
+           (HealthDiagnosis) ran once, at the end of a deploy, and never again. Three states, always —
+           see UptimeCheckOutcome's own doc: no probe result is distinct from a failed probe, and both
+           are distinct from a passing one. Never a green dot for a probe that never fired. *@
+        <section class="rounded-xl border border-line bg-surface p-4" data-uptime-check-section>
+            <div class="mb-3 font-semibold">@(isFa ? "بررسی دوره‌ای بیرونی" : "Outside-in uptime check")</div>
+            @{
+                var uc = Model.UptimeCheck;
+                var currentState = uc is null ? "not-configured" : uc.LastOutcome switch
+                {
+                    null => "not-run-yet",
+                    Harbora.Domain.Monitoring.UptimeCheckOutcome.Up => "up",
+                    Harbora.Domain.Monitoring.UptimeCheckOutcome.Down => "down",
+                    _ => "could-not-run"
+                };
+            }
+            <div class="mb-3 text-xs" data-uptime-check-state="@currentState">
+                @if (uc is null)
+                {
+                    <span class="text-ink-faint">@(isFa ? "هنوز پیکربندی نشده است." : "Not configured yet.")</span>
+                }
+                else if (uc.LastOutcome is null)
+                {
+                    <span class="text-ink-faint">@(isFa ? "هنوز هیچ بررسی‌ای اجرا نشده است." : "No check has run yet.")</span>
+                }
+                else
+                {
+                    var (label, tone) = currentState switch
+                    {
+                        "up" => (isFa ? "در دسترس" : "Up", "text-ok"),
+                        "down" => (isFa ? "خارج از دسترس" : "Down", "text-danger"),
+                        _ => (isFa ? "قابل اجرا نبود" : "Could not run", "text-ink-faint")
+                    };
+                    var whenLabel = uc.LastCheckedAt is { } lc
+                        ? (isFa
+                            ? Harbora.Web.Infrastructure.Dates.Ago(lc, DateTimeOffset.UtcNow, true)
+                            : Harbora.Web.Infrastructure.Dates.Ago(lc, DateTimeOffset.UtcNow, false))
+                        : null;
+                    <span class="@tone font-medium">@label</span>
+                    @if (uc.LastHttpStatus is { } st)
+                    {
+                        <span class="text-ink-faint" dir="ltr"> · @st</span>
+                    }
+                    @if (whenLabel is not null)
+                    {
+                        <span class="text-ink-faint"> · @whenLabel</span>
+                    }
+                    @if (!uc.IsEnabled)
+                    {
+                        <span class="text-ink-faint"> · @(isFa ? "غیرفعال" : "disabled")</span>
+                    }
+                    @if (!string.IsNullOrEmpty(uc.LastDetail))
+                    {
+                        <p class="mt-1 text-ink-faint break-all">@uc.LastDetail</p>
+                    }
+                }
+            </div>
+
+            <form asp-controller="Apps" asp-action="SaveUptimeCheck" asp-route-id="@app.Id" method="post" class="grid sm:grid-cols-2 gap-2">
+                @Html.AntiForgeryToken()
+                <label class="flex items-center gap-1 text-xs sm:col-span-2">
+                    <input type="checkbox" name="isEnabled" value="true" checked="@(uc?.IsEnabled ?? true)">
+                    @(isFa ? "فعال" : "Enabled")
+                </label>
+                <input name="path" value="@(uc?.Path ?? "/")" placeholder="@(isFa ? "مسیر (مثلاً /)" : "Path (e.g. /)")"
+                       dir="ltr" class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                <input name="expectedStatus" type="number" min="100" max="599" value="@(uc?.ExpectedStatus ?? 200)"
+                       placeholder="@(isFa ? "وضعیت مورد انتظار" : "Expected status")"
+                       class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                <input name="bodyContains" value="@uc?.BodyContains" placeholder="@(isFa ? "متن مورد انتظار در پاسخ (اختیاری)" : "Body must contain (optional)")"
+                       class="rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm sm:col-span-2" />
+                <label class="text-xs text-ink-faint">
+                    @(isFa ? "بازه (ثانیه)" : "Interval (seconds)")
+                    <input name="intervalSeconds" type="number" min="30" max="86400" value="@(uc?.IntervalSeconds ?? 60)"
+                           class="mt-1 w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                </label>
+                <label class="text-xs text-ink-faint">
+                    @(isFa ? "مهلت زمانی (ثانیه)" : "Timeout (seconds)")
+                    <input name="timeoutSeconds" type="number" min="1" max="60" value="@(uc?.TimeoutSeconds ?? 10)"
+                           class="mt-1 w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm" />
+                </label>
+                <div class="sm:col-span-2">
+                    <button class="btn-secondary py-2 px-4 text-sm">@(isFa ? "ذخیره" : "Save")</button>
+                </div>
+                <p class="sm:col-span-2 text-[11px] leading-4 text-ink-faint">
+                    @(isFa
+                        ? "این بررسی از خودِ پنل، روی دامنهٔ عمومی این اپ اجرا می‌شود — نه از هر نود جداگانه. بنابراین یک قطعی مسیر شبکه که فقط بین یک بازدیدکننده و این نود رخ دهد، لزوماً دیده نمی‌شود."
+                        : "This check runs from the panel itself, against this app's own public domain — not from each node separately. A network path failure that only affects one node's visitors may not be visible here.")
+                </p>
+            </form>
+
+            @if (Model.RecentUptimeResults.Count > 0)
+            {
+                <div class="mt-4 border-t border-line pt-3">
+                    <div class="mb-2 text-xs font-medium text-ink-faint">@(isFa ? "تاریخچهٔ اخیر" : "Recent history")</div>
+                    <ul class="space-y-1 text-xs" data-uptime-history>
+                        @foreach (var r in Model.RecentUptimeResults)
+                        {
+                            var outcomeAttr = r.Outcome switch
+                            {
+                                Harbora.Domain.Monitoring.UptimeCheckOutcome.Up => "up",
+                                Harbora.Domain.Monitoring.UptimeCheckOutcome.Down => "down",
+                                _ => "could-not-run"
+                            };
+                            var rowTone = outcomeAttr switch { "up" => "text-ok", "down" => "text-danger", _ => "text-ink-faint" };
+                            var rowLabel = outcomeAttr switch
+                            {
+                                "up" => isFa ? "در دسترس" : "up",
+                                "down" => isFa ? "خارج از دسترس" : "down",
+                                _ => isFa ? "قابل اجرا نبود" : "could not run"
+                            };
+                            <li data-uptime-result-outcome="@outcomeAttr" class="flex items-center justify-between gap-2">
+                                <span class="@rowTone">@rowLabel</span>
+                                <span class="text-ink-faint" dir="ltr">
+                                    @(r.LatencyMs is { } ms ? $"{ms}ms · " : "")@r.CheckedAt.ToString("yyyy-MM-dd HH:mm")
+                                </span>
+                            </li>
+                        }
+                    </ul>
+                </div>
+            }
+        </section>
+
         @* ---- instance size ----
            What this app is actually consuming against these limits now lives on the Usage tab; this
            is only the control that changes them. *@

@@ -132,6 +132,20 @@ public sealed class AppOverviewViewModel : AppTabViewModel
     /// </summary>
     public int? RestartCount30d { get; init; }
 
+    // ---- outside-in uptime check (2.1, 2026-09 market-gaps round two) ----
+    //
+    // A different question than the pair above: UptimePercent30d/RestartCount30d come from the
+    // container's own liveness (app.up, sampled by MetricsCollector from inside the platform).
+    // UptimeCheck is the app answering an HTTP request from outside, on its own public domain — the
+    // gap this sub-project closes, because a container can be perfectly "up" while every request its
+    // own app receives comes back wrong.
+
+    /// <summary>Null when this app has no outside-in check configured yet.</summary>
+    public Harbora.Domain.Monitoring.UptimeCheck? UptimeCheck { get; init; }
+
+    /// <summary>Newest first, capped — the app page's own history, not the full retained table.</summary>
+    public IReadOnlyList<Harbora.Domain.Monitoring.UptimeCheckResult> RecentUptimeResults { get; init; } = [];
+
     // ---- instant backup (sub-project E, Task 2) ----
     //
     // "Back up now" has to say what it would capture before it does anything — an archive of nothing

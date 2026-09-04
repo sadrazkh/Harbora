@@ -251,6 +251,7 @@ public sealed class NotificationService(
         AlertEvent.DiskWarning => a.OnDiskWarning,
         AlertEvent.BackupFailed => a.OnBackupFailed,
         AlertEvent.QuotaWarning => a.OnQuotaWarning,
+        AlertEvent.UptimeCheckFailed => a.OnUptimeCheckFailed,
         AlertEvent.LowBalance => true,
         AlertEvent.ServiceProvisionFailed => true,
         AlertEvent.Test => true,

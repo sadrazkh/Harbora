@@ -145,6 +145,14 @@ public sealed class NotificationTemplateCatalog : INotificationTemplateCatalog
             $"فضای کاری نزدیک به سقف پلن: {d.Get("Percent")}٪",
             $"این فضای کاری به سقف پلن خود نزدیک شده است: {d.Get("SummaryFa")}."),
 
+        // 2.1 (2026-09 market-gaps round two): Detail is UptimeChecker's own UptimeProbeResult.Detail —
+        // "answered 503, expected 200", "timed out after 10s" — already worded for an operator, so it is
+        // carried verbatim rather than re-derived here the way Ssl/Threshold below decode a machine key
+        // into their own sentence.
+        AlertEvent.UptimeCheckFailed => (
+            $"اُپ در دسترس نیست: {d.Get("AppName")}",
+            $"بررسی دوره‌ای «{d.Get("AppName")}» ناموفق بود.\n\n{d.Get("Detail")}"),
+
         // Not composed from a machine fact like every template above it — the operator's own words,
         // written in Announcement.TitleFa/BodyFa and handed over verbatim. AnnouncementNotifier is the
         // one raise site for this event, and it always sets both language pairs, so there is no
@@ -192,6 +200,10 @@ public sealed class NotificationTemplateCatalog : INotificationTemplateCatalog
         AlertEvent.QuotaWarning => (
             $"Workspace nearing its plan limit: {d.Get("Percent")}%",
             $"This workspace is close to its plan's cap on {d.Get("Summary")}."),
+
+        AlertEvent.UptimeCheckFailed => (
+            $"App unreachable: {d.Get("AppName")}",
+            $"The periodic check for \"{d.Get("AppName")}\" failed.\n\n{d.Get("Detail")}"),
 
         AlertEvent.PlatformAnnouncement => (d.Get("Title"), d.Get("Body")),
 
