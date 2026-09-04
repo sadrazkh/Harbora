@@ -44,6 +44,12 @@ public sealed class DeploymentPipeline(
     // IConfigOverrideResolver's own doc for why this happens between create and start rather than
     // before or after either.
     IConfigOverrideResolver configOverrides,
+    // 2.2 (2026-09 log-retention plan): the pre-removal flush RetireOldContainersAsync gives a
+    // retiring container before RemoveContainerAsync makes its logs unreachable for good. Nullable
+    // and optional even though this class has no positional test construction to protect (unlike
+    // AppOperationsService): a fixture that has never heard of log retention should not have to learn
+    // about it just to keep constructing this.
+    ILogIngestionEngine? logIngestion,
     ILogger<DeploymentPipeline> logger)
 {
     private readonly HarboraRuntimeOptions _opt = options.Value;
@@ -355,7 +361,7 @@ public sealed class DeploymentPipeline(
             // schedule successfully every minute underneath that.
             if (!ServicePlan.IsLongRunning(app.Kind))
             {
-                await RetireOldContainersAsync(docker, app.WorkspaceId, app.Slug, [], Log, ct);
+                await RetireOldContainersAsync(docker, app.Id, app.WorkspaceId, app.Slug, [], Log, ct);
 
                 if (deployment.RolledBackFromId is not null)
                     await MarkSupersededAsRolledBackAsync(app.ActiveDeploymentId, deployment.Id, Log, ct);
@@ -467,7 +473,7 @@ public sealed class DeploymentPipeline(
                         HealthDiagnosis.Explain(stackHealth, web.ContainerName));
 
                 await WireProxyAsync(app, [composeUpstream], app.HealthCheckPath, Log, Record, ct);
-                await RetireOldContainersAsync(docker, app.WorkspaceId, app.Slug, keepContainers, Log, ct);
+                await RetireOldContainersAsync(docker, app.Id, app.WorkspaceId, app.Slug, keepContainers, Log, ct);
 
                 if (deployment.RolledBackFromId is not null)
                     await MarkSupersededAsRolledBackAsync(app.ActiveDeploymentId, deployment.Id, Log, ct);
@@ -609,7 +615,7 @@ public sealed class DeploymentPipeline(
                     (ServicePlan.JoinsInternalNetwork(app.Kind)
                         ? $"Reachable inside this project at {containerName}."
                         : "Not reachable from other services."));
-            await RetireOldContainersAsync(docker, app.WorkspaceId, app.Slug, keepContainerNames: replicaNames, Log, ct);
+            await RetireOldContainersAsync(docker, app.Id, app.WorkspaceId, app.Slug, keepContainerNames: replicaNames, Log, ct);
             if (!server.IsLocal)
             {
                 // Replica 1's port, for the panel's single-port display and for FunctionInvoker,
@@ -1699,13 +1705,13 @@ public sealed class DeploymentPipeline(
     /// the app except the just-deployed container (incl. any legacy unversioned container).
     /// </summary>
     private Task RetireOldContainersAsync(
-        IDockerEngine docker, Guid workspaceId, string slug, string keepContainerName,
+        IDockerEngine docker, Guid appId, Guid workspaceId, string slug, string keepContainerName,
         Func<LogStream, string, Task> log, CancellationToken ct) =>
-        RetireOldContainersAsync(docker, workspaceId, slug, new[] { keepContainerName }, log, ct);
+        RetireOldContainersAsync(docker, appId, workspaceId, slug, new[] { keepContainerName }, log, ct);
 
     /// <summary>Stack form: keeps every container of the new set (see <c>ContainersToRetire</c>).</summary>
     private async Task RetireOldContainersAsync(
-        IDockerEngine docker, Guid workspaceId, string slug, IReadOnlyCollection<string> keepContainerNames,
+        IDockerEngine docker, Guid appId, Guid workspaceId, string slug, IReadOnlyCollection<string> keepContainerNames,
         Func<LogStream, string, Task> log, CancellationToken ct)
     {
         // The legacy bridge's other half (DeploymentPlanning.OwnedByThisWorkspace): a real query, not
@@ -1719,6 +1725,21 @@ public sealed class DeploymentPipeline(
         var toRetire = DeploymentPlanning.ContainersToRetire(existing, workspaceId, slug, keepContainerNames, slugExclusive);
         foreach (var id in toRetire)
         {
+            // 2.2 (2026-09 log-retention plan): the last chance to persist this container's final
+            // lines before RemoveContainerAsync below makes `docker logs` stop answering for this id
+            // at all — see ILogIngestionEngine's own doc for why a redeploy's cutover (unlike an
+            // in-place crash-restart) is the moment a container's history is genuinely about to be
+            // destroyed. Best-effort: a flush that could not run must never be the reason a deploy's
+            // own cutover fails.
+            if (logIngestion is not null)
+            {
+                try { await logIngestion.IngestAsync(appId, ct); }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Best-effort log flush before retiring container {ContainerId} failed.", id[..12]);
+                }
+            }
+
             await log(LogStream.System, $"Retiring previous container {id[..12]} …");
             try { await docker.RemoveContainerAsync(id, force: true, ct); }
             catch (Exception ex) { await log(LogStream.System, $"(could not remove {id[..12]}: {ex.Message})"); }

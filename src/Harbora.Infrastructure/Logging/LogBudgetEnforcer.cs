@@ -148,29 +148,33 @@ public static class LogBudgetEnforcer
     }
 
     /// <summary>
-    /// A little slack past the exact expected boundary, so an ordinary ingestion tick's own latency —
-    /// never instantaneous — does not itself read as budget capping. Twice the poll interval is
-    /// generous next to how far a real budget shortfall actually reaches.
-    /// </summary>
-    private static readonly TimeSpan Slack = LogIngestionOptions.PollInterval * 2;
-
-    /// <summary>
-    /// Overwrites <see cref="App.LogRetentionBudgetCapped"/> with the honest current answer: does the
-    /// oldest row this app actually has predate what it should have, given how long retention has been
-    /// on for it and what it is configured to keep.
+    /// Keeps <see cref="App.LogRetentionBudgetCapped"/> honest, in two halves that between them avoid
+    /// both false-positive directions a purely time-based guess would fall into.
     ///
     /// <para>
-    /// <b>The comparison.</b> <c>expectedEarliest</c> is the later of <c>now − LogRetentionDays</c>
-    /// (the configured window) and <c>App.LogRetentionEnabledAt</c> (retention cannot have kept rows
-    /// from before it was turned on). If the oldest row actually on hand is newer than that — past a
-    /// small <see cref="Slack"/> — something that should still be here was removed early, and that can
-    /// only have been the budget: age-based retention in <c>DataRetentionSweeper</c> only ever removes
-    /// rows already past the same cutoff. No rows at all is never "capped": an app with nothing
-    /// persisted yet has nothing budget could have cut short either.
+    /// <b>Setting it true is never inferred — only asserted by the caller.</b> An earlier version of
+    /// this method tried to guess "capped" purely by comparing the oldest row on hand against
+    /// <c>now − LogRetentionDays</c>. That guess could not tell a genuine budget cut apart from an app
+    /// that had simply not existed, or not had retention on, for that whole window yet — an app
+    /// enabled five minutes ago with one line stored would have read as "capped" for not yet having 30
+    /// days of history, which is exactly the false alarm this field exists to rule out. The two
+    /// deletion paths that can ever remove a row here already know precisely why they deleted it —
+    /// <see cref="EnforcePerAppAsync"/> and <see cref="EnforceGlobalAsync"/> for the budget,
+    /// <c>DataRetentionSweeper</c>'s own age-based sweep for the configured day count — so the caller
+    /// passes that fact in as <paramref name="budgetTrimmedThisPass"/> rather than this method
+    /// rediscovering it from timestamps alone.
+    /// </para>
+    /// <para>
+    /// <b>Clearing it true→false IS inferred, deliberately, because that direction is safe to guess.</b>
+    /// A row can only leave this table through the budget or through the age-based sweep — nothing
+    /// else deletes from <c>AppLogLine</c> — so once the oldest row on hand reaches back to the full
+    /// configured cutoff (<c>now − LogRetentionDays</c>) again, the budget is self-evidently no longer
+    /// the reason anything is missing: the whole window is present. This is what makes the flag
+    /// self-healing without needing every caller to remember to clear it.
     /// </para>
     /// </summary>
     public static async Task RecomputeBudgetCappedAsync(
-        HarboraDbContext db, App app, DateTimeOffset now, CancellationToken ct)
+        HarboraDbContext db, App app, DateTimeOffset now, bool budgetTrimmedThisPass, CancellationToken ct)
     {
         if (app.LogRetentionDays <= 0)
         {
@@ -178,23 +182,24 @@ public static class LogBudgetEnforcer
             return;
         }
 
+        if (budgetTrimmedThisPass)
+        {
+            app.LogRetentionBudgetCapped = true;
+            return;
+        }
+
+        // Nothing trimmed this pass. If it was not already flagged, there is nothing to reconsider —
+        // asking the database on every ordinary tick for every app would be pure overhead for an
+        // answer that is already correct.
+        if (!app.LogRetentionBudgetCapped) return;
+
         var earliest = await db.AppLogLines.IgnoreQueryFilters()
             .Where(l => l.AppId == app.Id)
             .OrderBy(l => l.Timestamp)
             .Select(l => (DateTimeOffset?)l.Timestamp)
             .FirstOrDefaultAsync(ct);
 
-        if (earliest is null)
-        {
-            app.LogRetentionBudgetCapped = false;
-            return;
-        }
-
         var configuredCutoff = now.AddDays(-app.LogRetentionDays);
-        var expectedEarliest = app.LogRetentionEnabledAt is { } enabledAt && enabledAt > configuredCutoff
-            ? enabledAt
-            : configuredCutoff;
-
-        app.LogRetentionBudgetCapped = earliest.Value > expectedEarliest + Slack;
+        app.LogRetentionBudgetCapped = earliest is null || earliest.Value > configuredCutoff;
     }
 }

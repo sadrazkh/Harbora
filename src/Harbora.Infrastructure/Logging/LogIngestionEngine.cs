@@ -103,8 +103,8 @@ public sealed class LogIngestionEngine(
             await db.SaveChangesAsync(ct);
         }
 
-        await LogBudgetEnforcer.EnforcePerAppAsync(db, appId, opt.MaxBytesPerApp, ct);
-        await LogBudgetEnforcer.RecomputeBudgetCappedAsync(db, app, now, ct);
+        var trimmed = await LogBudgetEnforcer.EnforcePerAppAsync(db, appId, opt.MaxBytesPerApp, ct);
+        await LogBudgetEnforcer.RecomputeBudgetCappedAsync(db, app, now, trimmed, ct);
         await db.SaveChangesAsync(ct);
 
         return new LogIngestionOutcome(LogIngestionStatus.Ingested, fresh.Count, null);

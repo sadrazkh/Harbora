@@ -72,7 +72,7 @@ public class LogIngestionEngineTests
             new HostPortAllocator(db, ingress, NullLogger<HostPortAllocator>.Instance),
             NullLogger<AppOperationsService>.Instance,
             clock: clock, events: null, runtimeOptions: null,
-            logIngestion: engine, logIngestionOptions: Options.Create(new LogIngestionOptions()));
+            logIngestionOptions: Options.Create(new LogIngestionOptions()));
 
         return new Fixture(db, engine, ops, docker, factory, clock, appId);
     }
@@ -110,21 +110,33 @@ public class LogIngestionEngineTests
     }
 
     [Fact]
-    public async Task The_pre_removal_flush_captures_the_last_line_before_a_container_is_deleted()
+    public async Task A_redeploys_cutover_flushes_the_retiring_containers_last_lines_before_removing_it()
     {
-        // AppOperationsService.DeleteAsync's own best-effort flush — the one moment a crash's last
-        // lines are genuinely about to be destroyed (removal, not an in-place restart).
-        var f = NewFixture();
-        var now = f.Clock.UtcNow;
-        var containerId = f.Docker.SeedContainer("harbora-api-1", "api", workspaceId: Workspace);
-        f.Docker.ContainerLogsById[containerId] = $"{Stamp(now)} ERROR last words before removal";
+        // DeploymentPipeline.RetireOldContainersAsync's own best-effort flush — unlike
+        // AppOperationsService.DeleteAsync (see that method's own remark), the app SURVIVES a
+        // redeploy, so this is the one place a container's final lines are genuinely about to be
+        // destroyed for an app somebody can still come back and search.
+        using var h = new PipelineHarness();
+        h.WithPreviousDeployment(number: 1);
+        h.App.LogRetentionDays = 7;
+        h.App.LogRetentionEnabledAt = h.Clock.UtcNow.AddDays(-365);
+        h.Db.SaveChanges();
 
-        await f.Ops.DeleteAsync(f.AppId, removeVolumes: false, default);
+        var oldContainerId = (await h.Docker.ListContainersAsync(null, default))
+            .Single(c => c.Name == h.ContainerFor(1)).Id;
+        h.Docker.ContainerLogsById[oldContainerId] =
+            $"{Stamp(h.Clock.UtcNow)} ERROR the old container's last words before cutover";
 
-        // Sessionless read, the same reasoning every sweep in this codebase already uses.
-        var stored = await f.Db.AppLogLines.IgnoreQueryFilters()
-            .Where(l => l.AppId == f.AppId).ToListAsync();
-        stored.Should().ContainSingle().Which.Text.Should().Contain("last words before removal");
+        h.LogIngestion = new LogIngestionEngine(
+            h.Db, new FakeServerEngineFactory(h.Docker), Options.Create(new LogIngestionOptions()),
+            h.Clock, NullLogger<LogIngestionEngine>.Instance);
+
+        var deployment = h.QueueDeployment(number: 2);
+        await h.RunAsync(deployment);
+
+        var stored = await h.Db.AppLogLines.IgnoreQueryFilters()
+            .Where(l => l.AppId == h.App.Id).ToListAsync();
+        stored.Should().ContainSingle().Which.Text.Should().Contain("old container's last words");
     }
 
     // ---- ordinary ingestion behaviour ----

@@ -133,65 +133,84 @@ public class LogBudgetEnforcerTests
         (await db.AppLogLines.IgnoreQueryFilters().CountAsync()).Should().Be(1);
     }
 
-    // ---- App.LogRetentionBudgetCapped: honest, not sticky ----
+    // ---- App.LogRetentionBudgetCapped: set only on an explicit signal, cleared by self-healing ----
 
     [Fact]
-    public async Task RecomputeBudgetCappedAsync_is_true_when_the_budget_cut_off_history_the_app_should_still_have()
+    public async Task RecomputeBudgetCappedAsync_is_true_when_the_caller_says_the_budget_trimmed_this_pass()
     {
         using var db = NewDb();
-        // Retention has been on for a year and is configured to keep 30 days, so the oldest line on
-        // hand SHOULD reach back 30 days — but it only reaches back 5, which can only be the budget.
         var app = NewApp(retentionDays: 30, enabledAt: Now.AddDays(-365));
         db.Apps.Add(app);
-        db.AppLogLines.Add(Line(app, Now.AddDays(-5), 100));
         await db.SaveChangesAsync();
 
-        await LogBudgetEnforcer.RecomputeBudgetCappedAsync(db, app, Now, default);
+        await LogBudgetEnforcer.RecomputeBudgetCappedAsync(db, app, Now, budgetTrimmedThisPass: true, default);
 
         app.LogRetentionBudgetCapped.Should().BeTrue();
     }
 
     [Fact]
-    public async Task RecomputeBudgetCappedAsync_is_false_when_the_app_simply_has_not_produced_that_much_history_yet()
+    public async Task RecomputeBudgetCappedAsync_never_marks_an_app_capped_purely_for_not_having_enough_history_yet()
     {
+        // Retention was turned on two days ago; the only line on hand is from right around then. A
+        // 30-day configured window must not read this as "capped" purely from elapsed time — nothing
+        // was ever trimmed, so the flag has to stay at its default. This is the false alarm the old,
+        // purely time-inferred version of this method used to raise.
         using var db = NewDb();
-        // Retention was turned on two days ago; the oldest line on hand is from right around then.
-        // A 30-day configured window does not make this "capped" — there is nothing earlier to have.
         var app = NewApp(retentionDays: 30, enabledAt: Now.AddDays(-2));
         db.Apps.Add(app);
         db.AppLogLines.Add(Line(app, Now.AddDays(-2).AddMinutes(5), 100));
         await db.SaveChangesAsync();
 
-        await LogBudgetEnforcer.RecomputeBudgetCappedAsync(db, app, Now, default);
+        await LogBudgetEnforcer.RecomputeBudgetCappedAsync(db, app, Now, budgetTrimmedThisPass: false, default);
 
         app.LogRetentionBudgetCapped.Should().BeFalse();
     }
 
     [Fact]
-    public async Task RecomputeBudgetCappedAsync_is_false_once_the_full_configured_window_is_actually_on_hand()
+    public async Task RecomputeBudgetCappedAsync_stays_true_until_the_full_configured_window_is_present_again()
     {
         using var db = NewDb();
         var app = NewApp(retentionDays: 7, enabledAt: Now.AddDays(-365));
+        app.LogRetentionBudgetCapped = true; // an earlier pass trimmed something
         db.Apps.Add(app);
-        db.AppLogLines.Add(Line(app, Now.AddDays(-7).AddMinutes(-5), 100));
+        // Oldest line does not yet reach the full 7-day window.
+        db.AppLogLines.Add(Line(app, Now.AddDays(-3), 100));
         await db.SaveChangesAsync();
 
-        await LogBudgetEnforcer.RecomputeBudgetCappedAsync(db, app, Now, default);
+        await LogBudgetEnforcer.RecomputeBudgetCappedAsync(db, app, Now, budgetTrimmedThisPass: false, default);
 
-        app.LogRetentionBudgetCapped.Should().BeFalse();
+        app.LogRetentionBudgetCapped.Should().BeTrue("the window has not caught back up yet");
     }
 
     [Fact]
-    public async Task RecomputeBudgetCappedAsync_is_false_when_nothing_is_stored_at_all()
+    public async Task RecomputeBudgetCappedAsync_clears_itself_once_the_full_window_is_present_again()
+    {
+        using var db = NewDb();
+        var app = NewApp(retentionDays: 7, enabledAt: Now.AddDays(-365));
+        app.LogRetentionBudgetCapped = true; // an earlier pass trimmed something
+        db.Apps.Add(app);
+        // The oldest line now reaches the full 7-day window — nothing is missing any more.
+        db.AppLogLines.Add(Line(app, Now.AddDays(-7).AddMinutes(-5), 100));
+        await db.SaveChangesAsync();
+
+        await LogBudgetEnforcer.RecomputeBudgetCappedAsync(db, app, Now, budgetTrimmedThisPass: false, default);
+
+        app.LogRetentionBudgetCapped.Should().BeFalse("self-healing: nothing is missing from the configured window any more");
+    }
+
+    [Fact]
+    public async Task RecomputeBudgetCappedAsync_leaves_an_already_false_flag_alone_without_touching_the_database()
     {
         using var db = NewDb();
         var app = NewApp(retentionDays: 30, enabledAt: Now.AddDays(-365));
         db.Apps.Add(app);
+        // No AppLogLines seeded at all — if this queried the database it would still get the right
+        // answer, but it must not need to for the ordinary "nothing changed" case.
         await db.SaveChangesAsync();
 
-        await LogBudgetEnforcer.RecomputeBudgetCappedAsync(db, app, Now, default);
+        await LogBudgetEnforcer.RecomputeBudgetCappedAsync(db, app, Now, budgetTrimmedThisPass: false, default);
 
-        app.LogRetentionBudgetCapped.Should().BeFalse("an app with nothing persisted yet has nothing budget could have cut short");
+        app.LogRetentionBudgetCapped.Should().BeFalse();
     }
 
     [Fact]
@@ -203,8 +222,8 @@ public class LogBudgetEnforcerTests
         db.Apps.Add(app);
         await db.SaveChangesAsync();
 
-        await LogBudgetEnforcer.RecomputeBudgetCappedAsync(db, app, Now, default);
+        await LogBudgetEnforcer.RecomputeBudgetCappedAsync(db, app, Now, budgetTrimmedThisPass: true, default);
 
-        app.LogRetentionBudgetCapped.Should().BeFalse();
+        app.LogRetentionBudgetCapped.Should().BeFalse("retention being off overrides even a caller claiming a trim happened");
     }
 }

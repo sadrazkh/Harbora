@@ -371,7 +371,15 @@ public sealed class PipelineHarness : IDisposable
             Protector,
             ServiceResolver,
             NullLogger<Harbora.Infrastructure.Configuration.ConfigOverrideResolver>.Instance),
+        // 2.2 (2026-09 log-retention plan): null, the same "nothing subscribes" shape
+        // NullFunctionEventBus above already uses — no deployment test here exercises persisted log
+        // retention, and RetireOldContainersAsync's own flush is guarded to skip cleanly when this is
+        // null.
+        LogIngestion,
         NullLogger<DeploymentPipeline>.Instance);
+
+    /// <summary>See <see cref="BuildPipeline"/>'s own remark on this parameter.</summary>
+    public Harbora.Application.Abstractions.ILogIngestionEngine? LogIngestion { get; set; }
 
     /// <summary>Shared with the pipeline, so a test can assert on what it bound.</summary>
     public Harbora.Infrastructure.Nodes.NodeIngressRegistry Ingress { get; } = TestIngress.Registry();

@@ -80,7 +80,7 @@ public sealed class LogIngestionHostedService(
                 .Where(a => touched.Contains(a.Id))
                 .ToListAsync(ct);
             foreach (var app in apps)
-                await LogBudgetEnforcer.RecomputeBudgetCappedAsync(db, app, now, ct);
+                await LogBudgetEnforcer.RecomputeBudgetCappedAsync(db, app, now, budgetTrimmedThisPass: true, ct);
             await db.SaveChangesAsync(ct);
 
             logger.LogInformation(

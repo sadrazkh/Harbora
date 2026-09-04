@@ -249,22 +249,21 @@ public class App : BaseEntity
 
     /// <summary>
     /// The moment persisted retention was last turned on for this app (0 → positive
-    /// <see cref="LogRetentionDays"/>) — cleared back to null whenever it is turned off. This is the
-    /// other half of what <see cref="LogRetentionBudgetCapped"/> needs: "we don't have logs from
-    /// before X" is only evidence of budget trimming if the app could otherwise have had them, i.e.
-    /// if retention had already been on since before X. Without this, an app that enabled retention an
-    /// hour ago would read as budget-capped simply for not yet having 30 days of history — the exact
-    /// false alarm this field exists to rule out.
+    /// <see cref="LogRetentionDays"/>) — cleared back to null whenever it is turned off. Informational
+    /// (shown wherever "history since" is useful); <see cref="LogRetentionBudgetCapped"/> no longer
+    /// derives from it — see <c>LogBudgetEnforcer.RecomputeBudgetCappedAsync</c>'s own remark on why
+    /// inferring "capped" from elapsed time alone could not tell a genuine budget cut apart from an
+    /// app that simply had not been retaining logs that long yet.
     /// </summary>
     public DateTimeOffset? LogRetentionEnabledAt { get; set; }
 
     /// <summary>
-    /// Whether the disk budget — not this app's own <see cref="LogRetentionDays"/> or how recently
-    /// <see cref="LogRetentionEnabledAt"/> was — is currently the reason its persisted history does
-    /// not reach as far back as it should. Fully recomputed from the actual data on every budget pass
-    /// (<c>LogBudgetEnforcer.RecomputeBudgetCappedAsync</c>) rather than merely set true and left —
-    /// so it also clears itself once enough time has passed that the real window no longer needs the
-    /// rows the budget once dropped. See that method for the exact comparison.
+    /// Whether the disk budget — not this app's own <see cref="LogRetentionDays"/> — is currently the
+    /// reason its persisted history does not reach as far back as it should. Set true only when
+    /// <c>LogBudgetEnforcer</c> actually deletes a row for this app (never inferred), and cleared once
+    /// the oldest row on hand reaches back to the full configured cutoff again — see
+    /// <c>LogBudgetEnforcer.RecomputeBudgetCappedAsync</c> for why each direction is handled
+    /// differently.
     /// </summary>
     public bool LogRetentionBudgetCapped { get; set; }
 

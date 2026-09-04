@@ -62,7 +62,7 @@
             @if (ViewBag.LogRetentionEarliestAt is DateTimeOffset earliest)
             {
                 <p class="text-xs text-ink-faint" dir="ltr">
-                    @(isFa ? "تاریخچه از " : "History since ")@earliest.UtcDateTime.ToString("yyyy-MM-dd HH:mm") UTC
+                    @(isFa ? "تاریخچه از " : "History since ")@earliest.UtcDateTime.ToString(Dates.Stamp) UTC
                 </p>
             }
             else

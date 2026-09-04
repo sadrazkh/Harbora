@@ -33,12 +33,12 @@ public sealed class AppOperationsService(
     ISystemClock? clock = null,
     IEventPublisher? events = null,
     IOptions<HarboraRuntimeOptions>? runtimeOptions = null,
-    // 2.2 (2026-09 log-retention plan), same shape and same reason as the three above: a 12th/13th
+    // 2.2 (2026-09 log-retention plan), same shape and same reason as the three above: a 12th
     // trailing optional parameter rather than required, so the five existing positional-construction
-    // test files keep compiling for the features they were never testing. logIngestion is null only
-    // in those tests (and in any other caller that genuinely has nothing to flush); DI always supplies
-    // a real one in production.
-    ILogIngestionEngine? logIngestion = null,
+    // test files keep compiling for a feature they were never testing. Only SetLogRetentionAsync's
+    // day-count clamp reads this — there is no pre-removal flush in this class (see DeleteAsync's own
+    // remark on why one here would be pointless; DeploymentPipeline.RetireOldContainersAsync is
+    // where that flush actually lives, because that is the call where the app survives).
     IOptions<Harbora.Infrastructure.Logging.LogIngestionOptions>? logIngestionOptions = null) : IAppOperationsService
 {
     // Defaulted rather than required, the same shape ManagedServiceEngine's own trailing
@@ -399,26 +399,13 @@ public sealed class AppOperationsService(
 
         var docker = await engineFactory.ResolveAsync(app.ServerId, ct);
 
+        // 2.2 (2026-09 log-retention plan): deliberately NO pre-removal log flush here, unlike
+        // DeploymentPipeline.RetireOldContainersAsync's own. This method removes the App row itself a
+        // few lines down, and AppLogLine cascades on that FK — so anything flushed here would be
+        // deleted again inside this very call, before anything could ever read it. The flush belongs
+        // only where the app SURVIVES and only its container is replaced.
         var id = await FindContainerIdAsync(docker, app.WorkspaceId, app.Slug, ct);
-        if (id is not null)
-        {
-            // 2.2 (2026-09 log-retention plan): the last chance to persist this container's final
-            // lines. RemoveContainerAsync below makes `docker logs` stop answering for this id
-            // entirely — unlike an ordinary crash-restart, which Docker's own unless-stopped policy
-            // keeps under the same id (see ILogIngestionEngine's own doc) — so this is the one moment
-            // a crash's last lines are genuinely about to be destroyed rather than merely due for the
-            // next poll. Best-effort and never allowed to fail the delete itself: a flush that could
-            // not run is not a reason an app fails to delete.
-            if (logIngestion is not null)
-            {
-                try { await logIngestion.IngestAsync(appId, ct); }
-                catch (Exception ex)
-                {
-                    logger.LogWarning(ex, "Best-effort log flush before removing app {AppId}'s container failed.", appId);
-                }
-            }
-            await docker.RemoveContainerAsync(id, force: true, ct);
-        }
+        if (id is not null) await docker.RemoveContainerAsync(id, force: true, ct);
         if (removeVolumes)
             foreach (var v in app.Volumes) await docker.RemoveVolumeAsync(v.Name, ct);
 
