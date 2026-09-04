@@ -102,10 +102,16 @@ public sealed class PitrRestoreService(
         if (!window.HasRecoverableWindow)
             return (false, $"There is nothing to restore yet: {window.Message}", null);
 
-        if (targetTime < window.EarliestPoint!.Value || targetTime > window.LatestPoint!.Value)
+        // Bound once rather than dereferenced four times: HasRecoverableWindow is what guarantees both
+        // are set, and the compiler cannot see that through a property, so every later use needed its
+        // own `!` and two of them did not get one.
+        var earliest = window.EarliestPoint!.Value;
+        var latest = window.LatestPoint!.Value;
+
+        if (targetTime < earliest || targetTime > latest)
             return (false,
-                $"{Iso(targetTime)} is outside the recoverable window ({Iso(window.EarliestPoint.Value)} to " +
-                $"{Iso(window.LatestPoint.Value)}). " +
+                $"{Iso(targetTime)} is outside the recoverable window ({Iso(earliest)} to " +
+                $"{Iso(latest)}). " +
                 (window.Status == PitrStatus.Degraded
                     ? "Archiving has been failing, which is why the window stops there rather than at now."
                     : "Choose a time inside that window."),
