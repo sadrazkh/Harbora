@@ -485,27 +485,14 @@ public sealed class NodesController(
         return RedirectToAction(nameof(Detail), new { nodeId });
     }
 
-    private static string? ValidateCapacityPolicy(double reservedMemoryRatio, double cpuFactor, double memFactor)
-    {
-        var fa = Fa();
-
-        if (!ServerCapacityPolicy.IsValidReservedMemoryRatio(reservedMemoryRatio))
-            return fa
-                ? $"سهم رزرو حافظه باید بین ۰٪ و {ServerCapacityPolicy.MaxReservedMemoryRatio * 100:0}٪ باشد."
-                : $"Reserved memory must be between 0% and {ServerCapacityPolicy.MaxReservedMemoryRatio * 100:0}%.";
-
-        if (!ServerCapacityPolicy.IsValidOvercommitFactor(cpuFactor, ServerCapacityPolicy.MaxCpuOvercommitFactor))
-            return fa
-                ? $"ضریب مازاد-تعهد CPU باید بین {ServerCapacityPolicy.MinOvercommitFactor:0.#}× و {ServerCapacityPolicy.MaxCpuOvercommitFactor:0.#}× باشد."
-                : $"The CPU overcommit factor must be between {ServerCapacityPolicy.MinOvercommitFactor:0.#}× and {ServerCapacityPolicy.MaxCpuOvercommitFactor:0.#}×.";
-
-        if (!ServerCapacityPolicy.IsValidOvercommitFactor(memFactor, ServerCapacityPolicy.MaxMemoryOvercommitFactor))
-            return fa
-                ? $"ضریب مازاد-تعهد حافظه باید بین {ServerCapacityPolicy.MinOvercommitFactor:0.#}× و {ServerCapacityPolicy.MaxMemoryOvercommitFactor:0.#}× باشد."
-                : $"The memory overcommit factor must be between {ServerCapacityPolicy.MinOvercommitFactor:0.#}× and {ServerCapacityPolicy.MaxMemoryOvercommitFactor:0.#}×.";
-
-        return null;
-    }
+    /// <summary>
+    /// Delegates to <see cref="Harbora.Web.Infrastructure.CapacityPolicyForm"/>, which
+    /// <c>ServersController</c> also calls. The same form is offered in two places — through a node,
+    /// and directly on a server, which is the only route to the Local server — and two copies of
+    /// "what is a legal policy" would eventually disagree, leaving one of them quietly wrong.
+    /// </summary>
+    private static string? ValidateCapacityPolicy(double reservedMemoryRatio, double cpuFactor, double memFactor) =>
+        Harbora.Web.Infrastructure.CapacityPolicyForm.Validate(reservedMemoryRatio, cpuFactor, memFactor, Fa());
 
     private static string FormatGb(long bytes) =>
         (bytes / 1024.0 / 1024 / 1024).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
@@ -513,9 +500,7 @@ public sealed class NodesController(
     /// <summary>See the remarks on <see cref="CapacityPolicy"/> for why this is invariant, not
     /// culture-sensitive, parsing.</summary>
     private static bool TryParseInvariant(string? value, out double result) =>
-        double.TryParse(
-            value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture,
-            out result);
+        Harbora.Web.Infrastructure.CapacityPolicyForm.TryParseInvariant(value, out result);
 
     private async Task<NodeListViewModel> BuildListAsync(CancellationToken ct)
     {

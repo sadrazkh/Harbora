@@ -46,7 +46,12 @@ public class LogSearchPersistedHistoryTests
             db, factory, new RecordingProxyEngine(() => []),
             new BillingGate(db, Options.Create(new BillingOptions())),
             new HostPortAllocator(db, ingress, NullLogger<HostPortAllocator>.Instance),
-            NullLogger<AppOperationsService>.Instance);
+            NullLogger<AppOperationsService>.Instance,
+            // The same instant every row here is seeded around. Without it the service read the wall
+            // clock, so "one hour old" stopped being inside a six-hour window once real time moved
+            // past this file's fixed Now — these tests passed on the day they were written and failed
+            // three days later for no reason anyone had changed.
+            clock: new FixedClock(Now));
 
         return new Fixture(db, ops, docker, factory);
     }

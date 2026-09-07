@@ -1,4 +1,6 @@
 ﻿@model List<Harbora.Domain.Servers.Server>
+@using System.Globalization
+@using Harbora.Domain.Servers
 @{
     ViewData["Title"] = "Servers";
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
@@ -111,6 +113,55 @@
                         </div>
                     </div>
                 }
+                @* The same policy the node detail page offers, reachable here too. It had to be:
+                   that page needs an attached Node row, and the Local server never has one, so on a
+                   single-server install these ratios could not be changed at all while the panel
+                   called them an administrator's decision. Same bounds, same validator
+                   (CapacityPolicyForm), so the two entry points cannot disagree. *@
+                <details class="mt-3 rounded-lg border border-line bg-surface-2/40" data-capacity-policy="@s.Id">
+                    <summary class="cursor-pointer select-none px-3 py-2 text-xs text-ink-muted">
+                        @(isFa ? "سیاست ظرفیت" : "Capacity policy")
+                        <span class="text-ink-faint" dir="ltr">
+                            — CPU @s.CpuOvercommitFactor.ToString("0.##", CultureInfo.InvariantCulture)× ·
+                            RAM @s.MemoryOvercommitFactor.ToString("0.##", CultureInfo.InvariantCulture)×
+                        </span>
+                    </summary>
+                    <div class="px-3 pb-3 pt-1">
+                        <p class="mb-3 text-[11px] text-ink-faint">
+                            @(isFa
+                                ? "یک برنامه معمولاً از سقف خود استفاده نمی‌کند، پس تعهد بیش از منابع فیزیکی یک انتخاب واقعی است. مازاد-تعهدِ CPU در بدترین حالت فقط کار را کند می‌کند؛ مازاد-تعهدِ حافظه با OOM-kill شکست می‌خورد — به همین دلیل سقف این دو یکی نیست."
+                                : "An app rarely uses its ceiling, so committing beyond the physical figure is a real choice. Overcommitting CPU costs queueing at worst; overcommitting memory fails by OOM-kill — which is why the two ceilings differ.")
+                        </p>
+                        <form asp-controller="Servers" asp-action="CapacityPolicy" asp-route-id="@s.Id" method="post" class="space-y-3">
+                            @Html.AntiForgeryToken()
+                            <div>
+                                <label class="block text-[11px] text-ink-faint mb-1" for="reservedMemoryPercent-@s.Id">@(isFa ? "سهم رزرو حافظه‌ی میزبان (٪)" : "Host memory reserved (%)")</label>
+                                <input id="reservedMemoryPercent-@s.Id" name="reservedMemoryPercent"
+                                       type="number" min="0" max="@((ServerCapacityPolicy.MaxReservedMemoryRatio * 100).ToString("0", CultureInfo.InvariantCulture))" step="1"
+                                       value="@((s.ReservedMemoryRatio * 100).ToString("0.#", CultureInfo.InvariantCulture))"
+                                       class="w-full rounded-lg bg-surface border border-line-strong px-3 py-1.5 text-xs font-mono" dir="ltr" />
+                            </div>
+                            <div>
+                                <label class="block text-[11px] text-ink-faint mb-1" for="cpuOvercommitFactor-@s.Id">@(isFa ? "ضریب مازاد-تعهدِ CPU" : "CPU overcommit factor")</label>
+                                <input id="cpuOvercommitFactor-@s.Id" name="cpuOvercommitFactor"
+                                       type="number" min="@ServerCapacityPolicy.MinOvercommitFactor.ToString("0.#", CultureInfo.InvariantCulture)"
+                                       max="@ServerCapacityPolicy.MaxCpuOvercommitFactor.ToString("0.#", CultureInfo.InvariantCulture)" step="0.1"
+                                       value="@s.CpuOvercommitFactor.ToString("0.##", CultureInfo.InvariantCulture)"
+                                       class="w-full rounded-lg bg-surface border border-line-strong px-3 py-1.5 text-xs font-mono" dir="ltr" />
+                            </div>
+                            <div>
+                                <label class="block text-[11px] text-ink-faint mb-1" for="memoryOvercommitFactor-@s.Id">@(isFa ? "ضریب مازاد-تعهدِ حافظه" : "Memory overcommit factor")</label>
+                                <input id="memoryOvercommitFactor-@s.Id" name="memoryOvercommitFactor"
+                                       type="number" min="@ServerCapacityPolicy.MinOvercommitFactor.ToString("0.#", CultureInfo.InvariantCulture)"
+                                       max="@ServerCapacityPolicy.MaxMemoryOvercommitFactor.ToString("0.#", CultureInfo.InvariantCulture)" step="0.1"
+                                       value="@s.MemoryOvercommitFactor.ToString("0.##", CultureInfo.InvariantCulture)"
+                                       class="w-full rounded-lg bg-surface border border-line-strong px-3 py-1.5 text-xs font-mono" dir="ltr" />
+                            </div>
+                            <button class="w-full text-xs rounded-lg bg-accent-soft hover:bg-accent-soft text-accent px-3 py-1.5">@(isFa ? "ذخیره" : "Save")</button>
+                        </form>
+                    </div>
+                </details>
+
                 <div class="mt-3 flex items-center gap-2">
                     <a href="/servers/@s.Id/test" class="text-xs rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-1.5">@(isFa ? "تست اتصال" : "Test")</a>
                     @if (!s.IsLocal)

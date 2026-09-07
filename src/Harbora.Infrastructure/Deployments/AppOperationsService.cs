@@ -488,7 +488,12 @@ public sealed class AppOperationsService(
     {
         var cap = maxLinesPerApp <= 0 ? 200 : maxLinesPerApp;
         var windowRequested = window is not null;
-        var now = DateTimeOffset.UtcNow;
+        // The injected clock, like every other time read in this class. Reading the wall clock here
+        // instead made the search window untestable: LogSearchPersistedHistoryTests pins its own
+        // "now" to seed rows around, so a test asserting that a line one hour old falls inside a
+        // six-hour window passed on the day it was written and started failing three days later,
+        // when real time had walked past the fixture's fixed timestamp.
+        var now = clock?.UtcNow ?? DateTimeOffset.UtcNow;
         var hits = new List<LogSearchHit>();
         var coverage = new List<AppLogCoverage>();
 

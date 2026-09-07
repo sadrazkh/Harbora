@@ -125,4 +125,86 @@ public sealed class ServersController(
         await db.SaveChangesAsync(ct);
         return RedirectToAction(nameof(Index));
     }
+
+    /// <summary>
+    /// Set a server's commitment ratios directly, without going through a node.
+    ///
+    /// <para>
+    /// <c>NodesController.CapacityPolicy</c> offers the same form, but only for a server reached
+    /// through an attached <c>Node</c> row. The <b>Local</b> server never has one — <c>DbSeeder</c>
+    /// creates it and only <c>NodeEnrollmentService</c> ever creates a <c>Node</c> — so on a
+    /// single-server install, which is where nearly every app actually runs, these values could not
+    /// be changed from the panel at all while the page told the operator they were an administrator's
+    /// decision. A deploy refused for want of processor capacity had no answer in the UI.
+    /// </para>
+    /// </summary>
+    /// <remarks>
+    /// The three fields bind as strings for the reason
+    /// <see cref="Harbora.Web.Infrastructure.CapacityPolicyForm.TryParseInvariant"/> gives: the
+    /// request culture is Persian and binding a <c>double</c> with it turns "2.5" into 0.
+    /// </remarks>
+    [HttpPost("{id:guid}/capacity-policy")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.ServersManage)]
+    public async Task<IActionResult> CapacityPolicy(
+        Guid id, string? reservedMemoryPercent, string? cpuOvercommitFactor, string? memoryOvercommitFactor,
+        CancellationToken ct)
+    {
+        var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
+        var server = await db.Servers.FirstOrDefaultAsync(s => s.Id == id, ct);
+        if (server is null)
+        {
+            TempData["Error"] = isFa ? "سروری با این شناسه نیست." : "No such server.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        if (!Infrastructure.CapacityPolicyForm.TryParseInvariant(reservedMemoryPercent, out var reservedPercent) ||
+            !Infrastructure.CapacityPolicyForm.TryParseInvariant(cpuOvercommitFactor, out var cpuFactor) ||
+            !Infrastructure.CapacityPolicyForm.TryParseInvariant(memoryOvercommitFactor, out var memFactor))
+        {
+            TempData["Error"] = isFa
+                ? "مقدار واردشده عدد معتبری نیست."
+                : "One of the values entered is not a valid number.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        var reservedMemoryRatio = reservedPercent / 100.0;
+        var error = Infrastructure.CapacityPolicyForm.Validate(reservedMemoryRatio, cpuFactor, memFactor, isFa);
+        if (error is not null)
+        {
+            // Nothing is written when any one field is refused: a half-applied policy is a state the
+            // administrator never asked for and would have to discover by reading the values back.
+            TempData["Error"] = error;
+            return RedirectToAction(nameof(Index));
+        }
+
+        server.ReservedMemoryRatio = reservedMemoryRatio;
+        server.CpuOvercommitFactor = cpuFactor;
+        server.MemoryOvercommitFactor = memFactor;
+        await db.SaveChangesAsync(ct);
+
+        // Lowering a factor below what is already committed leaves the server oversubscribed on paper.
+        // Not refused — the admin may be correcting a factor that was too generous — but said plainly:
+        // what is placed keeps running, and the scheduler simply stops offering this server new work.
+        var after = await capacity.GetAsync(id, ct);
+        var oversubscribed = after is not null &&
+            (after.CommittedMemoryBytes > after.AllocatableMemoryBytes || after.CommittedCpu > after.AllocatableCpu);
+
+        TempData["Message"] = !oversubscribed
+            ? (isFa ? "سیاست ظرفیت این سرور ذخیره شد." : "Capacity policy saved for this server.")
+            : (isFa
+                ? $"ذخیره شد — اما این سرور اکنون بیش از ظرفیت مجازش متعهد شده است " +
+                  $"({Infrastructure.CapacityPolicyForm.FormatGb(after!.CommittedMemoryBytes)}/" +
+                  $"{Infrastructure.CapacityPolicyForm.FormatGb(after.AllocatableMemoryBytes)} گیگابایت، " +
+                  $"{after.CommittedCpu:0.##}/{after.AllocatableCpu:0.##} هسته‌ی پردازنده). آنچه مستقر است همچنان اجرا می‌شود؛ " +
+                  "زمان‌بند تا کاهش مصرف یا افزایش دوباره‌ی نسبت، کار تازه‌ای به آن نمی‌دهد."
+                : $"Saved — but this server is now committed beyond its allocatable capacity " +
+                  $"({Infrastructure.CapacityPolicyForm.FormatGb(after!.CommittedMemoryBytes)}/" +
+                  $"{Infrastructure.CapacityPolicyForm.FormatGb(after.AllocatableMemoryBytes)} GB, " +
+                  $"{after.CommittedCpu:0.##}/{after.AllocatableCpu:0.##} CPU cores). What is already placed keeps " +
+                  "running; the scheduler will not offer it new work until usage drops or the ratio is raised again.");
+
+        return RedirectToAction(nameof(Index));
+    }
 }
