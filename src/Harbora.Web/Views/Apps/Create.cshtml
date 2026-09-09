@@ -176,6 +176,15 @@
             </div>
         </section>
 
+        <section class="create-section">
+            <div class="section-heading"><div><h2><i data-lucide="settings-2" class="h-4 w-4"></i>@(isFa ? "برنامه چگونه اجرا می‌شود؟" : "How does your app run?")</h2><p>@(isFa ? "وب‌سرویس، پردازش پس‌زمینه یا کار زمان‌بندی‌شده را انتخاب کنید. پورت باید با پورتی که برنامه داخل کانتینر استفاده می‌کند یکی باشد." : "Choose a web service, background worker or scheduled job. Match the port your application listens on inside its container.")</p></div></div>
+            <div class="grid gap-4 md:grid-cols-2">
+                <label class="form-field"><span>@(isFa ? "نوع سرویس" : "Service type")</span><select asp-for="Kind" data-service-kind class="form-control">@foreach (var k in Enum.GetValues<Harbora.Domain.Common.ServiceKind>()){<option value="@k" data-help="@Harbora.Infrastructure.Deployments.ServicePlan.Describe(k)">@k</option>}</select><small data-kind-help></small></label>
+                <label class="form-field"><span>@(isFa ? "پورت داخلی" : "Container port")</span><input asp-for="ContainerPort" type="number" min="1" max="65535" class="form-control" /></label>
+            </div>
+            <p class="mt-3 text-sm text-ink-muted">@(isFa ? "برای دسترسی شبکه، وب‌سرور باید روی 0.0.0.0 گوش دهد. تنظیمات شاخه، مونوریپو و دستور انتشار در بخش پیشرفته هستند." : "For network access, your web server must listen on 0.0.0.0. Branch, monorepo and release settings are available below in advanced settings.")</p>
+        </section>
+
         @* The size and the server, as cards. They were two dropdowns folded inside Advanced below,
            which put the two facts that decide the bill among the hardest things on the page to find.
            `allowNoLimit: false` — creation never offers "no ceiling", because a workload with no tier
@@ -209,8 +218,6 @@
                 <label data-panel="GitRepository,Dockerfile" class="form-field"><span>Dockerfile path</span><input asp-for="DockerfilePath" class="form-control" dir="ltr" /></label>
                 <label data-panel="DockerCompose" class="form-field"><span>Compose file path</span><input asp-for="ComposeFilePath" placeholder="compose.yml (auto-detected)" class="form-control" dir="ltr" /><small>@(isFa ? "خالی بگذارید تا نام‌های استاندارد پیدا شوند." : "Leave blank to detect standard file names.")</small></label>
                 <label data-panel="GitRepository,StaticSite,DockerCompose,Dockerfile,Upload" class="form-field"><span>@(isFa ? "دایرکتوری ریشه" : "Root directory")</span><input asp-for="RootDirectory" placeholder="@(isFa ? "خالی = ریشهٔ مخزن" : "blank = repository root")" class="form-control" dir="ltr" /><small>@(isFa ? "مسیر زیرپوشه‌ای که build از آن اجرا می‌شود؛ برای یک مونوریپو مثل api یا services/worker." : "Sub-folder the build runs from — e.g. api or services/worker for a monorepo.")</small><span asp-validation-for="RootDirectory" class="field-error"></span></label>
-                <label class="form-field"><span>@(isFa ? "نوع سرویس" : "Service type")</span><select asp-for="Kind" data-service-kind class="form-control">@foreach (var k in Enum.GetValues<Harbora.Domain.Common.ServiceKind>()){<option value="@k" data-help="@Harbora.Infrastructure.Deployments.ServicePlan.Describe(k)">@k</option>}</select><small data-kind-help></small></label>
-                <label class="form-field"><span>@(isFa ? "پورت داخلی" : "Container port")</span><input asp-for="ContainerPort" type="number" min="1" max="65535" class="form-control" /></label>
                 @* The size and the server were two dropdowns here, folded inside Advanced — which put
                    the two facts that decide the bill among the hardest things on the page to find.
                    They are now one card chooser in a step of their own below. *@
@@ -226,6 +233,10 @@
         <div class="sticky top-4">
             <div class="review-heading"><span class="source-icon"><i data-lucide="rocket" class="h-5 w-5"></i></span><div><strong>@(isFa ? "خلاصه استقرار" : "Deployment summary")</strong><small>@(isFa ? "پیش از ساخت بررسی کنید" : "Review before creating")</small></div></div>
             <dl class="review-list">
+                <div><dt>@T["Name"]</dt><dd data-review-name>—</dd></div>
+                <div><dt>@(isFa ? "نوع سرویس" : "Service type")</dt><dd data-review-kind>@Model.Kind</dd></div>
+                <div><dt>@(isFa ? "پورت داخلی" : "Container port")</dt><dd data-review-port dir="ltr">@Model.ContainerPort</dd></div>
+                <div><dt>@(isFa ? "محیط" : "Environment")</dt><dd data-review-environment>—</dd></div>
                 <div><dt>@(isFa ? "منبع" : "Source")</dt><dd data-review-source>Git repository</dd></div>
                 <div><dt>@(isFa ? "شبکه" : "Network")</dt><dd><i data-lucide="shield-check" class="h-3.5 w-3.5 text-ok"></i>@(isFa ? "خصوصی" : "Private")</dd></div>
                 <div><dt>HTTPS</dt><dd><i data-lucide="lock-keyhole" class="h-3.5 w-3.5 text-ok"></i>@(isFa ? "خودکار" : "Automatic")</dd></div>
@@ -254,6 +265,7 @@
     const createAndDeployLabel = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(isFa ? "ایجاد و استقرار برنامه" : "Create and deploy application"));
     const createOnlyLabel = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(isFa ? "ایجاد برنامه" : "Create application"));
     const healthGateLabel = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(isFa ? "سلامت‌سنجی + rollback" : "Health gate + rollback"));
+    const deferredLabel = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(isFa ? "فقط ایجاد؛ استقرار بعداً" : "Create only; deploy later"));
     const cliWaitingLabel = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(isFa ? "منتظر push از CLI" : "Waiting for CLI push"));
     const sourceNames = {
         GitRepository: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(isFa ? "مخزن Git" : "Git repository")),
@@ -276,7 +288,7 @@
             ? createAndDeployLabel
             : createOnlyLabel;
         if (deploymentSummary) deploymentSummary.textContent = canDeployNow
-            ? healthGateLabel
+            ? (deploying ? healthGateLabel : deferredLabel)
             : cliWaitingLabel;
     }
     function sync() {
@@ -289,14 +301,48 @@
             element.classList.toggle('hidden', !['GitRepository', 'DockerCompose'].includes(value)));
         const review = document.querySelector('[data-review-source]');
         if (review) review.textContent = sourceNames[value] || value;
+        const image = document.querySelector('[name="PrebuiltImage"]');
+        const repository = document.querySelector('[name="CloneUrl"]');
+        if (image) image.required = value === 'PrebuiltImage';
+        if (repository) repository.required = ['GitRepository', 'StaticSite', 'DockerCompose', 'Dockerfile'].includes(value);
         syncDeploy(value);
     }
     function syncKind() {
         const value = kind?.value || 'Web';
+        if (value === 'Cron') {
+            document.querySelectorAll('[data-cron-only]').forEach(element => {
+                const details = element.closest('details');
+                if (details) details.open = true;
+            });
+        }
         document.querySelectorAll('[data-cron-only]').forEach(element => element.classList.toggle('hidden', value !== 'Cron'));
         const help = document.querySelector('[data-kind-help]');
         if (help && kind) help.textContent = kind.options[kind.selectedIndex]?.dataset.help || '';
     }
+    const form = document.querySelector('form.create-layout');
+    function syncReview() {
+        const values = {
+            name: form.querySelector('[name="Name"]')?.value.trim() || '—',
+            kind: kind?.value || 'Web',
+            port: form.querySelector('[name="ContainerPort"]')?.value || '—',
+            environment: form.querySelector('[name="EnvironmentId"] option:checked')?.textContent || '—'
+        };
+        Object.entries(values).forEach(([key, value]) => {
+            const target = document.querySelector('[data-review-' + key + ']');
+            if (target) target.textContent = value;
+        });
+    }
+    form?.addEventListener('input', syncReview);
+    form?.addEventListener('change', syncReview);
+    // Native validation must be able to focus a field inside a collapsed settings section.
+    form?.addEventListener('invalid', event => {
+        let parent = event.target.parentElement;
+        while (parent) {
+            if (parent.tagName === 'DETAILS') parent.open = true;
+            parent = parent.parentElement;
+        }
+    }, true);
+    syncReview();
     document.querySelectorAll('[data-src]').forEach(input => input.addEventListener('change', sync));
     deployNow?.addEventListener('change', () => syncDeploy(document.querySelector('[data-src]:checked')?.value || 'GitRepository'));
     kind?.addEventListener('change', syncKind);

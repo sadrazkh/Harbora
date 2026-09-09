@@ -1,0 +1,33 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "driveunion",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": [
+        "run",
+        "--project",
+        "E:/Cash.Net/source/repos/sadrazkh/DriveUnion/src/DriveUnion.Web/DriveUnion.Web.csproj",
+        "--environment",
+        "Development",
+        "--urls",
+        "http://localhost:5099"
+      ],
+      "port": 5099
+    },
+    {
+      "name": "tes-panel",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": [
+        "C:/Users/sadra/tes-panel-run/TesPanel.Api.dll",
+        "--contentroot",
+        "C:/Users/sadra/source/repos/tes-panel/src/TesPanel.Api",
+        "--urls",
+        "http://localhost:8099",
+        "--Database:Provider=InMemory",
+        "--Admin:Key=dev-admin-key"
+      ],
+      "port": 8099
+    }
+  ]
+}
