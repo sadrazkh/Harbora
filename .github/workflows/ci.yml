@@ -188,6 +188,9 @@ jobs:
         working-directory: src/Harbora.Web
         run: npm ci
 
+      - name: Test deployment log recovery
+        run: node --test src/Harbora.Web/Scripts/tests/deployment-logs.test.mjs
+
       - name: Build the bundle (must succeed)
         working-directory: src/Harbora.Web
         run: npm run build

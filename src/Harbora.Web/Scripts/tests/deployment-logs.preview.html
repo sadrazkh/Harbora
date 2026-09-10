@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="fa" dir="rtl" class="dark">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Deployment log component verification</title></head>
+<body class="bg-surface text-ink p-4"><main class="max-w-5xl mx-auto"><h1 class="text-2xl mb-4">بررسی لاگ استقرار</h1><div id="preview" class="rounded-xl bg-slate-950 text-slate-200 border border-slate-800 overflow-hidden"></div></main>
+<script type="module">
+import { createApp } from 'vue';
+import DeploymentLogs from '../islands/DeploymentLogs.vue';
+import '../app.css';
+const originalFetch = window.fetch;
+window.fetch = (url, options) => String(url).startsWith('/deployments/preview/logs')
+  ? Promise.resolve(new Response(JSON.stringify({ status: 'Failed', lines: new URL(String(url), location.origin).searchParams.get('after') === '-1' ? [
+      { seq: 0, stream: 'Build', message: 'Building production image…' },
+      { seq: 1, stream: 'Build', message: 'Installing dependencies' },
+      { seq: 2, stream: 'Runtime', message: 'ERROR: Health check failed on port 8080' },
+      { seq: 3, stream: 'System', message: 'Previous deployment remains active.' }
+    ] : [] }), { headers: { 'Content-Type': 'application/json' } })) : originalFetch(url, options);
+createApp(DeploymentLogs, { deploymentId: 'preview', initialStatus: 'Failed' }).mount('#preview');
+</script></body></html>
