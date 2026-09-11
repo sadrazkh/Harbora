@@ -280,7 +280,15 @@ public class DocumentationDriftTests
         {
             var trimmed = fragment.Trim();
             if (BareVariableName.IsMatch(trimmed)) names.Add(trimmed);
-            foreach (Match m in VariableAssignment.Matches(fragment)) names.Add(m.Groups[1].Value);
+
+            // A `printf '...\nNAME=value\n...'` example writes its separators as the two literal
+            // characters backslash-n, not a real newline — and the 'n' right before the next NAME is
+            // a word character, so it defeats VariableAssignment's own word-boundary lookbehind.
+            // Normalising that one escape to a real newline first is what makes
+            // BILLING_CURRENCY/BILLING_MAX_BACKFILL_HOURS in the "Configure it through .env" printf
+            // line readable the same way every other NAME=value example already is.
+            var normalized = fragment.Replace("\\n", "\n", StringComparison.Ordinal);
+            foreach (Match m in VariableAssignment.Matches(normalized)) names.Add(m.Groups[1].Value);
         }
         return names;
     }
