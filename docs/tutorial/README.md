@@ -19,10 +19,11 @@
 | ۷ | [بهره‌برداری](07-operations.md) | استقرارها، پایش، **هشدار آستانه‌ای per-app**، **پاک‌سازی دیسک**، پشتیبان، گزارش رخدادها |
 | ۸ | [هوش مصنوعی](08-ai.md) | استفاده از AI و راه‌اندازی ارائه‌دهنده، مدل و پلن |
 | ۹ | [مدیریت پلتفرم](09-administration.md) | کاربران، **دعوت با ایمیل**، سرورها، نودها، پلن‌ها، **SMTP**، **بررسی آپدیت**، **CSV مصرف** |
-| ۱۰ | [ربات تلگرام (long-polling)](10-telegram-bot.md) | قالب بازار + توکن BotFather، اسکلت کد Node.js، حالت جایگزین با webhook و فانکشن عمومی |
+| ۱۰ | [ربات تلگرام با Node.js (long-polling)](10-telegram-bot.md) | قالب بازار + توکن BotFather، اسکلت کد Node.js، حالت جایگزین با webhook و فانکشن عمومی |
 | ۱۱ | [پیامک با کاوه‌نگار](11-kavenegar-sms.md) | قالب بازار + کلید API، ارسال OTP بدون SDK، دریافت وضعیت تحویل با فانکشن عمومی |
 | ۱۲ | [آماده‌سازی اپ برای Deploy با CLI](12-cli-deploy.md) | چک‌لیست harbora.yml، auto-detect در برابر Dockerfile خودتان، `$PORT`، چه‌چیزی از آپلود کنار گذاشته می‌شود، `harbora doctor` |
 | ۱۳ | [رهگیری خطا (Sentry / GlitchTip)](13-error-tracking.md) | قالب Sentry، ثبت و اتصال DSN، `SENTRY_DSN` per-runtime (Node، Python، ‎.NET‏)، DSN شخصی همیشه برنده است |
+| ۱۴ | [ربات تلگرام با پایتون](14-python-bot.md) | چقدر طول می‌کشد، چرا نام فایل مهم است، فهرست نام‌های شناخته‌شده، خط `entry:` در لاگ، فیلد **دستور راه‌اندازی**، خطای `Conflict: terminated by other getUpdates` |
 
 ## چند قرارداد
 

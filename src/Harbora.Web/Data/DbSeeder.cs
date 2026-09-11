@@ -383,11 +383,29 @@ public sealed class DbSeeder(HarboraDbContext db)
             // domain and a health check waiting forever for a response the bot never sends.
             // TELEGRAM_BOT_TOKEN is "secret" + "required": a credential only the person deploying
             // has, asked for on the deploy form and encrypted at rest rather than invented.
-            Key = "telegram-bot", Name = "Telegram Bot (long-polling)", NameFa = "ربات تلگرام (long-polling)",
+            Key = "telegram-bot", Name = "Telegram Bot (Node.js, long-polling)", NameFa = "ربات تلگرام (Node.js، long-polling)",
             Category = "automation", IsBuiltIn = true,
             Description = "A background worker that long-polls Telegram for updates — no domain, no public URL, no webhook to configure. Bring a Node.js repository; set your bot token and deploy.",
             DescriptionFa = "یک Worker پس‌زمینه که آپدیت‌های تلگرام را به روش long-polling می‌گیرد — بدون دامنه، بدون آدرس عمومی، بدون نیاز به تنظیم webhook. مخزن Node.js خودتان را بدهید، توکن ربات را وارد کنید و مستقر کنید.",
             ManifestJson = """{"source":"git","kind":"worker","env":[{"key":"TELEGRAM_BOT_TOKEN","secret":true,"required":true,"description":"از @BotFather در خودِ تلگرام بگیرید."}],"tags":["Telegram","Bot","Automation","Node.js"],"website":"https://core.telegram.org/bots/api","documentation":"/learn/10-telegram-bot"}"""
+        },
+        new()
+        {
+            // The Python sibling of the template above. It is a separate entry rather than a
+            // language-neutral one because the two differ in the only place a first deploy actually
+            // goes wrong: which file the buildpack starts. The Node buildpack runs `npm start`,
+            // which package.json defines, so the repo names its own entry point. Python has no such
+            // file, so Buildpacks.Python picks from a fixed candidate list — and a bot is almost
+            // always bot.py, which is why bot.py is in that list.
+            //
+            // No "port" and no "healthPath" on purpose: with "kind":"worker" there is nothing
+            // listening, and declaring either would produce a health check waiting forever for an
+            // answer a long-polling bot never sends.
+            Key = "telegram-bot-python", Name = "Telegram Bot (Python, long-polling)", NameFa = "ربات تلگرام (پایتون، long-polling)",
+            Category = "automation", IsBuiltIn = true,
+            Description = "A background worker that long-polls Telegram for updates, built from a Python repository — no domain, no public URL, no webhook. Needs a requirements.txt and a bot.py; set your bot token and deploy.",
+            DescriptionFa = "یک Worker پس‌زمینه که آپدیت‌های تلگرام را با long-polling می‌گیرد، ساخته‌شده از یک مخزن پایتون — بدون دامنه، بدون آدرس عمومی، بدون webhook. به یک requirements.txt و یک bot.py نیاز دارد؛ توکن ربات را وارد کنید و مستقر کنید.",
+            ManifestJson = """{"source":"git","kind":"worker","env":[{"key":"TELEGRAM_BOT_TOKEN","secret":true,"required":true,"description":"از @BotFather در خودِ تلگرام بگیرید."}],"tags":["Telegram","Bot","Automation","Python"],"website":"https://core.telegram.org/bots/api","documentation":"/learn/14-python-bot"}"""
         },
         new()
         {
