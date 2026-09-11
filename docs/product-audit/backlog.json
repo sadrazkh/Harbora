@@ -1811,7 +1811,8 @@
       "src/Harbora.Web/Controllers/MonitoringController.cs:224",
       "found while implementing Phase 2 task 4"
     ],
-    "recommendedPhase": 6
+    "recommendedPhase": 6,
+    "statusEvidence": "3c755ac — MonitoringMetric index is now (ServerId, Name, ResourceRef, Timestamp), ranged column last; migration 20260911004658_MonitoringMetricRawPointsIndex."
   },
   {
     "id": "HARBORA-0056",
@@ -1878,7 +1879,8 @@
       "src/Harbora.Infrastructure/Deployments/DeploymentEngine.cs:29-59",
       "found during Phase 1 review"
     ],
-    "recommendedPhase": 3
+    "recommendedPhase": 3,
+    "statusEvidence": "3c755ac — partial unique index IX_Deployments_ActiveDeployment, filter derived from DeploymentStateMachine.Unsettled so the database rule and QueueDeploymentAsync read one source; migration 20260911005952_DeploymentActiveIndex. Concurrency proven in the Postgres CI lane only, not locally."
   },
   {
     "id": "HARBORA-0058",
@@ -2051,7 +2053,8 @@
       "src/Harbora.Infrastructure/Maintenance/DataRetentionSweeper.cs:218-221",
       "RetentionSweepResult has one producer and no consumers in src/"
     ],
-    "recommendedPhase": 6
+    "recommendedPhase": 6,
+    "statusEvidence": "b08e7d5 — DataRetentionSweeper logs one line per sweep including a sweep that deleted nothing, failed tables named in it."
   },
   {
     "id": "HARBORA-0063",
@@ -2114,7 +2117,8 @@
       "src/Harbora.Infrastructure/Backups/SftpTransfer.cs:64-74",
       "tests/Harbora.Tests/SftpTransferTests.cs:90,98 call the six-argument overload only"
     ],
-    "recommendedPhase": 8
+    "recommendedPhase": 8,
+    "statusEvidence": "0a3c329 — SftpTransferTests covers the get command local path with and without localFileName."
   },
   {
     "id": "HARBORA-0065",
@@ -2151,7 +2155,8 @@
       "src/Harbora.Infrastructure/Jobs/JobQueueOptions.cs:31",
       "src/Harbora.Web/appsettings.json Jobs._comment_concurrency describes the setting"
     ],
-    "recommendedPhase": 3
+    "recommendedPhase": 3,
+    "statusEvidence": "0966ac5 — docker-compose.yml passes Jobs__MaxConcurrency as a value-less key so an unset .env falls through to JobQueueOptions.DefaultMaxConcurrency; install.sh backfills it only when absent; DocumentationDriftTests asserts every operator-settable RUNBOOK option reaches a container."
   },
   {
     "id": "HARBORA-0066",
@@ -2183,6 +2188,7 @@
       "src/Harbora.Infrastructure/Services/AdminerService.cs:121-124",
       "the returned-failure path at :126-158 was added by 7dd1d7e and covers only that case"
     ],
-    "recommendedPhase": 7
+    "recommendedPhase": 7,
+    "statusEvidence": "cc84ec3 — AdminerService.OpenAsync wraps the save and the apply, withdrawing route and container on cancellation via WithdrawAsync on CancellationToken.None, same as a returned failure."
   }
 ]

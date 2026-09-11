@@ -783,7 +783,12 @@ public sealed class DeploymentPipeline(
             // unstorable bytes — and a write that throws here leaves the deployment unable to record
             // that it failed at all. Redacting the stored copy too: it is shown on the deployment
             // page, so a build error that echoes a secret would otherwise keep it in the database.
-            var reason = LogText.Clean(redactor.Redact(ex.Message, secrets));
+            // FailureText.Describe, not ex.Message: a wrapper's own message is routinely a sentence
+            // that says nothing and points at the inner exception it is about to be separated from
+            // ("The requested failed, see inner exception for details."). Seven live deployments in
+            // a row stored precisely that, and the real cause — a Broken pipe from the Docker client
+            // — reached only the panel container's stdout, which the CLI and the API cannot see.
+            var reason = LogText.Clean(redactor.Redact(FailureText.Describe(ex), secrets));
             deployment.ErrorMessage = reason;
             app.Status = app.ActiveDeploymentId is null ? AppStatus.Failed : AppStatus.Running;
             // The ❌ line is queued HERE, ahead of the save and ahead of every publish. It only ever
