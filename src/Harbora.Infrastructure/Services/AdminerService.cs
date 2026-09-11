@@ -158,9 +158,26 @@ public sealed class AdminerService(
             IsEnabled = true
         };
         db.Routes.Add(route);
-        await db.SaveChangesAsync(ct);
 
-        var applied = await proxy.ApplyAllAsync(service.WorkspaceId, ct);
+        // Neither `SaveChangesAsync` nor `ApplyAllAsync` below is more of the setup than the other —
+        // together they are the one step that can leave the row and the container disagreeing about
+        // whether a session exists, and `ct` here is a WEB REQUEST's token, cancelled the instant the
+        // operator navigates away. That can land inside the save, or after it has already committed
+        // and while the apply is still being awaited, and the two look identical from here: either
+        // way the container above is already running and the route may already be a real row, not
+        // just a tracked one, so this is undone exactly like a returned failure is below rather than
+        // left for `OperationCanceledException` to carry the enabled row out into the caller.
+        ProxyApplyResult applied;
+        try
+        {
+            await db.SaveChangesAsync(ct);
+            applied = await proxy.ApplyAllAsync(service.WorkspaceId, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            await WithdrawAsync(route, container, service.WorkspaceId, docker);
+            throw;
+        }
 
         if (!applied.Success)
         {
@@ -170,37 +187,41 @@ public sealed class AdminerService(
             // find out with, and then to publish again: the config may well have been written with
             // this route in it, and a router naming a container that is being removed here is a
             // 502 waiting for whoever else applies next.
-            //
-            // None of the withdrawal takes `ct`, for the reason DeploymentPipeline's failure path
-            // gives at length: this is not more of the work, it is the undoing of work that has
-            // already stopped, and `ct` here is a WEB REQUEST's token — cancelled by the operator
-            // navigating away, which is an entirely ordinary thing to do while a proxy apply is
-            // being waited on. Under it the save threw first and everything after it was skipped,
-            // so what survived was the worst possible state: an ENABLED route row publishing a
-            // basic-auth host that names a throwaway container nobody started, or one this block
-            // was about to remove. Every other caller on the platform re-applies from those rows —
-            // RoutesController, AppsController, AppOperationsService, the deployment pipeline — so
-            // the next unrelated route change anywhere publishes it, and the hourly sweep never
-            // clears it either, because the sweep is driven by the containers it finds and there is
-            // no container.
-            db.Routes.Remove(route);
-            await db.SaveChangesAsync(CancellationToken.None);
-            try { await docker.RemoveContainerAsync(container, force: true, CancellationToken.None); } catch { }
-            try { await proxy.ApplyAllAsync(service.WorkspaceId, CancellationToken.None); }
-            // Unqualified: a cancellation escaping here would replace a refusal this method has
-            // already established and can state in words with an exception the caller has to guess
-            // at — after the container has been removed and the route withdrawn, so the refusal is
-            // the only accurate description of what happened.
-            catch (Exception e)
-            {
-                logger.LogWarning(e, "Could not withdraw the admin tool's route after a failed apply.");
-            }
+            await WithdrawAsync(route, container, service.WorkspaceId, docker);
             return new(null, null, null,
                 "The proxy configuration for this workspace was not applied, so the tool was not " +
                 "published: " + applied.Error);
         }
 
         return new($"https://{host}/?{driver}=", user, password, null);
+    }
+
+    /// <summary>
+    /// Takes an admin-tool session back: the route row, then the container, then a republish so a
+    /// router that already read the removed route stops naming it.
+    ///
+    /// <para>
+    /// None of this takes the caller's own token, for the reason DeploymentPipeline's failure path
+    /// gives at length: this is not more of the work, it is the undoing of work that has already
+    /// stopped, on <see cref="CancellationToken.None"/> throughout. The route removal and its save
+    /// are left unguarded on purpose — if the database itself will not take the withdrawal, that is
+    /// not a fact either caller below can paper over. The container removal and the republish are
+    /// each wrapped instead: a cancellation escaping either would replace a refusal or a return the
+    /// caller has already decided on with an exception it has to guess at, after the container has
+    /// been asked to go and the route has already been withdrawn, so what already happened is the
+    /// only accurate description left to give.
+    /// </para>
+    /// </summary>
+    private async Task WithdrawAsync(Route route, string container, Guid workspaceId, IDockerEngine docker)
+    {
+        db.Routes.Remove(route);
+        await db.SaveChangesAsync(CancellationToken.None);
+        try { await docker.RemoveContainerAsync(container, force: true, CancellationToken.None); } catch { }
+        try { await proxy.ApplyAllAsync(workspaceId, CancellationToken.None); }
+        catch (Exception e)
+        {
+            logger.LogWarning(e, "Could not withdraw the admin tool's route after a failed apply.");
+        }
     }
 
     /// <summary>

@@ -1,6 +1,8 @@
 using FluentAssertions;
+using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Common;
+using Harbora.Domain.Networking;
 using Harbora.Domain.Services;
 using Harbora.Infrastructure.Deployments;
 using Harbora.Infrastructure.Services;
@@ -41,8 +43,8 @@ public sealed class AdminerServiceHostTests : IDisposable
         _proxy = new RecordingProxyEngine(() => _db.Routes.ToList());
     }
 
-    private AdminerService Service() => new(
-        _db, _engines, _proxy,
+    private AdminerService Service(IProxyEngine? proxy = null) => new(
+        _db, _engines, proxy ?? _proxy,
         new ManagedServiceEngine(
             _db, _engines, _protector, new NoopJobQueue(),
             new Harbora.Infrastructure.Billing.BillingGate(
@@ -52,6 +54,32 @@ public sealed class AdminerServiceHostTests : IDisposable
         _protector, _clock,
         Options.Create(new HarboraRuntimeOptions()),
         NullLogger<AdminerService>.Instance);
+
+    /// <summary>
+    /// Cancels the token it is handed on its first call, then throws — standing in for the operator
+    /// navigating away while <c>OpenAsync</c> is waiting on the proxy apply. Every later call (the
+    /// withdrawal's own republish, on <see cref="CancellationToken.None"/>) is forwarded to the real
+    /// <see cref="RecordingProxyEngine"/> instead, so that half of the fix is exercised for real
+    /// rather than assumed.
+    /// </summary>
+    private sealed class CancelsOnFirstApply(CancellationTokenSource cts, IProxyEngine inner) : IProxyEngine
+    {
+        private bool _first = true;
+
+        public ProxyConfigPreview Preview(IReadOnlyList<Route> routes) => inner.Preview(routes);
+        public ProxyValidationResult Validate(IReadOnlyList<Route> routes) => inner.Validate(routes);
+
+        public Task<ProxyApplyResult> ApplyAllAsync(Guid? callerWorkspaceId, CancellationToken ct)
+        {
+            if (_first)
+            {
+                _first = false;
+                cts.Cancel();
+                ct.ThrowIfCancellationRequested();
+            }
+            return inner.ApplyAllAsync(callerWorkspaceId, ct);
+        }
+    }
 
     private ManagedService Database(Guid serverId, Guid workspaceId, Guid environmentId)
     {
@@ -137,6 +165,33 @@ public sealed class AdminerServiceHostTests : IDisposable
         result.Refusal.Should().Contain("orders");
         result.Refusal.Should().Contain("no agent endpoint");
         _panel.Calls.Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// HARBORA-0066: the route save and the proxy apply used to run on the web request's own token,
+    /// unguarded — so a cancellation landing between them (the operator navigating away right after
+    /// the route committed but before the apply could even start) left an ENABLED route row
+    /// published to a container nobody wired up, exactly the state the returned-failure branch right
+    /// next to it already knew how to undo. This proves the cancellation path now takes the same
+    /// route back.
+    /// </summary>
+    [Fact]
+    public async Task A_cancellation_between_the_save_and_the_apply_withdraws_the_route_and_the_container()
+    {
+        var (workspaceId, environmentId) = SeedEnvironment();
+        var service = Database(Guid.Empty, workspaceId, environmentId);
+        using var cts = new CancellationTokenSource();
+        var cancellingProxy = new CancelsOnFirstApply(cts, _proxy);
+
+        var act = async () => await Service(cancellingProxy).OpenAsync(service.Id, cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>(
+            "the caller's own request-aborted token should surface, not a swallowed refusal");
+        (await _db.Routes.CountAsync()).Should().Be(0,
+            "a cancellation between the save and the apply must withdraw the route it just committed, " +
+            "the same as a returned failure does");
+        _panel.Calls.Should().Contain(c => c.Operation == "RemoveContainerAsync",
+            "the container started before the save must be removed too, not left running for nothing");
     }
 
     public void Dispose() => _db.Dispose();
