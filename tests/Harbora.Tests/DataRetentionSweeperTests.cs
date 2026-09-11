@@ -366,7 +366,11 @@ public class DataRetentionSweeperTests
             .SweepAsync(CancellationToken.None);
 
         logger.Entries.Should().NotContain(e => e.Level >= LogLevel.Warning);
-        logger.Entries.Should()
+
+        // Excluding the one-line summary (HARBORA-0062) on purpose: that line names every
+        // kept-forever table too, so without this exclusion it would double-count alongside the
+        // dedicated per-table "turned off on purpose" log this assertion is actually about.
+        logger.Entries.Where(e => !e.Message.StartsWith("Retention sweep:")).Should()
             .ContainSingle(e => e.Level == LogLevel.Information && e.Message.Contains(RetentionTables.AuditLogs));
     }
 
@@ -537,6 +541,74 @@ public class DataRetentionSweeperTests
         await NewSweeper(db).SweepAsync(CancellationToken.None);
 
         db.NotificationDeliveries.Should().ContainSingle().Which.Subject.Should().Be("still pending");
+    }
+
+    [Fact]
+    public async Task A_clean_sweep_deletes_nothing_and_still_logs_exactly_one_summary_line()
+    {
+        // HARBORA-0062: gating the summary on TotalDeleted > 0 made a clean sweep indistinguishable
+        // from a sweep that never ran — exactly the silence production hits every night, since its
+        // compose override keeps everything for ever and every table here reports zero.
+        using var db = new HarboraDbContext(NewOptions());
+        var logger = new RecordingLogger<DataRetentionSweeper>();
+
+        var result = await NewSweeper(db, logger: logger).SweepAsync(CancellationToken.None);
+
+        result.TotalDeleted.Should().Be(0);
+        result.Failures.Should().BeEmpty();
+
+        var summaries = logger.Entries.Where(e => e.Message.StartsWith("Retention sweep:")).ToList();
+        summaries.Should().ContainSingle("a clean sweep must say so, not stay silent");
+        summaries[0].Level.Should().Be(LogLevel.Information);
+        summaries[0].Message.Should().Contain("deleted=0");
+    }
+
+    [Fact]
+    public async Task The_summary_line_names_a_failed_table_and_escalates_to_error()
+    {
+        using var db = new OneBadTableDbContext(NewOptions(), typeof(NodeEventRecord));
+        await SeedBothSidesAsync(db, Guid.NewGuid());
+        db.Armed = true;
+        var logger = new RecordingLogger<DataRetentionSweeper>();
+
+        var result = await NewSweeper(db, logger: logger).SweepAsync(CancellationToken.None);
+        db.Armed = false;
+
+        result.Failures.Should().ContainKey(RetentionTables.NodeEvents);
+
+        var summaries = logger.Entries.Where(e => e.Message.StartsWith("Retention sweep:")).ToList();
+        summaries.Should().ContainSingle();
+        summaries[0].Level.Should().Be(LogLevel.Error, "an operator must not read a failed table as a healthy pass");
+        summaries[0].Message.Should().Contain("failed=1").And.Contain(RetentionTables.NodeEvents);
+
+        // Named at Error twice over on purpose: once in the per-table log next to the exception
+        // (unchanged by this fix), once in the one-line summary a monitoring rule actually watches.
+        logger.Entries.Count(e => e.Level == LogLevel.Error && e.Message.Contains(RetentionTables.NodeEvents))
+            .Should().Be(2);
+    }
+
+    [Fact]
+    public async Task The_summary_line_keeps_kept_forever_apart_from_tables_with_nothing_to_delete()
+    {
+        using var db = new HarboraDbContext(NewOptions());
+        await SeedBothSidesAsync(db, Guid.NewGuid());
+        var logger = new RecordingLogger<DataRetentionSweeper>();
+
+        var result = await NewSweeper(db, new RetentionOptions { AuditLogDays = 0 }, logger: logger)
+            .SweepAsync(CancellationToken.None);
+
+        result.KeptForever.Should().Contain(RetentionTables.AuditLogs);
+        result.Deleted[RetentionTables.AppLogLines].Should().Be(0);
+
+        var summary = logger.Entries.Single(e => e.Message.StartsWith("Retention sweep:"));
+        var parts = summary.Message.Split("; ");
+
+        // AuditLogs was switched off on purpose and never attempted; AppLogLines was attempted and
+        // simply had nothing due. Those are different facts RetentionSweepResult already keeps
+        // apart, and the summary line must not collapse them back into each other.
+        parts[0].Should().Contain($"{RetentionTables.AppLogLines}=0").And.NotContain(RetentionTables.AuditLogs);
+        parts[1].Should().Contain("kept-forever=1").And.Contain(RetentionTables.AuditLogs)
+            .And.NotContain(RetentionTables.AppLogLines);
     }
 
     [Fact]

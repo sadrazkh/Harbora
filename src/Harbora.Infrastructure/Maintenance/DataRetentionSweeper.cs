@@ -9,6 +9,10 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
+// Harbora.Domain.Common has a LogLevel of its own (deployment build output), and this file means the
+// other one.
+using LogLevel = Microsoft.Extensions.Logging.LogLevel;
+
 namespace Harbora.Infrastructure.Maintenance;
 
 /// <summary>The tables this sweep is responsible for, named the way it reports them.</summary>
@@ -287,9 +291,34 @@ public sealed class DataRetentionSweeper(
 
         var result = new RetentionSweepResult(deleted, keptForever, failures);
 
-        if (result.TotalDeleted > 0)
-            logger.LogInformation("Retention sweep removed {Count} row(s): {Breakdown}.",
-                result.TotalDeleted, string.Join(", ", deleted.Where(d => d.Value > 0).Select(d => $"{d.Key} {d.Value}")));
+        // Unconditional and one line, on purpose. HARBORA-0062: gating this on TotalDeleted > 0 made
+        // a sweep that deleted nothing indistinguishable from a sweep that never ran — which is not
+        // hypothetical here, since production keeps everything for ever through a compose override
+        // and this line was therefore silent on every install that mattered most.
+        //
+        // The shape is load-bearing: a monitoring rule keys on the fixed prefix ("Retention sweep:")
+        // and the fixed field order (deleted, kept-forever, failed). Add fields only at the end;
+        // never reorder or remove one. "Kept forever" and "swept but had nothing to delete" are kept
+        // visibly apart — a table can be turned off on purpose (kept-forever) or simply be clean
+        // (deleted=0 in the first bracket), and those are different facts RetentionSweepResult
+        // already separates; collapsing them back together here would undo that.
+        var deletedBreakdown = deleted.Count == 0
+            ? "none"
+            : string.Join(", ", deleted.OrderBy(d => d.Key, StringComparer.Ordinal).Select(d => $"{d.Key}={d.Value}"));
+        var keptForeverBreakdown = keptForever.Count == 0
+            ? "none"
+            : string.Join(", ", keptForever.OrderBy(t => t, StringComparer.Ordinal));
+        var failedBreakdown = failures.Count == 0
+            ? "none"
+            : string.Join(", ", failures.Keys.OrderBy(t => t, StringComparer.Ordinal));
+
+        logger.Log(
+            failures.Count > 0 ? LogLevel.Error : LogLevel.Information,
+            "Retention sweep: deleted={TotalDeleted} row(s) across {SweptTableCount} table(s) [{DeletedBreakdown}]; " +
+            "kept-forever={KeptForeverCount} table(s) [{KeptForeverBreakdown}]; failed={FailedCount} table(s) [{FailedBreakdown}].",
+            result.TotalDeleted, deleted.Count, deletedBreakdown,
+            keptForever.Count, keptForeverBreakdown,
+            failures.Count, failedBreakdown);
 
         return result;
     }
