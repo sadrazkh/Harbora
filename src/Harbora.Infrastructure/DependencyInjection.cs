@@ -149,6 +149,12 @@ public static class DependencyInjection
         // imperatively, at deploy time). Rebinding here, before the gate below opens, means a cron or
         // event invocation queued the moment the worker starts claiming still finds its function app.
         services.AddHostedService<Deployments.PanelNetworkRebinder>();
+        // HARBORA-0060: nothing else republishes the proxy's dynamic config at boot, so a route row
+        // left over from a crash between a write and its apply names a container that is gone until
+        // somebody happens to touch routing in that workspace again. Same shape as the reconcilers
+        // above: a plain hosted service, so it starts only once Program.cs's migrate-then-seed block
+        // has already returned.
+        services.AddHostedService<Proxy.ProxyBootRepublisher>();
         // Lets the job worker start claiming. Hosted services start in registration order, so every
         // startup reconciler — including any added later — must be registered ABOVE this line; that
         // is the whole guarantee, and it is on the reconciler's registration, not on this one.
