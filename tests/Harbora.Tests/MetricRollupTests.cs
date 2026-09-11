@@ -233,4 +233,51 @@ public class MetricRollupTests
                 "IX_MetricRollups_ServerId_Name_ResourceRef_Period_PeriodStart", StringComparison.Ordinal),
             "the chart's index has to reach a real database, not just the model");
     }
+
+    /// <summary>
+    /// HARBORA-0055: the un-rolled-up table sitting beside <see cref="MetricRollup"/> had the exact
+    /// same defect — ResourceRef sat after Timestamp, the ranged column, and fell out of the seekable
+    /// prefix. MonitoringController's raw-points read filters ServerId, Name AND ResourceRef by
+    /// equality before it ranges over Timestamp (the same query shape the class doc above already
+    /// asserts for the rollup), so the fix is the identical reshape: the three equality columns lead,
+    /// and Timestamp — the only one ranged over, and the one the query's own ORDER BY sorts by — goes
+    /// last, so the index already returns the rows in that order and nothing is sorted afterwards.
+    /// </summary>
+    [Fact]
+    public void The_raw_points_query_has_an_index_shaped_like_it()
+    {
+        using var db = new HarboraDbContext(
+            new DbContextOptionsBuilder<HarboraDbContext>()
+                .UseNpgsql("Host=unused;Database=unused;Username=unused;Password=unused")
+                .Options);
+
+        var indexes = db.Model.FindEntityType(typeof(MonitoringMetric))!.GetIndexes()
+            .Select(i => i.Properties.Select(p => p.Name).ToArray())
+            .ToList();
+
+        indexes.Should().ContainEquivalentOf(
+            new[] { "ServerId", "Name", "ResourceRef", "Timestamp" },
+            "MonitoringController.Metrics filters the first three by equality and ranges over the last");
+    }
+
+    /// <summary>Same reasoning as <see cref="The_index_reaches_a_migration"/> above, for the sibling
+    /// table's own fix.</summary>
+    [Fact]
+    public void The_raw_points_index_reaches_a_migration()
+    {
+        var sources = Directory
+            .GetFiles(
+                Path.Combine(
+                    new DirectoryInfo(TestPaths.WebRoot).Parent!.Parent!.FullName,
+                    "src", "Harbora.Data", "Migrations"),
+                "*.cs")
+            .Where(f => !f.EndsWith(".Designer.cs", StringComparison.Ordinal)
+                        && !f.EndsWith("ModelSnapshot.cs", StringComparison.Ordinal))
+            .Select(File.ReadAllText)
+            .ToList();
+
+        sources.Should().Contain(s => s.Contains(
+                "IX_MonitoringMetrics_ServerId_Name_ResourceRef_Timestamp", StringComparison.Ordinal),
+            "the raw-points index has to reach a real database, not just the model");
+    }
 }

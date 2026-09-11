@@ -612,7 +612,17 @@ public class HarboraDbContext : DbContext
         });
         b.Entity<Certificate>(e => e.HasIndex(x => x.Host));
         b.Entity<ManagedService>(e => e.HasIndex(x => x.ContainerName).IsUnique());
-        b.Entity<MonitoringMetric>(e => e.HasIndex(x => new { x.ServerId, x.Name, x.Timestamp }));
+
+        // HARBORA-0055: ResourceRef used to sit after Timestamp, so it fell outside the seekable
+        // prefix — Timestamp is the ranged column, and anything after the range column in a btree
+        // index degrades to a filter over the scanned span rather than a narrowing equality. The
+        // raw-points read in MonitoringController.Metrics filters ServerId, Name AND ResourceRef by
+        // equality and only then ranges over Timestamp, so all three equality columns have to lead
+        // and Timestamp has to trail — the identical shape Phase 2 already gave MetricRollup below,
+        // once ResourceRef there had the same problem on the rolled-up table sitting beside this one.
+        // Additive only: no data moves, this only reshapes the index that already existed.
+        b.Entity<MonitoringMetric>(e =>
+            e.HasIndex(x => new { x.ServerId, x.Name, x.ResourceRef, x.Timestamp }));
 
         // The same question one level up, and until now the summaries had nothing but their primary
         // key — a random Guid, which answers nothing anybody asks. Every chart load scanned every
