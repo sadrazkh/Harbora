@@ -40,6 +40,15 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
     /// to "nothing to reuse" for source compatibility with the agent's own call site, which forwards
     /// what its own HTTP request carried (see RemoteDockerEngine's build call for the panel side).
     /// </summary>
+    /// <summary>
+    /// The API version <see cref="DockerBuildTransport"/> posts to.
+    ///
+    /// <para>Matched to what Docker.DotNet itself asks for, so the one endpoint that moved off it
+    /// cannot end up speaking to a different API surface than every other call in this class. The
+    /// live daemon reports a minimum of 1.40, so this is inside what it accepts.</para>
+    /// </summary>
+    private const string BuildApiVersion = "1.41";
+
     public async Task<string> BuildImageFromTarAsync(
         Stream tarContext, string dockerfile, string imageTag,
         IReadOnlyDictionary<string, string> buildArgs, IProgress<string> log, CancellationToken ct,
@@ -73,8 +82,22 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
             if (DescribesBuildFailure(m)) failure ??= m;
         });
 
-        await client.Images.BuildImageFromDockerfileAsync(
-            parameters, tarContext, authConfigs: null, headers: null, progress, ct);
+        // Over a Unix socket the build goes out through .NET's own HTTP stack rather than the one
+        // bundled in Docker.DotNet — see DockerBuildTransport for the broken pipe that forces it,
+        // and for why this one endpoint moves and nothing else does. A named pipe on a developer's
+        // Windows machine or a TCP daemon keeps the typed call, which is correct for both.
+        var endpoint = client.Configuration.EndpointBaseUri;
+
+        if (DockerBuildTransport.Handles(endpoint))
+        {
+            await DockerBuildTransport.BuildAsync(
+                endpoint, parameters, tarContext, progress, BuildApiVersion, ct);
+        }
+        else
+        {
+            await client.Images.BuildImageFromDockerfileAsync(
+                parameters, tarContext, authConfigs: null, headers: null, progress, ct);
+        }
 
         if (failure is not null)
             throw new DockerBuildException(BuildFailureMessage(imageTag, lastStep, failure));
