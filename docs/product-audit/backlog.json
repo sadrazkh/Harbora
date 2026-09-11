@@ -1954,7 +1954,8 @@
   },
   {
     "id": "HARBORA-0060",
-    "status": "open",
+    "status": "done",
+    "statusEvidence": "src/Harbora.Infrastructure/Proxy/ProxyBootRepublisher.cs (new IHostedService, calls IProxyEngine.ApplyAllAsync(null, ct) — the platform's one existing apply rule, unchanged); DependencyInjection.cs registers it beside DeploymentReconciler/PanelNetworkRebinder, before JobStartupGateOpener; commit ede9df7; tests/Harbora.Tests/ProxyBootRepublisherTests.cs (multi-workspace republish, an invalid row skipped the same way an ordinary apply skips it, a thrown failure logged without stopping the host).",
     "title": "No startup re-apply of the proxy configuration",
     "category": "deployment",
     "type": "bug",
