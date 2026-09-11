@@ -1,5 +1,4 @@
 ﻿using Docker.DotNet;
-using Docker.DotNet.Models;
 using Harbora.Application.Abstractions;
 
 namespace Harbora.Infrastructure.Docker;
@@ -13,7 +12,7 @@ namespace Harbora.Infrastructure.Docker;
 /// a read of zero with <c>EOF</c>, and treating that as "nothing right now" instead of "it is over"
 /// leaves a session spinning against a shell that exited.
 /// </summary>
-internal sealed class DockerContainerExec(IDockerClient client, string execId, MultiplexedStream stream)
+internal sealed class DockerContainerExec(MultiplexedStream stream)
     : IContainerExec
 {
     public async Task<int> ReadAsync(Memory<byte> buffer, CancellationToken ct)
@@ -30,18 +29,27 @@ internal sealed class DockerContainerExec(IDockerClient client, string execId, M
     public Task WriteAsync(ReadOnlyMemory<byte> data, CancellationToken ct) =>
         stream.WriteAsync(data.ToArray(), 0, data.Length, ct);
 
-    public async Task ResizeAsync(uint columns, uint rows, CancellationToken ct)
-    {
-        // A resize that fails is not a reason to end somebody's session — the shell keeps running at
-        // whatever size it had, which is a wrongly-drawn screen rather than a lost one.
-        try
-        {
-            await client.Exec.ResizeContainerExecTtyAsync(execId,
-                new ContainerResizeParameters { Width = (long)columns, Height = (long)rows }, ct);
-        }
-        catch (DockerApiException) { }
-        catch (ObjectDisposedException) { }
-    }
+    /// <summary>
+    /// Unverified / known regression from the Docker.DotNet.Enhanced 3.131.1 migration (the fork
+    /// this moved to for Docker 29 support). The old client's
+    /// <c>IExecOperations.ResizeContainerExecTtyAsync</c> — <c>POST /exec/{id}/resize</c> — has no
+    /// replacement here: decompiling the shipped assembly shows <c>IExecOperations</c> now has
+    /// exactly three methods (create, start, inspect exec), none of them resize, and
+    /// <c>IContainerOperations.ResizeContainerTtyAsync</c> only ever posts to
+    /// <c>/containers/{id}/resize</c> — a different endpoint that would 404 against an exec ID rather
+    /// than a container one. The Docker Engine API itself still has the exec-resize route; this
+    /// client version just cannot reach it, and there is no other public surface on <c>IDockerClient</c>
+    /// (its request-building methods are all internal) to call it directly either.
+    ///
+    /// A live resize (a browser window resized while the session is already open) is therefore a
+    /// no-op now: the shell keeps running at whatever size it opened with — the same fallback this
+    /// method already used for a resize the daemon rejected, just for every resize now rather than an
+    /// occasional one. The INITIAL size is unaffected: <see cref="DockerEngine.ExecAsync"/> sets it
+    /// via <c>ConsoleSize</c> on the exec create/start calls themselves, which this client version
+    /// does support, so a session still opens at the right size — it just cannot be resized again
+    /// afterwards.
+    /// </summary>
+    public Task ResizeAsync(uint columns, uint rows, CancellationToken ct) => Task.CompletedTask;
 
     public ValueTask DisposeAsync()
     {

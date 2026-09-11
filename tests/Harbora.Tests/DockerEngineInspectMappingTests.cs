@@ -20,12 +20,12 @@ namespace Harbora.Tests;
 /// </summary>
 public class DockerEngineInspectMappingTests
 {
-    private static ContainerInspectResponse Response(ContainerState state) => new()
+    private static ContainerInspectResponse Response(State state) => new()
     {
         ID = "abc123",
         Name = "/harbora-blog-2",
         Image = "sha256:imagehash",
-        Config = new Config { Image = "harbora/blog:build-2" },
+        Config = new ContainerConfig { Image = "harbora/blog:build-2" },
         RestartCount = 2,
         State = state
     };
@@ -36,7 +36,7 @@ public class DockerEngineInspectMappingTests
         // The exact regression this task exists to close: Running is a non-nullable bool, so a
         // mapping that fell back to it for an unset Health reported every running container as
         // healthy, whether or not anything ever checked.
-        var response = Response(new ContainerState { Status = "running", Running = true, Health = null });
+        var response = Response(new State { Status = "running", Running = true, Health = null });
 
         var detail = DockerEngine.MapDetail(response, "harbora-blog-2");
 
@@ -47,7 +47,7 @@ public class DockerEngineInspectMappingTests
     [Fact]
     public void A_passing_health_check_reports_healthy_true()
     {
-        var response = Response(new ContainerState
+        var response = Response(new State
         { Status = "running", Running = true, Health = new Health { Status = "healthy" } });
 
         var detail = DockerEngine.MapDetail(response, "harbora-blog-2");
@@ -58,7 +58,7 @@ public class DockerEngineInspectMappingTests
     [Fact]
     public void A_failing_health_check_reports_healthy_false_even_while_running()
     {
-        var response = Response(new ContainerState
+        var response = Response(new State
         { Status = "running", Running = true, Health = new Health { Status = "unhealthy" } });
 
         var detail = DockerEngine.MapDetail(response, "harbora-blog-2");
@@ -72,7 +72,7 @@ public class DockerEngineInspectMappingTests
         // Docker's Go zero time for a container that has never run. DateTimeOffset.TryParse accepts
         // it as a real (year 1) instant, so without a guard the view computed an uptime of hundreds
         // of thousands of days from it instead of saying the start time is unknown.
-        var response = Response(new ContainerState
+        var response = Response(new State
         { Status = "created", Running = false, StartedAt = "0001-01-01T00:00:00Z" });
 
         var detail = DockerEngine.MapDetail(response, "harbora-blog-2");
@@ -83,7 +83,7 @@ public class DockerEngineInspectMappingTests
     [Fact]
     public void A_container_that_has_actually_started_reports_its_real_start_time()
     {
-        var response = Response(new ContainerState
+        var response = Response(new State
         { Status = "running", Running = true, StartedAt = "2026-08-15T06:00:00Z" });
 
         var detail = DockerEngine.MapDetail(response, "harbora-blog-2");
@@ -94,7 +94,7 @@ public class DockerEngineInspectMappingTests
     [Fact]
     public void The_mapping_carries_the_restart_count_and_image_digest_straight_from_the_response()
     {
-        var response = Response(new ContainerState { Status = "running", Running = true });
+        var response = Response(new State { Status = "running", Running = true });
 
         var detail = DockerEngine.MapDetail(response, "harbora-blog-2");
 
@@ -113,7 +113,7 @@ public class DockerEngineInspectMappingTests
             Name = null,
             Image = "sha256:imagehash",
             RestartCount = 0,
-            State = new ContainerState { Status = "running", Running = true }
+            State = new State { Status = "running", Running = true }
         };
 
         var detail = DockerEngine.MapDetail(response, "the-name-asked-for");

@@ -36,8 +36,11 @@ public sealed class DockerContainerConfigFileWriter(IDockerClient client, ILogge
         Stream tarStream;
         try
         {
+            // GetArchiveFromContainerParameters is gone in Docker.DotNet.Enhanced 3.131.1; the
+            // fork folded its one field (Path) into ContainerPathStatParameters, which
+            // GetArchiveFromContainerAsync now takes for both the stat-only and full-archive calls.
             var response = await client.Containers.GetArchiveFromContainerAsync(
-                containerNameOrId, new GetArchiveFromContainerParameters { Path = absolutePath }, statOnly: false, ct);
+                containerNameOrId, new ContainerPathStatParameters { Path = absolutePath }, statOnly: false, ct);
             tarStream = response.Stream;
         }
         catch (DockerContainerNotFoundException) { return null; }
@@ -70,9 +73,12 @@ public sealed class DockerContainerConfigFileWriter(IDockerClient client, ILogge
         }
         tarBuffer.Position = 0;
 
+        // ExtractArchiveToContainerAsync's parameter type changed from ContainerPathStatParameters
+        // to the new CopyToContainerParameters in Docker.DotNet.Enhanced 3.131.1 — same two fields
+        // this call already set (Path, AllowOverwriteDirWithFile), different type name.
         await client.Containers.ExtractArchiveToContainerAsync(
             containerNameOrId,
-            new ContainerPathStatParameters { Path = "/", AllowOverwriteDirWithFile = false },
+            new CopyToContainerParameters { Path = "/", AllowOverwriteDirWithFile = false },
             tarBuffer, ct);
 
         logger.LogInformation("Wrote {Path} into container {Container}.", absolutePath, containerNameOrId);
@@ -84,7 +90,7 @@ public sealed class DockerContainerConfigFileWriter(IDockerClient client, ILogge
         try
         {
             var response = await client.Containers.GetArchiveFromContainerAsync(
-                containerNameOrId, new GetArchiveFromContainerParameters { Path = absoluteDirectoryPath }, statOnly: false, ct);
+                containerNameOrId, new ContainerPathStatParameters { Path = absoluteDirectoryPath }, statOnly: false, ct);
             tarStream = response.Stream;
         }
         catch (DockerContainerNotFoundException) { return null; }

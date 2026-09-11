@@ -11,7 +11,15 @@
   <ItemGroup>
     <PackageReference Include="AWSSDK.S3" Version="4.0.100.2" />
     <PackageReference Include="BCrypt.Net-Next" Version="4.2.0" />
-    <PackageReference Include="Docker.DotNet" Version="3.125.15" />
+    <!-- Docker.DotNet 3.125.15 (abandoned 2022) is unusable against the live Docker 29.7.2 daemon:
+         seven consecutive deployments died mid-build-context-upload with a broken pipe. Docker 29
+         support landed in Docker.DotNet.Enhanced (the Testcontainers team's maintained fork) in
+         3.131.0, and that release regenerated the model classes — the API break IS the Docker 29
+         support, so there is no version that is both drop-in and Docker-29-aware. The fork ships an
+         assembly also called Docker.DotNet with the same root namespaces, so this is a package swap,
+         not a namespace migration. See tests/Harbora.Postgres.Tests's own comment: it already pulls
+         this exact fork in transitively via Testcontainers.PostgreSql, and the build unifies on it. -->
+    <PackageReference Include="Docker.DotNet.Enhanced" Version="3.131.1" />
     <PackageReference Include="LibGit2Sharp" Version="0.31.0" />
     <!-- Renders the tutorial chapters in docs/tutorial to HTML. No markdown renderer existed in this
          solution before the Learning Centre; this is the standard .NET choice. -->

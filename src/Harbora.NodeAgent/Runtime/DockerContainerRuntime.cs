@@ -41,9 +41,12 @@ public sealed class DockerContainerRuntime(IDockerClient client, ILogger<DockerC
 
     public async Task PullImageAsync(string reference, IProgress<string>? logSink, CancellationToken ct)
     {
+        // Docker.DotNet.Enhanced 3.131.1 (Docker 29 support) dropped JSONMessage.ErrorMessage and
+        // .ProgressMessage; Error.Message is now the only place a failure's text lives, and Status
+        // still carries the ordinary progress text.
         var progress = new Progress<JSONMessage>(m =>
         {
-            var line = m.ErrorMessage ?? m.Status ?? m.ProgressMessage;
+            var line = m.Error?.Message ?? m.Status;
             if (!string.IsNullOrWhiteSpace(line)) logSink?.Report(line.TrimEnd('\n'));
         });
 
@@ -318,7 +321,10 @@ public sealed class DockerContainerRuntime(IDockerClient client, ILogger<DockerC
             Tail = Math.Max(0, tailLines).ToString(CultureInfo.InvariantCulture),
         };
 
-        using var stream = await client.Containers.GetContainerLogsAsync(idOrName, tty: false, parameters, ct);
+        // Docker.DotNet.Enhanced 3.131.1's non-streaming GetContainerLogsAsync overload dropped the
+        // "tty:" parameter; this call already passed tty: false, so dropping it changes nothing
+        // about how the stdout/stderr demux this reads is produced.
+        using var stream = await client.Containers.GetContainerLogsAsync(idOrName, parameters, ct);
         var (stdout, stderr) = await stream.ReadOutputToEndAsync(ct);
         return string.Concat(stdout, stderr);
     }
@@ -333,7 +339,9 @@ public sealed class DockerContainerRuntime(IDockerClient client, ILogger<DockerC
             Tail = Math.Max(0, tailLines).ToString(CultureInfo.InvariantCulture),
         };
 
-        return client.Containers.GetContainerLogsAsync(idOrName, parameters, ct, new Progress<string>(sink.Report));
+        // Docker.DotNet.Enhanced 3.131.1 swapped this overload's trailing two parameters — progress
+        // now comes before the CancellationToken, not after.
+        return client.Containers.GetContainerLogsAsync(idOrName, parameters, new Progress<string>(sink.Report), ct);
     }
 
     public async Task EnsureNetworkAsync(NetworkSpec spec, IReadOnlyDictionary<string, string> labels, CancellationToken ct)
@@ -470,11 +478,13 @@ public sealed class DockerContainerRuntime(IDockerClient client, ILogger<DockerC
             await client.Containers.StartContainerAsync(container.ID, new ContainerStartParameters(), timeout.Token);
 
             if (logSink is not null)
+                // Docker.DotNet.Enhanced 3.131.1 swapped this overload's trailing two parameters —
+                // progress now comes before the CancellationToken, not after.
                 await client.Containers.GetContainerLogsAsync(
                     container.ID,
                     new ContainerLogsParameters { ShowStdout = true, ShowStderr = true, Follow = true },
-                    timeout.Token,
-                    new Progress<string>(logSink.Report));
+                    new Progress<string>(logSink.Report),
+                    timeout.Token);
 
             var wait = await client.Containers.WaitContainerAsync(container.ID, timeout.Token);
             return (int)wait.StatusCode;
@@ -491,7 +501,10 @@ public sealed class DockerContainerRuntime(IDockerClient client, ILogger<DockerC
         string containerIdOrName, IReadOnlyList<string> argv,
         IReadOnlyDictionary<string, string>? env, string? stdin, CancellationToken ct)
     {
-        var exec = await client.Exec.ExecCreateContainerAsync(containerIdOrName, new ContainerExecCreateParameters
+        // ExecCreateContainerAsync/StartAndAttachContainerExecAsync were renamed
+        // CreateContainerExecAsync/StartContainerExecAsync in Docker.DotNet.Enhanced 3.131.1; the
+        // "tty:" positional argument to start moved into ContainerExecStartParameters.TTY.
+        var exec = await client.Exec.CreateContainerExecAsync(containerIdOrName, new ContainerExecCreateParameters
         {
             Cmd = argv.ToList(),
             Env = env?.Select(kv => $"{kv.Key}={kv.Value}").ToList(),
@@ -500,7 +513,8 @@ public sealed class DockerContainerRuntime(IDockerClient client, ILogger<DockerC
             AttachStderr = true,
         }, ct);
 
-        using var stream = await client.Exec.StartAndAttachContainerExecAsync(exec.ID, tty: false, ct);
+        using var stream = await client.Exec.StartContainerExecAsync(exec.ID,
+            new ContainerExecStartParameters { TTY = false }, ct);
 
         if (stdin is not null)
         {
@@ -512,7 +526,11 @@ public sealed class DockerContainerRuntime(IDockerClient client, ILogger<DockerC
         var (stdout, stderr) = await stream.ReadOutputToEndAsync(ct);
         var inspect = await client.Exec.InspectContainerExecAsync(exec.ID, ct);
 
-        return new ExecResult((int)inspect.ExitCode, stdout, stderr);
+        // ContainerExecInspectResponse.ExitCode became nullable (long?) in Docker.DotNet.Enhanced
+        // 3.131.1 — the Docker Engine API reports null while the exec is still running, which cannot
+        // be true here since the output stream above has already reached EOF. -1 is only a defensive
+        // fallback for that otherwise-unreachable case, not a value any caller should read as normal.
+        return new ExecResult((int)(inspect.ExitCode ?? -1), stdout, stderr);
     }
 
     /// <summary>
@@ -547,9 +565,12 @@ public sealed class DockerContainerRuntime(IDockerClient client, ILogger<DockerC
 
         archive.Position = 0;
 
+        // ExtractArchiveToContainerAsync's parameter type changed from ContainerPathStatParameters
+        // to the new CopyToContainerParameters in Docker.DotNet.Enhanced 3.131.1 — same two fields
+        // this call already set (Path, AllowOverwriteDirWithFile), different type name.
         await client.Containers.ExtractArchiveToContainerAsync(
             containerId,
-            new ContainerPathStatParameters { Path = "/", AllowOverwriteDirWithFile = false },
+            new CopyToContainerParameters { Path = "/", AllowOverwriteDirWithFile = false },
             archive,
             ct);
     }
@@ -594,11 +615,13 @@ public sealed class DockerContainerRuntime(IDockerClient client, ILogger<DockerC
         MaximumRetryCount = spec.Mode == RestartMode.OnFailure ? spec.MaxRetries : 0,
     };
 
-    private static HealthConfig? MapHealthCheck(HealthCheckSpec probe) => probe.Kind switch
+    // HealthConfig was renamed HealthcheckConfig in Docker.DotNet.Enhanced 3.131.1; the fields this
+    // uses (Interval/Timeout as TimeSpan, StartPeriod/Retries as long) are otherwise unchanged.
+    private static HealthcheckConfig? MapHealthCheck(HealthCheckSpec probe) => probe.Kind switch
     {
         // HTTP and TCP probes are run by the agent, not by Docker: Docker would need a shell and a
         // curl inside every image, and a distroless image has neither.
-        HealthCheckKind.Command when probe.Command is { Count: > 0 } => new HealthConfig
+        HealthCheckKind.Command when probe.Command is { Count: > 0 } => new HealthcheckConfig
         {
             Test = ["CMD", .. probe.Command],
             Interval = TimeSpan.FromSeconds(probe.IntervalSeconds),
@@ -614,7 +637,9 @@ public sealed class DockerContainerRuntime(IDockerClient client, ILogger<DockerC
             ? ([], [])
             : ([command[0]], command.Skip(1).ToList());
 
-    private static IReadOnlyDictionary<int, int> PublishedPorts(IList<Port>? ports)
+    // Port was renamed PortSummary in Docker.DotNet.Enhanced 3.131.1; PrivatePort/PublicPort are the
+    // same fields, just typed ushort instead of the old wider integer — the casts below still hold.
+    private static IReadOnlyDictionary<int, int> PublishedPorts(IList<PortSummary>? ports)
     {
         var result = new Dictionary<int, int>();
         if (ports is null) return result;

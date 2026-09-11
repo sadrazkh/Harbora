@@ -8,9 +8,9 @@ namespace Harbora.Tests;
 /// <summary>
 /// Docker's build API answers 200 OK and lets its JSON message stream end normally even when the
 /// build itself failed — a Dockerfile <c>RUN</c> step returning non-zero, for example. The failure
-/// arrives as a message *inside* that stream (<c>JSONMessage.Error</c> / <c>ErrorMessage</c>), never
-/// as an HTTP error and never as an exception Docker.DotNet throws on its own, so nothing notices
-/// unless <see cref="DockerEngine"/> itself does.
+/// arrives as a message *inside* that stream (<c>JSONMessage.Error</c>), never as an HTTP error and
+/// never as an exception Docker.DotNet throws on its own, so nothing notices unless
+/// <see cref="DockerEngine"/> itself does.
 ///
 /// <para>
 /// Before this, <see cref="DockerEngine.BuildImageFromTarAsync"/> returned the requested image tag
@@ -39,11 +39,17 @@ public class DockerEngineBuildFailureTests
     }
 
     [Fact]
-    public void A_message_carrying_ErrorMessage_describes_a_failure()
+    public void A_message_carrying_a_failure_alongside_ordinary_stream_output_still_describes_a_failure()
     {
+        // Docker.DotNet.Enhanced 3.131.1 (Docker 29 support) dropped JSONMessage's free-text
+        // ErrorMessage property — Error.Message is now the only place a failure's text lives. This
+        // pins that DescribesBuildFailure looks at Error.Message even on a message that ALSO carries
+        // ordinary Stream text, since BuildImageFromTarAsync's progress handler reads both off the
+        // very same message.
         var message = new JSONMessage
         {
-            ErrorMessage = "The command '/bin/sh -c npm run build' returned a non-zero code: 1"
+            Stream = "some ordinary build output\n",
+            Error = new JSONError { Message = "The command '/bin/sh -c npm run build' returned a non-zero code: 1" }
         };
 
         DockerEngine.DescribesBuildFailure(message).Should().BeTrue();
@@ -52,8 +58,6 @@ public class DockerEngineBuildFailureTests
     [Fact]
     public void A_message_carrying_only_the_structured_Error_field_also_describes_a_failure()
     {
-        // Docker.DotNet exposes the same failure two ways depending on daemon version; both have to
-        // be caught, or a daemon that only fills in one of them would "build successfully".
         var message = new JSONMessage { Error = new JSONError { Message = "non-zero code: 1" } };
 
         DockerEngine.DescribesBuildFailure(message).Should().BeTrue();
@@ -62,7 +66,7 @@ public class DockerEngineBuildFailureTests
     [Fact]
     public void Blank_error_fields_do_not_count_as_a_failure()
     {
-        var message = new JSONMessage { ErrorMessage = "   ", Error = new JSONError { Message = "" } };
+        var message = new JSONMessage { Error = new JSONError { Message = "" } };
 
         DockerEngine.DescribesBuildFailure(message).Should().BeFalse();
     }
@@ -89,7 +93,7 @@ public class DockerEngineBuildFailureTests
         // "No such image" the run step reports two steps later.
         var failure = new JSONMessage
         {
-            ErrorMessage = "The command '/bin/sh -c npm run build' returned a non-zero code: 1"
+            Error = new JSONError { Message = "The command '/bin/sh -c npm run build' returned a non-zero code: 1" }
         };
 
         var message = DockerEngine.BuildFailureMessage(
@@ -105,7 +109,7 @@ public class DockerEngineBuildFailureTests
     {
         // A build can fail before any "Step N/M" line is ever printed (an invalid Dockerfile, a bad
         // build arg) — the message must still say something useful rather than a null step.
-        var failure = new JSONMessage { ErrorMessage = "dockerfile parse error on line 1" };
+        var failure = new JSONMessage { Error = new JSONError { Message = "dockerfile parse error on line 1" } };
 
         var message = DockerEngine.BuildFailureMessage("harbora/app:build-1", null, failure);
 

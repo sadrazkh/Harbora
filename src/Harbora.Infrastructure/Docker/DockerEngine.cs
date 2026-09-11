@@ -4,6 +4,11 @@ using Docker.DotNet.Models;
 using Harbora.Application.Abstractions;
 using Microsoft.Extensions.Logging;
 
+// Docker.DotNet.Enhanced (the Docker-29-aware fork this migrated to) ships its own
+// Docker.DotNet.Models.VolumeInfo, which collides with the application-level VolumeInfo
+// ListVolumesAsync actually returns.
+using VolumeInfo = Harbora.Application.Abstractions.VolumeInfo;
+
 namespace Harbora.Infrastructure.Docker;
 
 /// <summary>
@@ -55,7 +60,10 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
 
         var progress = new Progress<JSONMessage>(m =>
         {
-            var line = m.Stream ?? m.Status ?? m.ErrorMessage;
+            // Docker.DotNet.Enhanced 3.131.1's JSONMessage dropped the free-text ErrorMessage
+            // property; Error.Message (the structured field) is now the only place a failure's text
+            // shows up, so it takes ErrorMessage's old place in this fallback chain too.
+            var line = m.Stream ?? m.Status ?? m.Error?.Message;
             if (!string.IsNullOrWhiteSpace(line))
             {
                 var trimmed = line.TrimEnd('\n');
@@ -112,11 +120,13 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
         line.TrimStart().StartsWith("Step ", StringComparison.Ordinal);
 
     /// <summary>Whether a build-progress message is the daemon reporting the build itself failed.
-    /// Docker.DotNet surfaces this two ways depending on daemon/API version — the free-text
-    /// <c>ErrorMessage</c> and the structured <c>Error.Message</c> — so both are checked; a daemon
-    /// that only ever fills in one of them must not be read as "the build succeeded".</summary>
+    /// Older Docker.DotNet surfaced this two ways — the free-text <c>ErrorMessage</c> and the
+    /// structured <c>Error.Message</c> — and both had to be checked, since a daemon that only ever
+    /// filled in one of them must not be read as "the build succeeded". Docker.DotNet.Enhanced
+    /// 3.131.1's <c>JSONMessage</c> (the Docker-29-aware fork this migrated to) dropped
+    /// <c>ErrorMessage</c> entirely, so <c>Error.Message</c> — still populated by every daemon this
+    /// runs against — is now the one place this check has to look.</summary>
     internal static bool DescribesBuildFailure(JSONMessage message) =>
-        !string.IsNullOrWhiteSpace(message.ErrorMessage) ||
         !string.IsNullOrWhiteSpace(message.Error?.Message);
 
     /// <summary>
@@ -126,7 +136,7 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
     /// </summary>
     internal static string BuildFailureMessage(string imageTag, string? lastStep, JSONMessage failure)
     {
-        var detail = failure.Error?.Message ?? failure.ErrorMessage ?? "the daemon reported no detail";
+        var detail = failure.Error?.Message ?? "the daemon reported no detail";
         return lastStep is null
             ? $"Build of {imageTag} failed: {detail}"
             : $"Build of {imageTag} failed at {lastStep}: {detail}";
@@ -143,9 +153,12 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
         string? lastError = null;
         var progress = new Progress<JSONMessage>(m =>
         {
-            var line = m.Status ?? m.ProgressMessage ?? m.ErrorMessage;
+            // ProgressMessage and ErrorMessage are both gone from Docker.DotNet.Enhanced 3.131.1's
+            // JSONMessage; Status still carries the ordinary "Downloading"/"Extracting" text, and
+            // Error.Message is the only place a failure's text lives now.
+            var line = m.Status ?? m.Error?.Message;
             if (!string.IsNullOrWhiteSpace(line)) log.Report(line);
-            if (DescribesBuildFailure(m)) lastError = m.Error?.Message ?? m.ErrorMessage;
+            if (DescribesBuildFailure(m)) lastError = m.Error?.Message;
         });
 
         var authConfig = credential is null
@@ -316,13 +329,18 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
     public async Task StreamLogsAsync(string containerId, IProgress<string> sink, CancellationToken ct)
     {
         var parameters = new ContainerLogsParameters { ShowStdout = true, ShowStderr = true, Follow = true, Tail = "200" };
-        await client.Containers.GetContainerLogsAsync(containerId, parameters, ct, new Progress<string>(sink.Report));
+        // Docker.DotNet.Enhanced 3.131.1 swapped this overload's trailing two parameters — progress
+        // now comes before the CancellationToken, not after.
+        await client.Containers.GetContainerLogsAsync(containerId, parameters, new Progress<string>(sink.Report), ct);
     }
 
     public async Task<string> GetLogsAsync(string containerId, int tailLines, CancellationToken ct)
     {
         var parameters = new ContainerLogsParameters { ShowStdout = true, ShowStderr = true, Follow = false, Tail = tailLines.ToString() };
-        using var stream = await client.Containers.GetContainerLogsAsync(containerId, tty: false, parameters, ct);
+        // Docker.DotNet.Enhanced 3.131.1's non-streaming GetContainerLogsAsync overload dropped the
+        // "tty:" parameter entirely; every call site here already passed tty: false, so dropping it
+        // changes nothing about how the two-stream (stdout/stderr) demux this reads is produced.
+        using var stream = await client.Containers.GetContainerLogsAsync(containerId, parameters, ct);
         var (stdout, stderr) = await stream.ReadOutputToEndAsync(ct);
         return string.Concat(stdout, stderr);
     }
@@ -346,7 +364,10 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
             Timestamps = true,
             Since = since.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture)
         };
-        using var stream = await client.Containers.GetContainerLogsAsync(containerId, tty: false, parameters, ct);
+        // Docker.DotNet.Enhanced 3.131.1's non-streaming GetContainerLogsAsync overload dropped the
+        // "tty:" parameter entirely; every call site here already passed tty: false, so dropping it
+        // changes nothing about how the two-stream (stdout/stderr) demux this reads is produced.
+        using var stream = await client.Containers.GetContainerLogsAsync(containerId, parameters, ct);
         var (stdout, stderr) = await stream.ReadOutputToEndAsync(ct);
         return DockerTimestampedLog.Parse(string.Concat(stdout, stderr));
     }
@@ -537,8 +558,10 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
         {
             await client.Containers.StartContainerAsync(container.ID, new ContainerStartParameters(), ct);
             if (log is not null)
+                // Docker.DotNet.Enhanced 3.131.1 swapped this overload's trailing two parameters —
+                // progress now comes before the CancellationToken, not after.
                 await client.Containers.GetContainerLogsAsync(container.ID,
-                    new ContainerLogsParameters { ShowStdout = true, ShowStderr = true, Follow = true }, ct, new Progress<string>(log.Report));
+                    new ContainerLogsParameters { ShowStdout = true, ShowStderr = true, Follow = true }, new Progress<string>(log.Report), ct);
             var wait = await client.Containers.WaitContainerAsync(container.ID, ct);
             return (int)wait.StatusCode;
         }
@@ -554,7 +577,15 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
     {
         var (cols, lines) = Terminals.TerminalAccess.Size(columns, rows);
 
-        var exec = await client.Exec.ExecCreateContainerAsync(containerId, new ContainerExecCreateParameters
+        // Docker.DotNet.Enhanced 3.131.1 (Docker 29 support) renamed Exec's create/start calls and
+        // dropped the standalone resize-after-start round trip this used to need for the initial
+        // size — ConsoleSize now travels directly on both the create and the start parameters, so the
+        // terminal opens at the right size from its first frame instead of drawing once at Docker's
+        // default and then resizing. See DockerContainerExec.ResizeAsync for what this client version
+        // can no longer do: resize a session that is already open.
+        var size = new ConsoleSize { Width = (ulong)cols, Height = (ulong)lines };
+
+        var exec = await client.Exec.CreateContainerExecAsync(containerId, new ContainerExecCreateParameters
         {
             AttachStdin = true,
             AttachStdout = true,
@@ -563,20 +594,15 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
             // prompt, line editing works, and -- the part that matters here -- the stream comes back
             // raw instead of carrying docker's eight-byte frame header on every chunk. Six parsers in
             // this codebase have been written against that header; none is needed on this path.
-            Tty = true,
+            TTY = true,
+            ConsoleSize = size,
             Cmd = command.ToList()
         }, ct);
 
-        var stream = await client.Exec.StartAndAttachContainerExecAsync(exec.ID, tty: true, ct);
+        var stream = await client.Exec.StartContainerExecAsync(exec.ID,
+            new ContainerExecStartParameters { TTY = true, ConsoleSize = size }, ct);
 
-        // Asked for once at the start as well as on every browser resize: a shell that thinks the
-        // window is 80x24 when it is not draws its full-screen programs over the wrong area, and
-        // that looks like the terminal being broken rather than being mis-sized.
-        try { await client.Exec.ResizeContainerExecTtyAsync(exec.ID, new ContainerResizeParameters
-              { Width = (long)cols, Height = (long)lines }, ct); }
-        catch (DockerApiException) { /* the shell still runs at its default size */ }
-
-        return new DockerContainerExec(client, exec.ID, stream);
+        return new DockerContainerExec(stream);
     }
 
     public async Task<HostInfo> GetHostInfoAsync(CancellationToken ct)
