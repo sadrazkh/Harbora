@@ -303,6 +303,16 @@ public sealed class PipelineHarness : IDisposable
         return this;
     }
 
+    /// <summary>P2 (round-3 start-command plan): overrides what the single-container run request's
+    /// own Command carries — null (the default every existing test already runs under) reproduces
+    /// today's behaviour exactly.</summary>
+    public PipelineHarness WithStartCommand(string? command)
+    {
+        App.StartCommand = command;
+        Db.SaveChanges();
+        return this;
+    }
+
     /// <summary>The container name a given deployment number's replica gets (1-based; 1 is unsuffixed).</summary>
     public string ReplicaContainerFor(int number, int replicaIndex) =>
         DeploymentPlanning.ReplicaContainerName(App.WorkspaceId, App.Slug, number, replicaIndex);

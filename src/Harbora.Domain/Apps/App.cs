@@ -134,6 +134,24 @@ public class App : BaseEntity
     public int ContainerPort { get; set; } = 80;   // port the app listens on inside the container
 
     /// <summary>
+    /// Overrides what a buildpack-built image starts with, for any long-running service kind (see
+    /// <c>ServicePlan.IsLongRunning</c>) — the only remedy today for a wrong buildpack guess is
+    /// committing a Dockerfile to the repository, which is exactly what the buildpack exists to
+    /// avoid. Separate from <see cref="Command"/> on purpose: that one belongs to
+    /// <see cref="ServiceKind.Cron"/> alone, is read by <c>CronJobRunner</c>, and giving it a second
+    /// meaning depending on <see cref="Kind"/> is the exact ambiguity this codebase keeps paying for
+    /// elsewhere.
+    ///
+    /// <para>
+    /// Empty runs the image as its own build intended — the Dockerfile's own
+    /// <c>ENTRYPOINT</c>/<c>CMD</c>, or whatever the buildpack detected when there is no Dockerfile
+    /// at all. Whitespace is normalised to null before it is ever stored, so a stray space cannot
+    /// become a one-character command that fails a container's shell as loudly as a real mistake.
+    /// </para>
+    /// </summary>
+    public string? StartCommand { get; set; }
+
+    /// <summary>
     /// What the last deployment did about this app's private name, so the page can say "no address,
     /// and here is why" instead of showing a blank. Recomputing it on render would need a live Docker
     /// call per app, and would answer for the network as it is now rather than as it was when this app

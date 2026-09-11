@@ -615,6 +615,31 @@
             </section>
         }
 
+        @* ---- start command ----
+           P2 (round-3 start-command plan): until this existed, a buildpack that guessed a Worker's
+           process wrong had no remedy anywhere in the panel short of committing a Dockerfile — the
+           exact thing the buildpack exists to spare a repo from. Withheld for Cron and ReleaseTask
+           (ServicePlan.IsLongRunning): Cron already shows its own Command below, and neither kind
+           ever starts a long-running container this could describe. *@
+        @if (Harbora.Infrastructure.Deployments.ServicePlan.IsLongRunning(app.Kind))
+        {
+            <section class="rounded-xl border border-line bg-surface p-4">
+                <div class="mb-3 font-semibold">@(isFa ? "دستور راه‌اندازی" : "Start command")</div>
+                <form asp-controller="Apps" asp-action="SetStartCommand" asp-route-id="@app.Id" method="post" class="space-y-2">
+                    @Html.AntiForgeryToken()
+                    <input type="text" name="startCommand" value="@app.StartCommand" dir="ltr"
+                           class="form-control text-sm" data-start-command-input
+                           placeholder="@(isFa ? "مثلاً python bot.py" : "e.g. python bot.py")" />
+                    <button class="btn-secondary w-full justify-center py-2 text-sm">@(isFa ? "ذخیره" : "Save")</button>
+                </form>
+                <p class="mt-2 text-[11px] leading-4 text-ink-faint">
+                    @(isFa
+                        ? "خالی یعنی ایمیج همان‌طور اجرا می‌شود که ساخته شده — طبق Dockerfile یا حدس buildpack. با استقرار بعدی اعمال می‌شود."
+                        : "Empty runs the image as it was built to — the Dockerfile's own start-up, or whatever the buildpack detected. Applies on the next deployment.")
+                </p>
+            </section>
+        }
+
         @* ---- Domains ----
            The status shown here is probed, not configured: DNS is resolved and a real TLS handshake
            is made. The old "SSL" badge only meant a checkbox was ticked, so a domain that had never

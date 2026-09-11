@@ -1375,6 +1375,47 @@ public sealed partial class AppsController(
     }
 
     /// <summary>
+    /// Sets or clears the command a long-running service starts with — the only correction there has
+    /// ever been for a buildpack that guessed wrong, short of committing a Dockerfile to the
+    /// repository (which is exactly what the buildpack exists to avoid). Written to the row and
+    /// nothing more, the same "applies on the next deployment" shape <see cref="Resize"/> and
+    /// <see cref="SetReplicas"/> already use — <see cref="Harbora.Infrastructure.Deployments.DeploymentPipeline"/>
+    /// is the only thing that ever starts a container.
+    ///
+    /// <para>
+    /// The view withholds this control for a <c>Cron</c> or <c>ReleaseTask</c> app
+    /// (<c>ServicePlan.IsLongRunning</c>): the first already has its own <see cref="App.Command"/>,
+    /// and neither ever starts a long-running container this could describe. That is a rendering
+    /// choice, not an authorization boundary, so a direct post is still honoured rather than 404ed.
+    /// </para>
+    /// </summary>
+    [HttpPost("/apps/{id:guid}/start-command")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsEnv)]
+    public async Task<IActionResult> SetStartCommand(Guid id, string? startCommand, CancellationToken ct)
+    {
+        if (!await access.CanTouchAppAsync(id, Capabilities.AppsEnv, ct)) return Forbid();
+
+        var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
+        if (app is null) return NotFound();
+
+        // Whitespace is not a value anyone typed on purpose — the same rule Create already applies
+        // to ReleaseCommand, so a stray space does not become a one-character command that fails a
+        // container's shell just as loudly as a real, deliberate mistake.
+        app.StartCommand = string.IsNullOrWhiteSpace(startCommand) ? null : startCommand.Trim();
+        await db.SaveChangesAsync(ct);
+
+        await audit.LogAsync("app.start-command-set", "app",
+            $"{app.Name}={app.StartCommand ?? "(cleared)"}", ClientIp, workspaceId: WorkspaceId, ct: ct);
+
+        TempData["Message"] = IsFa
+            ? "دستور راه‌اندازی ذخیره شد. با استقرار بعدی اعمال می‌شود."
+            : "Start command saved. It applies on the next deployment.";
+
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    /// <summary>
     /// Moves an app to another version of the template it came from.
     ///
     /// The version's pinned digest becomes the image and a deployment is queued, so the update goes

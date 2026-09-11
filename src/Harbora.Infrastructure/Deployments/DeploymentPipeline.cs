@@ -554,7 +554,7 @@ public sealed class DeploymentPipeline(
                     imageTag, replicaName, network, env, replicaLabels,
                     app.Volumes.Select(v => (v.Name, v.MountPath, v.ReadOnly)).ToList(),
                     containerPort, app.MemoryLimitBytes, app.CpuLimit, app.HealthCheckPath,
-                    Command: null, PublishToHostPort: publishPort,
+                    Command: StartCommandFor(app), PublishToHostPort: publishPort,
                     NetworkAliases: replicaIndex == 1 && privateAddress.HasAlias ? [privateAddress.Alias!] : null);
 
                 // C2 (2026-08-22 config-delivery plan): every other deploy keeps the ordinary
@@ -1216,6 +1216,25 @@ public sealed class DeploymentPipeline(
     /// <summary>Service names become env var names, so anything not alphanumeric becomes '_'.</summary>
     private static string Sanitize(string name) =>
         new(name.Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray());
+
+    /// <summary>
+    /// Turns <see cref="App.StartCommand"/> into the argv <see cref="DockerRunRequest.Command"/>
+    /// expects, or null to run the image exactly as it was built — the same "empty changes nothing"
+    /// contract every other override on this app already keeps.
+    ///
+    /// <para>
+    /// Shell form (<c>sh -c "…"</c>), not exec form: this string is typed by a person, not generated,
+    /// and exec form would need it pre-split into argv — which means re-implementing shell quoting
+    /// ourselves, badly, for the first value with a space, an env var, or a pipe in it. Shell form
+    /// accepts the command exactly as a terminal would, at the cost of the same quirks any interactive
+    /// shell already has (a bare `foo; bar` runs both). It is also not a new risk this image doesn't
+    /// already carry: <see cref="Buildpacks"/>' own generated Node Dockerfile starts its detected
+    /// command the identical way (<c>CMD ["sh", "-c", "{start}"]</c>), and every buildpack base image
+    /// here (Debian/Alpine-derived) has <c>/bin/sh</c>.
+    /// </para>
+    /// </summary>
+    private static IReadOnlyList<string>? StartCommandFor(App app) =>
+        string.IsNullOrWhiteSpace(app.StartCommand) ? null : ["sh", "-c", app.StartCommand];
 
     /// <summary>
     /// Gets the source on disk for whichever way this app supplies it, without building anything.
