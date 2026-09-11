@@ -1781,7 +1781,7 @@
   },
   {
     "id": "HARBORA-0055",
-    "status": "open",
+    "status": "done",
     "title": "MonitoringMetrics index is mis-shaped for the query that reads it",
     "category": "monitoring",
     "type": "tech-debt",
@@ -1849,7 +1849,7 @@
   },
   {
     "id": "HARBORA-0057",
-    "status": "open",
+    "status": "done",
     "title": "Deployment coalescing is an unguarded read-then-insert",
     "category": "deployment",
     "type": "tech-debt",
@@ -2025,7 +2025,7 @@
   },
   {
     "id": "HARBORA-0062",
-    "status": "open",
+    "status": "done",
     "title": "The retention sweep's result has no consumer, so a clean sweep says nothing",
     "category": "operations",
     "type": "tech-debt",
@@ -2089,7 +2089,7 @@
   },
   {
     "id": "HARBORA-0064",
-    "status": "open",
+    "status": "done",
     "title": "SftpTransfer.Download's local-name substitution is unproven",
     "category": "testing",
     "type": "tech-debt",
@@ -2118,7 +2118,7 @@
   },
   {
     "id": "HARBORA-0065",
-    "status": "open",
+    "status": "done",
     "title": "Jobs:MaxConcurrency cannot be set on a compose install",
     "category": "operations",
     "type": "bug",
@@ -2155,7 +2155,7 @@
   },
   {
     "id": "HARBORA-0066",
-    "status": "open",
+    "status": "done",
     "title": "Adminer's route save and proxy apply are outside its own failure path",
     "category": "database",
     "type": "bug",
