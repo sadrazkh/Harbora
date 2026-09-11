@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Diagnostics;
 using System.Net;
 using System.Reflection;
@@ -21,6 +21,7 @@ namespace Harbora.Tests;
 /// requests and both have to work.
 /// </para>
 /// </summary>
+[Collection(CliConsoleCollection.Name)]
 public class CliCancelTests
 {
     /// <summary>A stand-in for the panel: records what was asked of it and answers as told.</summary>

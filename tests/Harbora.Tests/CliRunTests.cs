@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Text.RegularExpressions;
 using FluentAssertions;
 using Harbora.Cli;
@@ -14,6 +14,7 @@ namespace Harbora.Tests;
 /// thing at the command level — fetching a (faked) panel's environment and actually running a real
 /// child process with it, exactly the path <c>harbora run</c> takes end to end.
 /// </summary>
+[Collection(CliConsoleCollection.Name)]
 public class CliRunTests : IDisposable
 {
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "harbora-run-cmd-" + Guid.NewGuid().ToString("N"));

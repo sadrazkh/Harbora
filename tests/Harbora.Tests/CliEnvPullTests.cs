@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Reflection;
 using System.Text.RegularExpressions;
 using FluentAssertions;
@@ -17,6 +17,7 @@ namespace Harbora.Tests;
 /// without saying so, secrets are marked in the written file, and a server error is reported rather
 /// than swallowed.
 /// </summary>
+[Collection(CliConsoleCollection.Name)]
 public class CliEnvPullTests : IDisposable
 {
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "harbora-env-pull-" + Guid.NewGuid().ToString("N"));
