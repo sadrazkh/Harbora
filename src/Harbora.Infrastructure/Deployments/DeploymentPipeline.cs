@@ -1111,14 +1111,19 @@ public sealed class DeploymentPipeline(
                 var dockerfile = service.Dockerfile ?? "Dockerfile";
                 if (!File.Exists(Path.Combine(service.Build, dockerfile)))
                 {
-                    var pack = Buildpacks.Detect(service.Build, service.Port ?? app.ContainerPort);
+                    var serviceKind = service.IsWeb ? ServiceKind.Web : ServiceKind.Worker;
+                    var pack = Buildpacks.Detect(service.Build, service.Port ?? app.ContainerPort, serviceKind);
                     if (pack is null)
+                    {
+                        var hint = Buildpacks.DetectionHint(service.Build);
                         throw new InvalidOperationException(
                             $"Service '{service.Name}' builds from '{service.Build}' but has no Dockerfile " +
-                            "and no recognisable stack.");
+                            (hint is null ? "and no recognisable stack." : $"— {hint}"));
+                    }
                     dockerfile = "Dockerfile.harbora";
                     await File.WriteAllTextAsync(Path.Combine(service.Build, dockerfile), pack.Value.Dockerfile, ct);
-                    await log(LogStream.System, $"Service '{service.Name}': detected {pack.Value.Stack}.");
+                    var serviceEntrySuffix = pack.Value.Entry is { } serviceEntry ? $" (entry: {serviceEntry})" : "";
+                    await log(LogStream.System, $"Service '{service.Name}': detected {pack.Value.Stack}{serviceEntrySuffix}.");
                 }
 
                 await log(LogStream.System, $"Building {service.Name} → {image} …");
@@ -1427,14 +1432,19 @@ public sealed class DeploymentPipeline(
             }
             else if (!File.Exists(Path.Combine(contextPath, dockerfile)))
             {
-                var pack = Buildpacks.Detect(contextPath, app.ContainerPort);
+                var pack = Buildpacks.Detect(contextPath, app.ContainerPort, app.Kind);
                 if (pack is null)
-                    throw new InvalidOperationException(
-                        "No Dockerfile found and the stack couldn't be auto-detected. Add a Dockerfile, or deploy a prebuilt image / template.");
+                {
+                    var hint = Buildpacks.DetectionHint(contextPath);
+                    throw new InvalidOperationException(hint is null
+                        ? "No Dockerfile found and the stack couldn't be auto-detected. Add a Dockerfile, or deploy a prebuilt image / template."
+                        : $"No Dockerfile found and the stack couldn't be auto-detected — {hint}");
+                }
 
                 dockerfile = "Dockerfile.harbora";
                 await File.WriteAllTextAsync(Path.Combine(contextPath, dockerfile), pack.Value.Dockerfile, ct);
-                await log(LogStream.System, $"No Dockerfile — auto-detected {pack.Value.Stack}; using a generated build.");
+                var entrySuffix = pack.Value.Entry is { } entry ? $" (entry: {entry})" : "";
+                await log(LogStream.System, $"No Dockerfile — auto-detected {pack.Value.Stack}{entrySuffix}; using a generated build.");
             }
         }
 
