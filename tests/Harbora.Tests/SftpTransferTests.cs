@@ -101,6 +101,33 @@ public class SftpTransferTests
     }
 
     [Fact]
+    public void A_download_with_a_local_name_renames_only_the_local_side()
+    {
+        // HARBORA-0064: two reads of one artifact would download over each other without a rename
+        // on the way in, and this is the one path that exercises it. The remote path stays keyed on
+        // the artifact's own name; only the local write path takes the caller's name.
+        var command = string.Join(" ", SftpTransfer.Download(
+            "h", 22, "u", Password, "/srv", "db.sql.gz", localFileName: "restore-1.sql.gz").Command);
+
+        command.Should().Contain("get \"/srv/db.sql.gz\" \"/backup/restore-1.sql.gz\"");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void A_blank_local_name_falls_back_to_the_remote_name(string? localFileName)
+    {
+        // HARBORA-0064: the doc comment on Download promises this fallback ("Defaults to the remote
+        // name"); nothing exercised it before, including the whitespace-only case a stray form field
+        // could produce.
+        var command = string.Join(" ", SftpTransfer.Download(
+            "h", 22, "u", Password, "/srv", "db.sql.gz", localFileName).Command);
+
+        command.Should().Contain("get \"/srv/db.sql.gz\" \"/backup/db.sql.gz\"");
+    }
+
+    [Fact]
     public void A_delete_removes_exactly_the_one_artifact()
     {
         // Retention runs this unattended, so anything broader than one file is a data-loss bug.
