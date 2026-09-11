@@ -1,4 +1,5 @@
 ﻿using System.Globalization;
+using System.Text.Json;
 using Docker.DotNet;
 using Docker.DotNet.Models;
 using Harbora.Application.Abstractions;
@@ -95,6 +96,11 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
         }
         else
         {
+            // The typed call cannot serialize CacheFrom in a form the daemon accepts — see
+            // JsonEncodedCacheFrom for the 400 it otherwise provokes, and for why only this branch
+            // re-encodes. Done here rather than in BuildParameters so the transport above keeps the
+            // plain list it serializes correctly itself.
+            parameters.CacheFrom = JsonEncodedCacheFrom(cacheFrom);
             await client.Images.BuildImageFromDockerfileAsync(
                 parameters, tarContext, authConfigs: null, headers: null, progress, ct);
         }
@@ -136,6 +142,39 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
         CacheFrom = cacheFrom?.ToList(),
         NoCache = noCache
     };
+
+    /// <summary>
+    /// <paramref name="cacheFrom"/> in the one shape Docker.DotNet's typed call can actually put on
+    /// the wire correctly: a single element holding the whole JSON array.
+    ///
+    /// <para>
+    /// <c>ImageBuildParameters.CacheFrom</c> is annotated
+    /// <c>[QueryStringParameter("cachefrom", …, typeof(EnumerableQueryStringConverter))]</c>, which
+    /// writes one <c>cachefrom=</c> pair per element, each value escaped but otherwise verbatim — so
+    /// a two-image list goes out as <c>cachefrom=img%3Aa&amp;cachefrom=img%3Ab</c>. The daemon expects
+    /// <c>cachefrom</c> to be a <b>JSON array</b>, tries to parse the first bare value as JSON, and
+    /// answers <c>400 error reading cache-from: invalid character 'i' looking for beginning of
+    /// value</c> — immediately, while the client is still writing a multi-megabyte context. The write
+    /// then fails with <c>Broken pipe</c>, and since the 400 body is never read, the broken pipe is
+    /// the only thing anyone sees. Every deployment after the build-cache feature shipped failed this
+    /// way, identically, whatever the app's code was, with no build step ever reported.
+    /// </para>
+    ///
+    /// <para>
+    /// Because the converter emits each element verbatim, handing it ONE element that is itself the
+    /// serialized array produces exactly the right query string —
+    /// <c>cachefrom=%5B%22img%3Aa%22%2C%22img%3Ab%22%5D</c>, i.e. <c>cachefrom=["img:a","img:b"]</c>.
+    /// Verified against the live daemon: the bare form answers 400 and this form answers 200.
+    /// </para>
+    ///
+    /// <para>
+    /// Only the typed call needs this. <see cref="DockerBuildTransport"/> builds its own query string
+    /// and already serializes the list properly, so it takes <see cref="BuildParameters"/>' plain list
+    /// — encoding there too would send a JSON array nested inside a JSON array.
+    /// </para>
+    /// </summary>
+    internal static IList<string>? JsonEncodedCacheFrom(IReadOnlyList<string>? cacheFrom) =>
+        cacheFrom is { Count: > 0 } ? [JsonSerializer.Serialize(cacheFrom)] : null;
 
     /// <summary>Whether a build-progress line is Docker announcing which Dockerfile instruction is
     /// now running — tracked so a failure can name the step it happened at, not just the image.</summary>
