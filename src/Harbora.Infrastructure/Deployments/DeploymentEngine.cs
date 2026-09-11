@@ -8,6 +8,7 @@ using Harbora.Domain.Jobs;
 using Harbora.Domain.Notifications;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Npgsql;
 
 namespace Harbora.Infrastructure.Deployments;
 
@@ -89,14 +90,9 @@ public sealed class DeploymentEngine(
 
         if (inFlight is not null)
         {
-            var inFlightIsRollback = inFlight.RolledBackFromId is not null;
-            var requestIsRollback = request.RollbackToDeploymentId is not null;
-
-            if (inFlightIsRollback != requestIsRollback)
-                throw new InvalidOperationException(
-                    requestIsRollback
-                        ? $"Deployment #{inFlight.Number} is still running. Wait for it to finish or cancel it, then roll back."
-                        : $"A rollback (deployment #{inFlight.Number}) is still running. Wait for it to finish, then deploy.");
+            var mismatch = RollbackIntentMismatch(
+                inFlight.RolledBackFromId is not null, request.RollbackToDeploymentId is not null, inFlight.Number);
+            if (mismatch is not null) throw mismatch;
 
             return inFlight.Id;
         }
@@ -107,7 +103,9 @@ public sealed class DeploymentEngine(
         if (!requiresApproval)
         {
             await PreflightAsync(app, ct);
-            var deployment = await CreateDeploymentRowAsync(app, request, DeploymentStatus.Queued, ct);
+            var deployment = await TryCreateDeploymentRowAsync(app, request, DeploymentStatus.Queued, ct);
+            if (deployment is null) return await CoalesceAfterLostRaceAsync(app.Id, request, ct);
+
             await jobs.EnqueueExclusiveAsync(
                 JobKind.Deployment, deployment.Id, exclusiveWith: app.Id, workspaceId: app.WorkspaceId, ct);
             await quotaReservation.CommitAsync(ct);
@@ -130,7 +128,8 @@ public sealed class DeploymentEngine(
             // doc for why this deploys immediately rather than block for ever or let the requester
             // approve their own release. Still resource-checked, exactly like an unprotected deploy.
             await PreflightAsync(app, ct);
-            var deployment = await CreateDeploymentRowAsync(app, request, DeploymentStatus.Queued, ct);
+            var deployment = await TryCreateDeploymentRowAsync(app, request, DeploymentStatus.Queued, ct);
+            if (deployment is null) return await CoalesceAfterLostRaceAsync(app.Id, request, ct);
 
             db.DeploymentApprovals.Add(new DeploymentApproval
             {
@@ -159,8 +158,9 @@ public sealed class DeploymentEngine(
 
         // The ordinary protected path: sits PendingApproval, no Job, until a person decides.
         var (pinnedRef, pinned) = await ResolvePinnedGitRefAsync(app, request, ct);
-        var pending = await CreateDeploymentRowAsync(
+        var pending = await TryCreateDeploymentRowAsync(
             app, request with { GitRef = pinnedRef }, DeploymentStatus.PendingApproval, ct);
+        if (pending is null) return await CoalesceAfterLostRaceAsync(app.Id, request, ct);
 
         var window = approvalOptions?.Value.ExpiryWindow ?? new DeploymentApprovalOptions().ExpiryWindow;
         db.DeploymentApprovals.Add(new DeploymentApproval
@@ -372,6 +372,80 @@ public sealed class DeploymentEngine(
         await db.SaveChangesAsync(ct);
         return deployment;
     }
+
+    /// <summary>
+    /// <see cref="CreateDeploymentRowAsync"/>, but catching the one race it cannot win (HARBORA-0057):
+    /// the pre-check in <see cref="QueueDeploymentAsync"/> found nothing in flight and this insert
+    /// still lost to <c>IX_Deployments_ActiveDeployment</c>, because some other request's insert landed
+    /// in the gap between that read and this write. Null tells the caller to fall back to
+    /// <see cref="CoalesceAfterLostRaceAsync"/> instead of a thrown row it never gets to keep.
+    /// </summary>
+    private async Task<Deployment?> TryCreateDeploymentRowAsync(
+        App app, DeploymentRequest request, DeploymentStatus status, CancellationToken ct)
+    {
+        try
+        {
+            return await CreateDeploymentRowAsync(app, request, status, ct);
+        }
+        catch (DbUpdateException e) when (IsActiveDeploymentViolation(e))
+        {
+            // The failed insert stays tracked as Added; clearing it is what lets the next query this
+            // method runs (CoalesceAfterLostRaceAsync's own read) see the database as it actually is
+            // rather than a phantom row EF still thinks is pending.
+            db.ChangeTracker.Clear();
+            return null;
+        }
+    }
+
+    /// <summary>Whether <paramref name="e"/> is exactly the partial unique index refusing a second
+    /// in-flight deployment for one app — qualified on the constraint name, and only that name, so an
+    /// unrelated unique violation (the AppId+Number index above, a dropped connection reported as one)
+    /// surfaces as itself instead of being misread as this race.</summary>
+    private static bool IsActiveDeploymentViolation(DbUpdateException e) =>
+        e.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation } pg
+        && pg.ConstraintName == "IX_Deployments_ActiveDeployment";
+
+    /// <summary>
+    /// Lost the race the pre-check in <see cref="QueueDeploymentAsync"/> cannot win: re-reads the
+    /// deployment that won it and coalesces onto it exactly as if the pre-check had seen it in the
+    /// first place — HARBORA-0057's second acceptance criterion, "a concurrent double-queue produces
+    /// one row, and the loser returns the winner's id". Applies the identical rollback-vs-deploy
+    /// mismatch check the pre-check already enforces (the third criterion), so losing the race is
+    /// never quietly coalesced into the wrong intent.
+    /// </summary>
+    private async Task<Guid> CoalesceAfterLostRaceAsync(Guid appId, DeploymentRequest request, CancellationToken ct)
+    {
+        var unsettledStatuses = DeploymentStateMachine.Unsettled.ToArray();
+        var winner = await db.Deployments.IgnoreQueryFilters()
+            .Where(d => d.AppId == appId && unsettledStatuses.Contains(d.Status))
+            .OrderByDescending(d => d.Number)
+            .Select(d => new { d.Id, d.Number, d.RolledBackFromId })
+            .FirstOrDefaultAsync(ct)
+            ?? throw new InvalidOperationException(
+                "Lost the concurrent-deployment race, but no in-flight deployment now exists for this app.");
+
+        var mismatch = RollbackIntentMismatch(
+            winner.RolledBackFromId is not null, request.RollbackToDeploymentId is not null, winner.Number);
+        if (mismatch is not null) throw mismatch;
+
+        return winner.Id;
+    }
+
+    /// <summary>
+    /// A rollback and an ordinary deploy are never the same intent, so neither may silently coalesce
+    /// onto the other's in-flight row (H3's rollback carve-out) — returning the wrong one would look
+    /// like the request the caller actually made had succeeded, precisely when a bad deploy is live
+    /// and a person is waiting on the rollback they asked for. Shared between the pre-check in
+    /// <see cref="QueueDeploymentAsync"/> and <see cref="CoalesceAfterLostRaceAsync"/> so both apply
+    /// the exact same rule to what "in flight" means for this app.
+    /// </summary>
+    private static InvalidOperationException? RollbackIntentMismatch(
+        bool inFlightIsRollback, bool requestIsRollback, int inFlightNumber) =>
+        inFlightIsRollback == requestIsRollback
+            ? null
+            : new InvalidOperationException(requestIsRollback
+                ? $"Deployment #{inFlightNumber} is still running. Wait for it to finish or cancel it, then roll back."
+                : $"A rollback (deployment #{inFlightNumber}) is still running. Wait for it to finish, then deploy.");
 
     /// <summary>
     /// Resolves <paramref name="request"/>'s git ref to the exact commit it names right now, so that

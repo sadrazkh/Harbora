@@ -557,6 +557,36 @@ public class HarboraDbContext : DbContext
             // Every deployment read goes through the workspace filter.
             e.HasIndex(x => x.WorkspaceId);
             e.HasMany(x => x.Logs).WithOne(l => l.Deployment).HasForeignKey(l => l.DeploymentId).OnDelete(DeleteBehavior.Cascade);
+
+            // HARBORA-0057: QueueDeploymentAsync's own pre-check — read for an in-flight deployment,
+            // then insert — is not race-safe. Two webhook deliveries (or a double-click and a
+            // scheduled trigger) landing in the same instant can both read nothing and both insert.
+            // Phase 1 made the consequence benign (the duplicate queues rather than races the
+            // pipeline); this index is what makes "at most one active deployment per app" an actual
+            // constraint instead of a check two callers can both pass. QueueDeploymentAsync keeps its
+            // pre-check anyway, for its message — a person reads "still running", not a constraint
+            // name — and falls back to this index's refusal only on the race it cannot win.
+            //
+            // Filtered to DeploymentStateMachine.Unsettled rather than a second, hand-typed list of
+            // ints living only here: Unsettled is the exact set QueueDeploymentAsync's pre-check
+            // already tests membership against, so the database's rule and the application's rule are
+            // read off one shared source and cannot quietly drift apart from each other. Of
+            // DeploymentStatus's ten values, six belong here — Queued, Building, Pushing, Deploying,
+            // HealthChecking (DeploymentStateMachine.InFlight) plus PendingApproval, which has no Job
+            // yet but is still unsettled (see that set's own doc for why the two are counted
+            // separately). The other four are exactly DeploymentStateMachine.Terminal — Succeeded,
+            // Failed, Cancelled, RolledBack — and none of them may ever be added here: a filter that
+            // also matched a merely-finished status (Cancelled, or some future TimedOut) would block
+            // that app's next legitimate deploy for ever, rather than just the one in-flight deploy
+            // this index exists to refuse.
+            //
+            // The Postgres-lane PartialUniqueIndexTests reads this filter back out of pg_indexes and
+            // asserts it against DeploymentStateMachine.Unsettled directly — so a status added to one
+            // set and not the other fails a test instead of only a production incident.
+            e.HasIndex(x => x.AppId).IsUnique()
+                .HasDatabaseName("IX_Deployments_ActiveDeployment")
+                .HasFilter(
+                    $"\"Status\" IN ({string.Join(", ", DeploymentStateMachine.Unsettled.Select(s => (int)s).OrderBy(v => v))})");
         });
 
         b.Entity<DeploymentLog>(e => e.HasIndex(x => new { x.DeploymentId, x.Sequence }));
