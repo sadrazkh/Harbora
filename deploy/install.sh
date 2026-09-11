@@ -296,6 +296,21 @@ repair_env() {
     warn "Generated the object-storage root password. / رمز ریشهٔ فضای ذخیره‌سازی ساخته شد."
     repaired=1; }
 
+  # HARBORA-0065: how many background jobs (builds, backups, managed-service provisions, cron runs)
+  # this panel runs at once. docker-compose.yml passes Jobs__MaxConcurrency through only when .env
+  # actually sets it, so this mirrors JobQueueOptions.DefaultMaxConcurrency — min(4, this host's own
+  # core count), floored at 1 — in bash, rather than leaving the key absent, so the setting is visible
+  # and editable in .env instead of invisible until an operator reads the source. The literal 4 here
+  # must match the literal 4 in JobQueueOptions.cs's Math.Min call — a drift test enforces it.
+  local _cores
+  _cores="$(nproc 2>/dev/null)"
+  case "$_cores" in ''|*[!0-9]*) _cores=1 ;; esac
+  local _concurrency_cap=4
+  local _job_concurrency=$_cores
+  [ "$_job_concurrency" -gt "$_concurrency_cap" ] && _job_concurrency=$_concurrency_cap
+  [ "$_job_concurrency" -ge 1 ] || _job_concurrency=1
+  backfill_env Jobs__MaxConcurrency "$_job_concurrency" && repaired=1
+
   # The node channel gets a host name of its own, and this is not decoration. Traefik resolves TLS
   # options per SNI host name: two routers claiming one host with different options make it log a
   # conflict and fall back to the DEFAULT options, which ask for no client certificate. An mTLS

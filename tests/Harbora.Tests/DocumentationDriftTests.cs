@@ -232,6 +232,149 @@ public class DocumentationDriftTests
             $"Missing: {string.Join(", ", undocumented)}.");
     }
 
+    // ---- the reverse direction: every option the RUNBOOK promises actually does something ----
+
+    /// <summary>
+    /// A fragment of the RUNBOOK presented as something to literally type or write: either a fenced
+    /// code block's body, or an inline code span's text — the same two shapes
+    /// <see cref="CommandsPresentedAsCode"/> reads commands from. Between them they hold every
+    /// variable name and worked <c>NAME=value</c> example the document contains.
+    /// </summary>
+    private static IEnumerable<string> CodeFragments(string markdown)
+    {
+        foreach (Match fenced in Regex.Matches(markdown, @"```[a-z]*\r?\n(.*?)```", RegexOptions.Singleline))
+            yield return fenced.Groups[1].Value;
+        foreach (Match inline in Regex.Matches(markdown, @"`([^`\r\n]+)`"))
+            yield return inline.Groups[1].Value;
+    }
+
+    /// <summary>
+    /// A whole code fragment that is nothing but a settable name: <c>UPPER_SNAKE_CASE</c> (requiring
+    /// at least one underscore, so a plain instruction typed as confirmation — <c>REPLACE</c> in the
+    /// master-key section — is never mistaken for a variable), or .NET's double-underscore nested-key
+    /// form (<c>NodeAgent__PublicUrl</c>).
+    /// </summary>
+    private static readonly Regex BareVariableName =
+        new(@"^(?:[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+|[A-Za-z][A-Za-z0-9]*(?:__[A-Za-z][A-Za-z0-9]*)+)$",
+            RegexOptions.Compiled);
+
+    /// <summary>The same two shapes, immediately followed by <c>=</c> — a worked example setting one,
+    /// such as <c>POSTGRES_PASSWORD=$(openssl rand -hex 24)</c> or
+    /// <c>NodeAgent__PublicUrl=https://nodes.panel.example.com</c>.</summary>
+    private static readonly Regex VariableAssignment =
+        new(@"(?<![\w])([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+|[A-Za-z][A-Za-z0-9]*(?:__[A-Za-z][A-Za-z0-9]*)+)=",
+            RegexOptions.Compiled);
+
+    /// <summary>
+    /// Every option the RUNBOOK presents to an operator as something to set: a table's first column
+    /// (including a cell naming several at once — <c>`POSTGRES_USER` · `POSTGRES_DB` ·
+    /// `POSTGRES_PASSWORD`</c> is three separate code spans, not one), a bare mention
+    /// (<c>`CF_ZONE_API_TOKEN`</c>), or a worked example (<c>`Jobs__MaxConcurrency=1`</c>). Read from
+    /// the document's own code spans rather than kept as a list here, so an option documented in the
+    /// same style as every other one is picked up with no second place to remember it.
+    /// </summary>
+    private static HashSet<string> OptionsTheRunbookDocuments(string runbook)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var fragment in CodeFragments(runbook))
+        {
+            var trimmed = fragment.Trim();
+            if (BareVariableName.IsMatch(trimmed)) names.Add(trimmed);
+            foreach (Match m in VariableAssignment.Matches(fragment)) names.Add(m.Groups[1].Value);
+        }
+        return names;
+    }
+
+    /// <summary>
+    /// Options the RUNBOOK documents that are deliberately not expected to be a container's
+    /// environment variable in any compose file, because each reaches its effect a different way —
+    /// proven by a different test rather than this one.
+    /// </summary>
+    private static readonly HashSet<string> NotPassedThroughCompose = new(StringComparer.Ordinal)
+    {
+        // Read by the `docker compose` CLI itself to choose which compose files to merge. It is
+        // never one of the variables substituted inside them.
+        "COMPOSE_FILE",
+        // install.sh and deploy/harbora render this into traefik/dynamic/node-agent.yml as a literal
+        // host name (CloudflareDeploymentTests.Node_mtls_dns_is_explicitly_checked_as_dns_only),
+        // rather than passing it through a container's environment.
+        "NODE_DOMAIN",
+    };
+
+    /// <summary>
+    /// Whether <paramref name="compose"/> would actually hand <paramref name="name"/> to a container:
+    /// Compose's ordinary <c>${NAME}</c> / <c>${NAME:-default}</c> substitution, or the
+    /// key-with-no-value form (<c>NAME:</c> and nothing after it) that passes a variable through only
+    /// when <c>.env</c> (or the shell) actually sets it — the form <c>Jobs__MaxConcurrency</c> uses so
+    /// an unset <c>.env</c> reaches <c>JobQueueOptions</c>' own default rather than a literal
+    /// duplicated in the compose file.
+    /// </summary>
+    private static bool ReachesAContainer(string name, string compose)
+    {
+        var escaped = Regex.Escape(name);
+        var substituted = new Regex(@"\$\{" + escaped + @"(?![A-Za-z0-9_])");
+        var passedThroughBare = new Regex(@"(?m)^[ \t]*" + escaped + @":[ \t]*(#.*)?$");
+        return substituted.IsMatch(compose) || passedThroughBare.IsMatch(compose);
+    }
+
+    [Fact]
+    public void Every_operator_settable_option_the_runbook_documents_reaches_a_container()
+    {
+        // The reverse of Every_environment_variable_the_compose_stack_reads_is_documented_in_the_runbook
+        // above: that test catches a variable the stack reads but the RUNBOOK never mentions; this one
+        // catches the opposite defect, and the one HARBORA-0065 actually was — the RUNBOOK told an
+        // operator that setting Jobs__MaxConcurrency in .env did something, and no compose file wired
+        // that name into any service's environment at all, so it was set, visible in `docker inspect`
+        // .env, and completely inert.
+        var runbook = Read("deploy", "RUNBOOK.md");
+        var compose = Read("deploy", "docker-compose.yml") + "\n" + Read("deploy", "cloudflare.compose.yml");
+
+        var documented = OptionsTheRunbookDocuments(runbook);
+        documented.Should().Contain("Jobs__MaxConcurrency",
+            "the extraction must find the option this test exists for, or the rest of it proves nothing");
+
+        var unreachable = documented
+            .Where(name => !NotPassedThroughCompose.Contains(name))
+            .Where(name => !ReachesAContainer(name, compose))
+            .OrderBy(n => n, StringComparer.Ordinal)
+            .ToList();
+
+        unreachable.Should().BeEmpty(
+            "deploy/RUNBOOK.md tells an operator to set these in .env, but no compose file under " +
+            $"deploy/ passes them into a container's environment: {string.Join(", ", unreachable)}. " +
+            "Either add the key to the relevant service's `environment:` block, or the RUNBOOK should " +
+            "not promise that setting it does anything.");
+    }
+
+    [Fact]
+    public void Jobs_max_concurrency_default_backfilled_by_install_sh_matches_the_code_s_own_cap()
+    {
+        // docker-compose.yml deliberately carries NO literal default for Jobs__MaxConcurrency — it is
+        // a bare key, so an unset .env reaches JobQueueOptions.DefaultMaxConcurrency at runtime rather
+        // than a number duplicated in the compose file. install.sh's repair_env still writes a
+        // starting value into a fresh or upgraded .env, in bash, purely so the setting is visible and
+        // editable instead of invisible until someone reads the source — and that bash formula
+        // duplicates the code's own cap as a literal, which is exactly the kind of number this
+        // programme's own brief warns drifts silently. This pins the two together.
+        var optionsSource = Read("src", "Harbora.Infrastructure", "Jobs", "JobQueueOptions.cs");
+        var installSh = Read("deploy", "install.sh");
+
+        var codeCap = Regex.Match(optionsSource, @"Math\.Min\((\d+),\s*Environment\.ProcessorCount\)");
+        codeCap.Success.Should().BeTrue(
+            "JobQueueOptions.DefaultMaxConcurrency was not found in the expected " +
+            "Math.Min(N, Environment.ProcessorCount) shape — update this test's regex if that formula changed");
+
+        var installCap = Regex.Match(installSh, @"_concurrency_cap=(\d+)");
+        installCap.Success.Should().BeTrue(
+            "deploy/install.sh's repair_env was not found backfilling Jobs__MaxConcurrency via a " +
+            "_concurrency_cap= variable — update this test's regex if that backfill was rewritten");
+
+        installCap.Groups[1].Value.Should().Be(codeCap.Groups[1].Value,
+            "deploy/install.sh backfills Jobs__MaxConcurrency with a cap that must match " +
+            $"JobQueueOptions.cs's Math.Min({codeCap.Groups[1].Value}, Environment.ProcessorCount), " +
+            $"but install.sh currently caps at {installCap.Groups[1].Value}");
+    }
+
     [Fact]
     public void Every_server_command_the_disaster_recovery_runbook_gives_is_one_the_script_dispatches()
     {

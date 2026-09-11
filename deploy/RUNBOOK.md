@@ -76,6 +76,12 @@ Two more that Compose reads and `install.sh` fills in when you add nodes. Both h
 | `NodeAgent__PublicUrl` | empty | `https://nodes.panel.example.com` — the address a node is handed at enrollment and keeps calling. Empty means an enrolled node stores an empty control-plane URL, reports success, and never opens a channel |
 | `NodeAgent__TrustForwardedClientCertificate` | `false` | Lets the panel believe the client certificate Traefik forwards. Only safe once `traefik/dynamic/node-agent.yml` is on disk, because that router requires a client certificate and therefore always overwrites the header |
 
+One more Compose reads directly, so `install.sh` backfills it too (HARBORA-0065):
+
+| Variable | Default | What it is |
+|---|---|---|
+| `Jobs__MaxConcurrency` | `min(4, cores)` | How many background jobs — deployments, backups, managed-service provisions, cron runs — this panel runs at the same time. Two jobs for the same target never overlap whatever this says. Set it to `1` to restore the one-job-at-a-time worker the platform ran before; that needs only `docker compose up -d panel`, no rebuild |
+
 And one you should not normally touch:
 
 | Variable | Default | What it is |
@@ -281,23 +287,17 @@ app; fix its routes and redeploy.
 so a 4-core panel can run four builds at once on its own host. Deployments of the *same* app stay
 serial whatever this says, and a backup no longer waits behind somebody else's build.
 
-If your panel is sized for one build at a time, put it back to one. **Setting it in `.env` does
-nothing** — the compose file names the panel's environment variables explicitly and does not pass
-this one through, so `.env` is only used for substitution. The supported way is a compose override
-file, which Compose merges automatically and which `git pull` will never overwrite:
+If your panel is sized for one build at a time, put it back to one:
 
 ```bash
-cat > /opt/harbora/app/deploy/docker-compose.override.yml <<'YAML'
-services:
-  panel:
-    environment:
-      Jobs__MaxConcurrency: "1"
-YAML
+printf 'Jobs__MaxConcurrency=1\n' >> /opt/harbora/app/deploy/.env
 cd /opt/harbora/app/deploy && docker compose up -d panel
 ```
 
-That restores the previous serial worker exactly, and it needs no redeploy of anything. There is no
-first-class setting for it yet (HARBORA-0065).
+That restores the previous serial worker exactly, and it needs no redeploy of anything. `.env` is
+where this belongs — see `Jobs__MaxConcurrency` in §3 — and `install.sh update` backfills the key
+with today's computed default on any `.env` written before it existed, without ever touching a value
+you already set.
 
 **4. A node needs a second DNS record.** `nodes.<panel domain>` — see §0. Only if you use nodes, and
 only on a real domain; a `nip.io` install needs no new record. No new port is opened. `install.sh

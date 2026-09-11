@@ -175,6 +175,16 @@ services:
       # The flag at least fails closed rather than binding "" to a bool and throwing on startup.
       NodeAgent__PublicUrl: ${NodeAgent__PublicUrl:-}
       NodeAgent__TrustForwardedClientCertificate: ${NodeAgent__TrustForwardedClientCertificate:-false}
+      # How many background jobs (deployments, backups, managed-service provisions, cron runs) run at
+      # once (HARBORA-0065). Deliberately a KEY WITH NO VALUE rather than `${Jobs__MaxConcurrency:-4}`:
+      # a `:-4` fallback would hard-code this panel's own core count into the compose file and could
+      # disagree with JobQueueOptions.DefaultMaxConcurrency (min(4, the container's own core count)) on
+      # a small VPS. A bare key instead passes the variable through only when `.env` actually sets it —
+      # Compose omits it from the container entirely otherwise — so an unset `.env` reaches the code's
+      # own default rather than a literal duplicated here. `install.sh update` backfills the key with
+      # today's computed default so it is visible and editable; a value the operator already set is
+      # never touched.
+      Jobs__MaxConcurrency:
     # Without this a panel whose process has died or hung stays "running" forever: Docker never
     # restarts it, and every request gets a 502 with nothing to explain why. Observed in production.
     healthcheck:
