@@ -12,11 +12,17 @@
 
 So: capture the exit code before piping, and then **confirm a `Harbora.Tests.dll` line is present**:
 
+**Write the log to a name nobody else this round will use.** `/tmp` is shared across every worktree,
+so a literal `/tmp/t.log` in a doc four agents follow means four agents writing one file and reading
+each other's results. That happened this round and was caught only because one agent noticed another
+worktree's paths in its own log. Put your branch name in it:
+
 ```
 export MSBUILDDISABLENODEREUSE=1
-dotnet test Harbora.slnx --nologo -v q -p:UseSharedCompilation=false > /tmp/t.log 2>&1; echo "EXIT=$?"
-grep -E "^Passed!|^Failed!|\[FAIL\]" /tmp/t.log
-grep -c "Harbora.Tests.dll" /tmp/t.log   # must not be 0
+LOG=/tmp/test-$(git branch --show-current).log
+dotnet test Harbora.slnx --nologo -v q -p:UseSharedCompilation=false > "$LOG" 2>&1; echo "EXIT=$?"
+grep -E "^Passed!|^Failed!|\[FAIL\]" "$LOG"
+grep -c "Harbora.Tests.dll" "$LOG"   # must not be 0
 ```
 
 Baseline: **6224** in `Harbora.Tests.dll`. It must not drop.
