@@ -185,6 +185,17 @@ services:
       # today's computed default so it is visible and editable; a value the operator already set is
       # never touched.
       Jobs__MaxConcurrency:
+      # How many past deployments keep their build image after a deploy (HARBORA-0065, the identical
+      # hole left one setting over from Jobs__MaxConcurrency above). This is the real depth of instant
+      # rollback and the main thing that grows the disk. Deliberately a KEY WITH NO VALUE rather than
+      # `${Runtime__ImageRetentionCount:-5}`: a `:-5` fallback would duplicate
+      # HarboraRuntimeOptions.ImageRetentionCount's own default as a literal here, and the two could
+      # silently disagree if one changed without the other. A bare key instead passes the variable
+      # through only when `.env` actually sets it — Compose omits it from the container entirely
+      # otherwise — so an unset `.env` reaches the code's own default rather than a literal duplicated
+      # in this file. `install.sh update` backfills the key with today's default (5) so it is visible
+      # and editable; a value the operator already set is never touched.
+      Runtime__ImageRetentionCount:
     # Without this a panel whose process has died or hung stays "running" forever: Docker never
     # restarts it, and every request gets a 502 with nothing to explain why. Observed in production.
     healthcheck:

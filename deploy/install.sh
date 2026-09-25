@@ -311,6 +311,17 @@ repair_env() {
   [ "$_job_concurrency" -ge 1 ] || _job_concurrency=1
   backfill_env Jobs__MaxConcurrency "$_job_concurrency" && repaired=1
 
+  # HARBORA-0065, the identical hole left one setting over: how many past deployments keep their
+  # build image after a deploy — the real depth of instant rollback, and the main thing that grows
+  # the disk. docker-compose.yml passes Runtime__ImageRetentionCount through only when .env actually
+  # sets it, so this mirrors HarboraRuntimeOptions.ImageRetentionCount's own default (5) here in bash,
+  # rather than leaving the key absent, so the setting is visible and editable in .env instead of
+  # invisible until an operator reads the source. The literal 5 here must match the literal default in
+  # HarboraRuntimeOptions.cs — a drift test enforces it. Unlike Jobs__MaxConcurrency this default is
+  # not derived from the host, so it is never overwritten by anything computed at install time.
+  local _image_retention_default=5
+  backfill_env Runtime__ImageRetentionCount "$_image_retention_default" && repaired=1
+
   # The node channel gets a host name of its own, and this is not decoration. Traefik resolves TLS
   # options per SNI host name: two routers claiming one host with different options make it log a
   # conflict and fall back to the DEFAULT options, which ask for no client certificate. An mTLS

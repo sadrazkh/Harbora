@@ -383,6 +383,85 @@ public class DocumentationDriftTests
             $"but install.sh currently caps at {installCap.Groups[1].Value}");
     }
 
+    // ---- HARBORA-0065, the identical hole left one setting over: ImageRetentionCount ----
+
+    [Fact]
+    public void Runtime_image_retention_count_is_passed_through_by_the_compose_file()
+    {
+        // The exact defect that was true here until this change: the RUNBOOK documented
+        // Runtime__ImageRetentionCount as something an operator could set in .env, but no compose
+        // file named it in any service's environment block, so it was set, visible in `docker
+        // inspect`, and completely inert — the same shape HARBORA-0065 already was for
+        // Jobs__MaxConcurrency. No Docker on this machine to prove it end to end, so this reads the
+        // compose file itself and the binding path (HarboraRuntimeOptions binds the "Runtime"
+        // section — see DependencyInjection.cs — so the variable must be double-underscored exactly
+        // as Runtime__ImageRetentionCount, not some other separator that Compose would set, show in
+        // `docker inspect`, and .NET's configuration binder would silently ignore).
+        var compose = Read("deploy", "docker-compose.yml");
+        var di = Read("src", "Harbora.Infrastructure", "DependencyInjection.cs");
+
+        di.Should().Contain("Configure<HarboraRuntimeOptions>(config.GetSection(\"Runtime\"))",
+            "HarboraRuntimeOptions must still bind the \"Runtime\" section for Runtime__ImageRetentionCount " +
+            "(double-underscore nested-key form) to be the correct variable name");
+
+        ReachesAContainer("Runtime__ImageRetentionCount", compose).Should().BeTrue(
+            "deploy/docker-compose.yml must pass Runtime__ImageRetentionCount into the panel's " +
+            "environment (as a bare key, so an unset .env still reaches the code's own default) or " +
+            "the RUNBOOK's promise that setting it does anything is false");
+
+        // Not a `:-5` fallback actually assigning the environment entry (a comment is free to discuss
+        // that form to explain why it was rejected): that would duplicate
+        // HarboraRuntimeOptions.ImageRetentionCount's own default as a literal in the compose file,
+        // and the two could silently disagree.
+        Regex.IsMatch(compose, @"(?m)^\s*Runtime__ImageRetentionCount:\s*\$\{Runtime__ImageRetentionCount:-")
+            .Should().BeFalse(
+                "the compose entry must be a bare key so an unset .env reaches HarboraRuntimeOptions' " +
+                "own default rather than a literal duplicated here");
+    }
+
+    [Fact]
+    public void Install_sh_backfills_image_retention_count_only_when_absent()
+    {
+        // backfill_env is the only-when-absent path: it is what makes a re-run of `install.sh
+        // update` safe and what stops an operator's deliberate override from being flipped back on
+        // the next upgrade.
+        var repair = Read("deploy", "install.sh");
+        repair.Should().Contain("backfill_env Runtime__ImageRetentionCount",
+            "deploy/install.sh's repair_env must backfill Runtime__ImageRetentionCount through the " +
+            "only-when-absent path, not overwrite a value the operator already chose");
+    }
+
+    [Fact]
+    public void Image_retention_default_backfilled_by_install_sh_matches_the_code_s_own_default()
+    {
+        // docker-compose.yml deliberately carries NO literal default for Runtime__ImageRetentionCount
+        // — it is a bare key, so an unset .env reaches HarboraRuntimeOptions.ImageRetentionCount at
+        // runtime rather than a number duplicated in the compose file. install.sh's repair_env still
+        // writes a starting value into a fresh or upgraded .env, in bash, purely so the setting is
+        // visible and editable instead of invisible until someone reads the source — and that bash
+        // literal duplicates the code's own default, which is exactly the kind of number this
+        // programme's own brief warns drifts silently. This pins the two together.
+        var optionsSource = Read("src", "Harbora.Infrastructure", "Deployments", "HarboraRuntimeOptions.cs");
+        var installSh = Read("deploy", "install.sh");
+
+        var codeDefault = Regex.Match(optionsSource,
+            @"ImageRetentionCount\s*\{\s*get;\s*set;\s*\}\s*=\s*(\d+);");
+        codeDefault.Success.Should().BeTrue(
+            "HarboraRuntimeOptions.ImageRetentionCount's default was not found in the expected " +
+            "`{ get; set; } = N;` shape — update this test's regex if that declaration changed");
+
+        var installDefault = Regex.Match(installSh, @"_image_retention_default=(\d+)");
+        installDefault.Success.Should().BeTrue(
+            "deploy/install.sh's repair_env was not found backfilling Runtime__ImageRetentionCount " +
+            "via an _image_retention_default= variable — update this test's regex if that backfill " +
+            "was rewritten");
+
+        installDefault.Groups[1].Value.Should().Be(codeDefault.Groups[1].Value,
+            "deploy/install.sh backfills Runtime__ImageRetentionCount with a default that must match " +
+            $"HarboraRuntimeOptions.cs's own default ({codeDefault.Groups[1].Value}), but install.sh " +
+            $"currently backfills {installDefault.Groups[1].Value}");
+    }
+
     [Fact]
     public void Every_server_command_the_disaster_recovery_runbook_gives_is_one_the_script_dispatches()
     {

@@ -76,11 +76,34 @@ Two more that Compose reads and `install.sh` fills in when you add nodes. Both h
 | `NodeAgent__PublicUrl` | empty | `https://nodes.panel.example.com` — the address a node is handed at enrollment and keeps calling. Empty means an enrolled node stores an empty control-plane URL, reports success, and never opens a channel |
 | `NodeAgent__TrustForwardedClientCertificate` | `false` | Lets the panel believe the client certificate Traefik forwards. Only safe once `traefik/dynamic/node-agent.yml` is on disk, because that router requires a client certificate and therefore always overwrites the header |
 
-One more Compose reads directly, so `install.sh` backfills it too (HARBORA-0065):
+Two more Compose reads directly, so `install.sh` backfills both too (HARBORA-0065):
 
 | Variable | Default | What it is |
 |---|---|---|
 | `Jobs__MaxConcurrency` | `min(4, cores)` | How many background jobs — deployments, backups, managed-service provisions, cron runs — this panel runs at the same time. Two jobs for the same target never overlap whatever this says. Set it to `1` to restore the one-job-at-a-time worker the platform ran before; that needs only `docker compose up -d panel`, no rebuild |
+| `Runtime__ImageRetentionCount` | `5` | How many past deployments keep their build image after a deploy — the real depth of instant rollback, and the main thing that grows the disk. **Read this before lowering it**, because the name reads like "keep N backups" and is not: see below for what each value actually costs |
+
+`Runtime__ImageRetentionCount` counts **rollback targets**. The deployment currently serving traffic
+is protected separately and always survives, on top of whatever this is set to — so the number is not
+"backups plus the running one", it already includes the running one in every case except `0`:
+
+| value | what survives per app | instant rollback |
+|---|---|---|
+| `1` | the running image only | **none** — a rollback must rebuild from source |
+| `2` | running + one previous | one step |
+| `5` (default) | running + four previous | four steps |
+| `0` | retention off; images accumulate forever | unlimited, disk grows unbounded |
+
+Setting it to `1` to save disk is a legitimate choice, but it is the value that removes instant
+rollback entirely — an operator who only reads the name would not learn that until the day they need
+to roll back and cannot. `0` is not "keep a minimal few"; it turns pruning off completely and the disk
+fills without limit.
+
+Lowering this does **not** reclaim anything by itself: an app only sees the smaller window applied on
+its *next* deploy, because pruning runs as part of the deployment pipeline's own cutover. To apply a
+newly-lowered value immediately to apps that have not deployed since, use **Clean up disk** on the
+Monitoring page — it re-runs the same retention rule against every app's current images with today's
+configured value, which is exactly how it catches apps the pipeline itself has not touched yet.
 
 And one you should not normally touch:
 
