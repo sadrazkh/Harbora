@@ -6,25 +6,43 @@ DONE
 
 ## Commit
 
-- `97e57bc3712ee672d8ce61ce3c36edc868eba0ad` — "Add read-only disk usage report (A-brief)" on branch `r4-disk-report`.
-  Working tree is clean; this is the only commit for this task.
+- `d4526ce03ad062b0aba2d2757d1e0076a7afbcf2` — "Add read-only disk usage report (A-brief)" (all the
+  feature code, view, and tests).
+- `5b2dd88` — "Add A-brief final report" (this file).
+
+Both on branch `r4-disk-report`. Working tree is clean.
+
+**Note on the SHA above changing mid-task:** my first commit landed as `97e57bc`. Before I finished
+verifying, this worktree was auto-rebased onto an updated base (reflog shows `rebase (start): checkout
+master` / `rebase (finish)`), replaying my commit as `d4526ce` and pulling in five other agents'
+already-completed commits from this round (none of them touch any file this task changed — they are
+`deploy/`, `_Layout.cshtml`/sidebar, `.github/workflows/ci.yml`, and other agents' own brief/report
+files, all outside this task's scope). I confirmed the replay was byte-for-byte the same change
+(`git diff 97e57bc d4526ce --stat` shows only the newly-arrived commits' own files, none of mine) and
+re-ran the full suite afterward — see below — rather than trusting the pre-rebase numbers.
 
 ## Test summary
 
 Full solution suite, per CONSTRAINTS.md's verification recipe (`MSBUILDDISABLENODEREUSE=1`,
 `-p:UseSharedCompilation=false`, exit code captured before piping, `Harbora.Tests.dll` line count
-confirmed non-zero):
+confirmed non-zero, log written to a branch-named file per this round's updated instruction rather
+than a shared `/tmp/t.log`):
 
 ```
 Passed!  - Failed: 0, Passed: 500,  Skipped: 17, Total: 517  - Harbora.NodeAgent.Tests.dll (net10.0)
 Passed!  - Failed: 0, Passed: 15,   Skipped: 0,  Total: 15   - Harbora.NodeIngress.Tests.dll (net10.0)
-Passed!  - Failed: 0, Passed: 6242, Skipped: 0,  Total: 6242 - Harbora.Tests.dll (net10.0)
+Passed!  - Failed: 0, Passed: 6245, Skipped: 0,  Total: 6245 - Harbora.Tests.dll (net10.0)
 EXIT=0
 ```
 
-`Harbora.Tests.dll` went from the stated baseline of **6224** to **6242** — exactly the 18 new tests
-added (11 in `DiskUsageReportTests.cs`, 7 in `MonitoringDiskReportHttpTests.cs`), no drop anywhere
-else, no test removed or skipped to make this pass.
+This is the post-rebase run (log: `/tmp/test-r4-disk-report.log`). `Harbora.Tests.dll` sits at **6245**
+against the round's stated baseline of **6224** — a rise of 21: the 18 tests this task added (11 in
+`DiskUsageReportTests.cs`, 7 in `MonitoringDiskReportHttpTests.cs`) plus a few more that arrived with
+the rebased-in commits (e.g. `DocumentationDriftTests.cs`, added by another agent this round). Nothing
+dropped, nothing failed, nothing skipped to make this pass. An earlier run taken before the rebase
+landed showed exactly 6242 (6224 + my 18) — consistent with this one once the rebased-in tests are
+accounted for, and evidence the numbers were not cross-contaminated by another concurrent agent's run
+sharing the old unscoped `/tmp/t.log` path.
 
 There is no Docker on this machine — every figure above is proven against `FakeDockerEngine` /
 `FakeServerEngineFactory` (unit tests) and the shared `HarboraWebFactory.Docker` fake (HTTP tests),
