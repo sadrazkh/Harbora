@@ -101,7 +101,10 @@
             }
             var railHtml = railBuffer.ToString();
         }
-        <div class="flex min-h-0 flex-1 flex-col overflow-y-auto 2xl:flex-row">
+        @* id="content-scroll": this is the element that actually scrolls the page (not `body` —
+           see the mobile slide-over comment below). The mobile sidebar module locks/restores this
+           element's own overflow while the slide-over is open. *@
+        <div id="content-scroll" class="flex min-h-0 flex-1 flex-col overflow-y-auto 2xl:flex-row">
             <main class="min-w-0 flex-1 p-4 md:p-6 2xl:p-7">
                 @RenderBody()
             </main>
@@ -156,16 +159,8 @@
         paint();
     })();
 
-    // Mobile slide-over sidebar.
-    (function () {
-        var sidebar = document.getElementById('sidebar'), backdrop = document.getElementById('backdrop');
-        function open(v) { sidebar.classList.toggle('is-open', v); backdrop.classList.toggle('hidden', !v); }
-        document.querySelector('[data-toggle-sidebar]')?.addEventListener('click', function () {
-            open(!sidebar.classList.contains('is-open'));
-        });
-        backdrop?.addEventListener('click', function () { open(false); });
-        sidebar?.querySelectorAll('a').forEach(function (a) { a.addEventListener('click', function () { open(false); }); });
-    })();
+    // Mobile slide-over sidebar: see Scripts/mobileSidebar.js (imported from main.ts), which also
+    // locks/restores the page scroll while it is open and closes on Escape.
 
     // Loading state: disable submit + spinner once a form really submits.
     // Bubble phase + defaultPrevented check so a cancelled confirm() never leaves a stuck button.

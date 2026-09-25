@@ -123,7 +123,9 @@
         _ => key
     };
 }
-<nav class="flex-1 overflow-y-auto px-3 py-4 space-y-1 scrollbar-thin">
+@* overscroll-contain: on the mobile slide-over, flicking to the end of this list must not chain
+   into scrolling the page behind it. *@
+<nav class="flex-1 overflow-y-auto overscroll-contain px-3 py-4 space-y-1 scrollbar-thin">
     @* Redesign 3a: four always-visible essentials with a live count, instead of every destination
        carrying equal weight inside eight named groups. *@
     <div class="space-y-0.5 pb-3 mb-2 border-b border-line">

@@ -188,8 +188,14 @@ jobs:
         working-directory: src/Harbora.Web
         run: npm ci
 
-      - name: Test deployment log recovery
-        run: node --test src/Harbora.Web/Scripts/tests/deployment-logs.test.mjs
+      # A directory argument, not one named file: `deployment-logs.test.mjs` used to be the only
+      # thing named here, which meant a new test file added beside it would exist and never run.
+      # A glob (rather than a bare directory path) is used deliberately — `node --test <dir>` does
+      # not reliably discover files on every platform/Node combination, where it silently falls
+      # back to treating the argument as an entry-point module and fails to resolve it; the glob
+      # is unambiguous and was verified locally to pick up every *.test.mjs file in the directory.
+      - name: Run the Scripts/tests suite
+        run: node --test src/Harbora.Web/Scripts/tests/*.test.mjs
 
       - name: Build the bundle (must succeed)
         working-directory: src/Harbora.Web
