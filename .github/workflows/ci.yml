@@ -188,8 +188,9 @@ jobs:
         working-directory: src/Harbora.Web
         run: npm ci
 
-      # A directory argument, not one named file: `deployment-logs.test.mjs` used to be the only
-      # thing named here, which meant a new test file added beside it would exist and never run.
+      # Every test file in the directory, not one named file: `deployment-logs.test.mjs` used to be
+      # the only thing named here, which meant a new test file added beside it would exist and
+      # never run — coverage on paper and nothing executed.
       # A glob (rather than a bare directory path) is used deliberately — `node --test <dir>` does
       # not reliably discover files on every platform/Node combination, where it silently falls
       # back to treating the argument as an entry-point module and fails to resolve it; the glob
