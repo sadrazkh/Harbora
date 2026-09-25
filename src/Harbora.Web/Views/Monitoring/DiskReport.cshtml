@@ -1,0 +1,162 @@
+@model Harbora.Infrastructure.Maintenance.DiskUsageReportResult
+@using Harbora.Infrastructure.Maintenance
+@using Harbora.Infrastructure.Tenancy
+@{
+    ViewData["Title"] = "Disk report";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    string Bytes(long b) => ByteSize.Measured(b);
+    string? BytesOrUnknown(long? b) => b is { } v ? ByteSize.Measured(v) : null;
+
+    var header = new Harbora.Web.ViewModels.PageHeaderModel(
+        isFa ? "گزارش فضای دیسک" : "Disk usage report",
+        isFa
+            ? "این که هر سرور چه فضایی را با چه چیزی پر کرده — و پاک‌سازی الان دقیقاً چه چیزی را حذف می‌کند."
+            : "What is actually filling each server's disk, and exactly what a cleanup would remove right now.");
+}
+<div class="mb-6">
+    <partial name="Design/_PageHeader" model="header" />
+</div>
+
+@* The honesty requirement this whole page exists to keep: DiskCleanupService measures the disk's own
+   before/after difference rather than trusting a sum of per-image sizes, because Docker layers are
+   shared and summing them overstates the win. This report cannot measure a future cleanup, so the
+   total below is stated as an upper bound, in both languages, every time it is shown. *@
+<div class="mb-6 rounded-xl border border-line bg-surface p-5">
+    <div class="flex items-center justify-between flex-wrap gap-2">
+        <div>
+            <div class="text-xs text-ink-faint uppercase tracking-wide">@(isFa ? "قابل بازیابی هم‌اکنون" : "Reclaimable now")</div>
+            <div class="text-2xl font-bold text-ink" dir="ltr">@Bytes(Model.ReclaimableBytes)</div>
+        </div>
+        <a href="/servers/disk-volume-report" target="_blank" rel="noopener"
+           class="text-xs rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-1.5 text-ink-muted">
+            @(isFa ? "گزارش والیوم‌های یتیم روی دیسک" : "Disk volume orphan report")
+        </a>
+    </div>
+    <p class="mt-2 text-xs text-ink-faint">
+        @(isFa
+            ? "این عدد یک سقف بالاست، نه یک وعده: ایمیج‌های Docker لایه‌های مشترک دارند، پس جمع‌زدن اندازه‌ی هر ایمیج می‌تواند بیش از آنچه پاک‌سازی واقعاً آزاد می‌کند نشان دهد. به همین دلیل خود پاک‌سازی، اختلاف واقعیِ پیش و پس از حذف را روی دیسک اندازه می‌گیرد، نه این جمع را."
+            : "This figure is an upper bound, not a promise: Docker images share layers, so adding up each image's own size can overstate what a cleanup actually frees. That is exactly why the cleanup itself measures the disk's real before/after difference rather than trusting this sum.")
+    </p>
+    @if (Model.AnyNotExamined)
+    {
+        <p class="mt-2 text-xs text-warn">
+            @(isFa
+                ? "این جمع فقط سرورهای بررسی‌شده را در بر می‌گیرد — سرورهای زیر بررسی نشدند و در این عدد لحاظ نشده‌اند."
+                : "This total covers only the servers examined below — the ones not examined are named, not folded in as clean.")
+        </p>
+    }
+</div>
+
+@if (Model.Servers.Count == 0)
+{
+    <div class="rounded-xl border border-line bg-surface">
+        <partial name="Design/_EmptyState" model="@(new Harbora.Web.ViewModels.EmptyStateModel("server",
+            isFa ? "هنوز سروری ثبت نشده." : "No servers registered yet."))" />
+    </div>
+}
+
+<div class="space-y-6">
+    @foreach (var server in Model.Servers)
+    {
+        <section class="rounded-xl border border-line bg-surface p-5">
+            <div class="flex items-center justify-between flex-wrap gap-2">
+                <h2 class="text-[15px] font-semibold text-ink">@server.ServerName</h2>
+                @if (server.NotExamined is null)
+                {
+                    <span class="text-sm font-mono text-ink" dir="ltr">@Bytes(server.ReclaimableBytes) @(isFa ? "قابل بازیابی" : "reclaimable")</span>
+                }
+            </div>
+
+            @if (server.NotExamined is not null)
+            {
+                @* "0 bytes" and "not examined" must never render alike — this server contributes
+                   nothing to the totals above, and says so by name rather than by a false zero. *@
+                <div class="mt-3 rounded-lg bg-warn-soft border border-warn text-warn px-3 py-2 text-xs">
+                    @(isFa ? "بررسی نشد:" : "Not examined:") @server.NotExamined
+                </div>
+            }
+            else
+            {
+                @if (server.Apps.Count > 0)
+                {
+                    <div class="mt-4 overflow-x-auto">
+                        <table class="w-full text-sm">
+                            <thead>
+                                <tr class="text-start text-xs text-ink-faint uppercase tracking-wide">
+                                    <th class="py-1.5 pe-3">@(isFa ? "اپ" : "App")</th>
+                                    <th class="py-1.5 pe-3">@(isFa ? "تعداد ایمیج" : "Images")</th>
+                                    <th class="py-1.5 pe-3">@(isFa ? "حجم" : "Size")</th>
+                                    <th class="py-1.5 pe-3">@(isFa ? "تگ فعال" : "Active tag")</th>
+                                    <th class="py-1.5 pe-3">@(isFa ? "قابل بازگشت" : "Rollback-eligible")</th>
+                                    <th class="py-1.5">@(isFa ? "حذف با پاک‌سازیِ الان" : "Would be removed now")</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var app in server.Apps)
+                                {
+                                    <tr class="border-t border-line align-top">
+                                        <td class="py-1.5 pe-3 font-medium text-ink">@app.AppSlug</td>
+                                        <td class="py-1.5 pe-3 font-mono" dir="ltr">@app.ImageCount</td>
+                                        <td class="py-1.5 pe-3 font-mono" dir="ltr">@Bytes(app.TotalBytes)</td>
+                                        <td class="py-1.5 pe-3 font-mono text-xs text-ink-muted" dir="ltr">@(app.ActiveTag ?? "—")</td>
+                                        <td class="py-1.5 pe-3 font-mono text-xs text-ink-muted" dir="ltr">
+                                            @(app.RollbackEligibleTags.Count == 0 ? "—" : string.Join(", ", app.RollbackEligibleTags))
+                                        </td>
+                                        <td class="py-1.5 font-mono text-xs text-ink-muted" dir="ltr">
+                                            @(app.PrunableNowTags.Count == 0 ? "—" : $"{string.Join(", ", app.PrunableNowTags)} ({Bytes(app.PrunableNowBytes)})")
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+                else
+                {
+                    <p class="mt-3 text-xs text-ink-faint">@(isFa ? "هیچ اپی روی این سرور نیست." : "No apps on this server.")</p>
+                }
+
+                <div class="mt-4 grid sm:grid-cols-2 gap-4">
+                    <div class="rounded-lg bg-surface-2/40 p-3">
+                        <div class="text-xs text-ink-faint uppercase tracking-wide mb-1">@(isFa ? "ایمیج‌های یتیم" : "Orphaned build images")</div>
+                        @if (server.Orphaned.Count == 0)
+                        {
+                            <p class="text-sm text-ink-muted">@(isFa ? "هیچ‌کدام یافت نشد." : "None found.")</p>
+                        }
+                        else
+                        {
+                            <p class="text-sm text-ink" dir="ltr">@server.Orphaned.Count · @Bytes(server.Orphaned.TotalBytes)</p>
+                            <ul class="mt-1 space-y-0.5">
+                                @foreach (var tag in server.Orphaned.Tags)
+                                {
+                                    <li class="text-xs font-mono text-ink-muted" dir="ltr">@tag</li>
+                                }
+                            </ul>
+                        }
+                    </div>
+                    <div class="rounded-lg bg-surface-2/40 p-3">
+                        <div class="text-xs text-ink-faint uppercase tracking-wide mb-1">@(isFa ? "والیوم‌ها" : "Volumes")</div>
+                        @if (server.Volumes.Count == 0)
+                        {
+                            <p class="text-sm text-ink-muted">@(isFa ? "والیومی ثبت نشده." : "No volumes recorded.")</p>
+                        }
+                        else
+                        {
+                            <ul class="space-y-0.5">
+                                @foreach (var vol in server.Volumes)
+                                {
+                                    <li class="flex items-center justify-between text-xs">
+                                        <span class="font-mono text-ink-muted" dir="ltr">@vol.Name</span>
+                                        <span class="font-mono text-ink-faint" dir="ltr">
+                                            @(BytesOrUnknown(vol.SizeBytes) ?? (isFa ? "هنوز اندازه‌گیری نشده" : "not yet measured"))
+                                        </span>
+                                    </li>
+                                }
+                            </ul>
+                        }
+                    </div>
+                </div>
+            }
+        </section>
+    }
+</div>

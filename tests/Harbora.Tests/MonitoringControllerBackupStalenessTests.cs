@@ -59,9 +59,12 @@ public class MonitoringControllerBackupStalenessTests
         var cleanup = new Harbora.Infrastructure.Maintenance.DiskCleanupService(
             db, engineFactory, Options.Create(new HarboraRuntimeOptions()),
             NullLogger<Harbora.Infrastructure.Maintenance.DiskCleanupService>.Instance);
+        var diskUsage = new Harbora.Infrastructure.Maintenance.DiskUsageReport(
+            db, engineFactory, Options.Create(new HarboraRuntimeOptions()),
+            NullLogger<Harbora.Infrastructure.Maintenance.DiskUsageReport>.Instance);
 
         return new MonitoringController(
-            db, new FakeDockerEngine(), new StubUser(), access, cleanup, new SilentAudit(),
+            db, new FakeDockerEngine(), new StubUser(), access, cleanup, diskUsage, new SilentAudit(),
             new Harbora.Infrastructure.Monitoring.IncidentService(db), new FixedClock(),
             Options.Create(options ?? new MonitoringOptions()),
             new Harbora.Infrastructure.Monitoring.LifecycleHistory(db), NullLogger<MonitoringController>.Instance)

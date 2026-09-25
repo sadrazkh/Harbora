@@ -21,6 +21,7 @@ public sealed class MonitoringController(
     ICurrentUser currentUser,
     Harbora.Infrastructure.Security.ProjectAccessService access,
     Harbora.Infrastructure.Maintenance.DiskCleanupService cleanup,
+    Harbora.Infrastructure.Maintenance.DiskUsageReport diskUsage,
     IAuditLogger audit,
     Harbora.Infrastructure.Monitoring.IncidentService incidents,
     ISystemClock clock,
@@ -78,6 +79,25 @@ public sealed class MonitoringController(
             : $"Cleanup removed {removed} image(s) ({result.OrphanRemoved} orphaned, {result.RetentionRemoved} superseded), {result.Failed} in use and kept; freed: {freed}.") + note;
 
         return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>
+    /// The report the cleanup button itself cannot give: what is actually filling the disk, per
+    /// server and per app, and what today's cleanup would remove right now. Every figure that decides
+    /// "what is prunable" comes from <see cref="Harbora.Infrastructure.Maintenance.DiskUsageReport"/>,
+    /// which calls <c>CleanupPlan.OrphanedBuildImages</c> and <c>DeploymentPlanning.ImagesToPrune</c>
+    /// directly — the same rules <see cref="Harbora.Infrastructure.Maintenance.DiskCleanupService"/>
+    /// acts on, so this page and that button can never disagree about what counts as reclaimable.
+    /// Read-only: nothing on this page deletes anything. Gated the same as the cleanup button and the
+    /// servers page it shares its engine factory with.
+    /// </summary>
+    [HttpGet("disk-report")]
+    [Authorize(Policy = Harbora.Domain.Authorization.Capabilities.ServersManage)]
+    public async Task<IActionResult> DiskReport(CancellationToken ct)
+    {
+        ViewData["Title"] = "Disk report";
+        var report = await diskUsage.BuildAsync(ct);
+        return View(report);
     }
 
     [HttpGet("")]

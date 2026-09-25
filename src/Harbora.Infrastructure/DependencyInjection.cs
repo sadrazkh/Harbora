@@ -317,6 +317,10 @@ public static class DependencyInjection
         // does, so it is registered the same way (scoped, not static) rather than beside
         // VolumeOrphanReport, which is a pure database query AdminCommands can run with no DI at all.
         services.AddScoped<Storage.DiskVolumeOrphanReport>();
+        // A5 (2026-09 disk-usage-report round): read-only per-server/per-app breakdown of what a
+        // cleanup would reclaim. Same scoping as the two services above — it calls through the same
+        // per-server engine factory and needs no lifetime of its own.
+        services.AddScoped<Maintenance.DiskUsageReport>();
         services.AddScoped<Notifications.PlatformMailer>();
         services.AddHostedService<Maintenance.UpdateCheckService>();
         // Bounds the seven tables that had no retention at all — build logs first among them. A
