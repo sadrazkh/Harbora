@@ -45,10 +45,20 @@ public sealed partial class AccountController
     /// Mints a token scoped to the owner's own current workspace. Re-renders the same page either
     /// way: on refusal, with the purpose typed back in; on success, with the plaintext shown exactly
     /// once. Never redirected through — TempData is no place for a secret to sit even briefly.
+    ///
+    /// <para>
+    /// Refused under a support session for the same reason minting an API/CLI token already is
+    /// (<see cref="SupportRestrictedAct.ApiToken"/>, reused rather than given a sibling enum value —
+    /// the customer-facing vocabulary is "a durable credential", and this is exactly that): a token
+    /// redeemed during the impersonated hour would go on granting a session after the support session
+    /// itself has ended, which is precisely the durable, self-owned way into the account the existing
+    /// restriction exists to refuse.
+    /// </para>
     /// </summary>
     [HttpPost("/account/tokens")]
     [Authorize]
     [ValidateAntiForgeryToken]
+    [RefuseUnderSupportSession(SupportRestrictedAct.ApiToken)]
     public async Task<IActionResult> CreateToken(string? purpose, CancellationToken ct)
     {
         ViewData["Title"] = IsFa ? "توکن‌های ورود یک‌بارمصرف" : "One-time sign-in tokens";
