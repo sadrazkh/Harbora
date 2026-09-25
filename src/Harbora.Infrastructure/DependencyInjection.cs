@@ -103,6 +103,10 @@ public static class DependencyInjection
         // each host so a background worker's audit row can never be missing this answer; the web
         // host replaces it with the claims-reading one after this call returns.
         services.AddSingleton<ISupportSession>(NoSupportSession.Instance);
+        // Nobody's session was opened by a token unless a host says otherwise — the same
+        // accommodation just above, for the same reason: a background worker's audit row must never
+        // be missing this answer either.
+        services.AddSingleton<ISignInTokenSession>(NoSignInTokenSession.Instance);
         services.AddScoped<IAuditLogger, Auditing.AuditLogger>();
         // "May this person do this here" — asked the same way by every screen.
         services.AddScoped<Security.ProjectAccessService>();
@@ -249,6 +253,10 @@ public static class DependencyInjection
         // Opens, checks and closes the periods a platform administrator spends inside a customer's
         // account. Scoped: LiveAsync runs on every request under one and writes the expiry back.
         services.AddScoped<Identity.SupportSessionService>();
+        // The owner's-own-agent analogue: mints, redeems, checks and revokes one-time sign-in tokens.
+        // Scoped for the same reason SupportSessionService is — LiveAsync runs on every request under
+        // a token session and writes its own expiry back.
+        services.AddScoped<Identity.SignInTokenService>();
         services.AddScoped<Templates.TemplateDeploymentService>();
         // A branch gets an environment of its own, and loses it again when the branch goes.
         services.AddScoped<Projects.PreviewEnvironmentService>();

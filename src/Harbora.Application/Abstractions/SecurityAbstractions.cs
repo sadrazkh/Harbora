@@ -87,6 +87,37 @@ public sealed class NoSupportSession : ISupportSession
     public string? AdminEmail => null;
 }
 
+/// <summary>
+/// Whether this request is running under a session a <c>SignInToken</c> opened — the same question
+/// <see cref="ISupportSession"/> answers for borrowed platform access, asked for the other case this
+/// platform hands out a browser session for: an owner's own agent, signed in through a one-time token
+/// rather than a password.
+///
+/// <para>
+/// <see cref="ICurrentUser"/> still reports the owner's own account either way — a token cannot
+/// elevate, so nothing about who the request runs as changes. This only labels the row for the audit
+/// trail and the banner, the same two places <see cref="ISupportSession"/> is read from and nowhere
+/// business logic has any reason to ask.
+/// </para>
+/// </summary>
+public interface ISignInTokenSession
+{
+    /// <summary>The <c>SignInToken</c> row this session was opened with, or null when this session was
+    /// not opened by one.</summary>
+    Guid? SignInTokenId { get; }
+
+    /// <summary>Whether a token-opened session is in force at all.</summary>
+    bool IsActive => SignInTokenId is not null;
+}
+
+/// <summary>The answer everywhere that is not a browser request under a token session: background
+/// jobs, the CLI and the deploy pipeline have no claims to read and must never be labelled this way.</summary>
+public sealed class NoSignInTokenSession : ISignInTokenSession
+{
+    public static readonly NoSignInTokenSession Instance = new();
+    public Guid? SignInTokenId => null;
+}
+
 /// <summary>Removes known secret values from a string before it is logged or displayed.</summary>
 public interface ISecretRedactor
 {

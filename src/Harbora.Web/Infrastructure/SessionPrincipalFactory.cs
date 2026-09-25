@@ -14,11 +14,20 @@ public static class SessionPrincipalFactory
     /// the session is still alive. <c>WorkspaceMembershipValidationMiddleware</c> re-reads the row
     /// on every request for that, so nothing here can outlive it.
     /// </param>
+    /// <param name="signInToken">
+    /// The <see cref="SignInToken"/> a redemption is opening this cookie under. The same discipline as
+    /// <paramref name="support"/> applies: the claim it adds names the row, the middleware re-reads the
+    /// row on every request, and nothing here is the authority on whether the hour is still running.
+    /// Mutually exclusive with <paramref name="support"/> in practice — a token session signs in fresh
+    /// via <see cref="Create"/> rather than layering onto an existing principal, the same as a support
+    /// session does — but nothing here enforces that beyond neither caller ever passing both.
+    /// </param>
     public static ClaimsPrincipal Create(
         User user, Guid workspaceId, WorkspaceRole workspaceRole,
         string authenticationType = CookieAuthenticationDefaults.AuthenticationScheme,
         Guid? sessionId = null,
-        SupportSession? support = null)
+        SupportSession? support = null,
+        SignInToken? signInToken = null)
     {
         var claims = new List<Claim>
         {
@@ -36,6 +45,8 @@ public static class SessionPrincipalFactory
             claims.Add(new Claim(HarboraClaims.SupportAdmin, support.AdminUserId.ToString()));
             claims.Add(new Claim(HarboraClaims.SupportAdminEmail, support.AdminEmail));
         }
+        if (signInToken is not null)
+            claims.Add(new Claim(HarboraClaims.SignInTokenSession, signInToken.Id.ToString()));
         return new ClaimsPrincipal(new ClaimsIdentity(claims, authenticationType));
     }
 }

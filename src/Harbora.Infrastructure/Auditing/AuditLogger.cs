@@ -16,6 +16,9 @@ namespace Harbora.Infrastructure.Auditing;
 /// session, every row it writes is stamped with both ids and its action gains a <c>support.</c>
 /// prefix. Doing it centrally is the whole point — no caller has to remember, so no caller can
 /// forget, and a support session cannot perform an audited act that reads as the customer's own.
+/// A session opened by a <c>SignInToken</c> gets the identical treatment, one layer down: a
+/// <c>token.</c> prefix and a <see cref="Domain.Auditing.AuditLog.SignInTokenId"/> stamp, so an
+/// agent's act reads apart from the owner's own act just as a support engineer's does.
 /// </para>
 /// </summary>
 public sealed class AuditLogger(
@@ -23,7 +26,8 @@ public sealed class AuditLogger(
     ICurrentUser currentUser,
     ISystemClock clock,
     ISupportSession support,
-    ILogger<AuditLogger> logger) : IAuditLogger
+    ILogger<AuditLogger> logger,
+    ISignInTokenSession? signInToken = null) : IAuditLogger
 {
     /// <summary>
     /// What every action performed under a support session is called instead. Applied once: an
@@ -32,11 +36,26 @@ public sealed class AuditLogger(
     /// </summary>
     public const string SupportPrefix = "support.";
 
+    /// <summary>The analogous prefix for a session a <see cref="SignInToken"/> opened — see
+    /// <see cref="SupportPrefix"/>'s own remark; the same idempotence applies.</summary>
+    public const string TokenPrefix = "token.";
+
     /// <summary>The action string an entry would be written under, given who is really acting.</summary>
     public static string ActionUnderSupport(string action, bool underSupport) =>
         underSupport && !action.StartsWith(SupportPrefix, StringComparison.Ordinal)
             ? SupportPrefix + action
             : action;
+
+    /// <summary>The token-session counterpart of <see cref="ActionUnderSupport"/>.</summary>
+    public static string ActionUnderSignInToken(string action, bool underToken) =>
+        underToken && !action.StartsWith(TokenPrefix, StringComparison.Ordinal)
+            ? TokenPrefix + action
+            : action;
+
+    /// <summary>Defaults to "nobody" for every call site that constructs this directly (every existing
+    /// test) rather than through DI — the same accommodation <paramref name="support"/> does not need
+    /// only because it predates this feature and every call site already supplies it.</summary>
+    private readonly ISignInTokenSession _tokenSession = signInToken ?? NoSignInTokenSession.Instance;
 
     public async Task LogAsync(
         string action,
@@ -57,13 +76,15 @@ public sealed class AuditLogger(
                 // otherwise would misattribute every ordinary act back to the administrator.
                 UserId = userIdOverride ?? currentUser.UserId,
                 ActorEmail = actorEmailOverride ?? currentUser.Email ?? "anonymous",
-                Action = ActionUnderSupport(action, support.IsActive),
+                Action = ActionUnderSignInToken(
+                    ActionUnderSupport(action, support.IsActive), _tokenSession.IsActive),
                 TargetType = targetType,
                 TargetId = targetId,
                 IpAddress = ipAddress,
                 MetadataJson = metadataJson,
                 SupportSessionId = support.SessionId,
                 SupportAdminUserId = support.AdminUserId,
+                SignInTokenId = _tokenSession.SignInTokenId,
                 // Exactly what the caller passed — never ICurrentUser.WorkspaceId as a fallback. See
                 // IAuditLogger.LogAsync's own remark: this sink has no way to tell "the caller forgot"
                 // from "this action genuinely has no workspace", so it does not guess either way.

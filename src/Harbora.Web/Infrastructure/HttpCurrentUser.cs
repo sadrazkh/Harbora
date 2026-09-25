@@ -44,6 +44,18 @@ public sealed class HttpSupportSession(IHttpContextAccessor accessor) : ISupport
     public string? AdminEmail => User?.FindFirstValue(HarboraClaims.SupportAdminEmail);
 }
 
+/// <summary>Reads the sign-in-token-session claim off the cookie, the same way
+/// <see cref="HttpSupportSession"/> reads the support one. <c>WorkspaceMembershipValidationMiddleware</c>
+/// re-reads the <c>SignInToken</c> row on every request, so by the time anything asks this, the claim
+/// it reports has already been checked against the database for this request.</summary>
+public sealed class HttpSignInTokenSession(IHttpContextAccessor accessor) : ISignInTokenSession
+{
+    public Guid? SignInTokenId =>
+        Guid.TryParse(accessor.HttpContext?.User.FindFirstValue(HarboraClaims.SignInTokenSession), out var id)
+            ? id
+            : null;
+}
+
 public static class HarboraClaims
 {
     public const string Workspace = "workspace";
@@ -58,4 +70,8 @@ public static class HarboraClaims
 
     /// <summary>Their address, so an audit row and a banner can name them without a join.</summary>
     public const string SupportAdminEmail = "support_admin_email";
+
+    /// <summary>The <c>SignInToken</c> row a session was opened with. The row is the truth, exactly as
+    /// <see cref="SupportSession"/> is for borrowed platform access.</summary>
+    public const string SignInTokenSession = "signin_token_id";
 }

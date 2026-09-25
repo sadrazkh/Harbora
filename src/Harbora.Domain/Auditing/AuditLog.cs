@@ -35,6 +35,15 @@ public class AuditLog : BaseEntity
     public Guid? SupportAdminUserId { get; set; }
 
     /// <summary>
+    /// The <c>SignInToken</c> a session was opened with, when this row was written under one — the
+    /// same attribution <see cref="SupportSessionId"/> carries for borrowed platform access, threaded
+    /// the same way: <see cref="UserId"/> still names the owner's own account (a token cannot elevate,
+    /// so that much never changes), and this column is what tells an agent's act apart from the owner's
+    /// own, on the same row shape a customer's support-access page already knows how to read.
+    /// </summary>
+    public Guid? SignInTokenId { get; set; }
+
+    /// <summary>
     /// The workspace this action happened in, or null when it genuinely has none (doc 10 §2.13,
     /// HARBORA-0056). Written once, at the time of the action, by whichever caller of
     /// <c>IAuditLogger.LogAsync</c> knows it — never guessed here and never defaulted from the

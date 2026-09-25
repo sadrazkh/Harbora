@@ -57,6 +57,16 @@ public class HarboraDbContext : DbContext
     /// out of another's page.
     /// </summary>
     public DbSet<SupportSession> SupportSessions => Set<SupportSession>();
+
+    /// <summary>
+    /// One-time tokens an owner mints so their own agent can sign in as them. Deliberately NO global
+    /// workspace filter, for the same reason as <see cref="SupportSessions"/> just above:
+    /// <c>SignInTokenService.LiveAsync</c> runs from middleware before any workspace scope exists, and
+    /// a lookup by <c>TokenHash</c> at redemption time has no signed-in caller to scope by at all. Every
+    /// tenant-facing read of this table (the owner's own list) filters explicitly by
+    /// <c>CreatedByUserId ==</c> instead.
+    /// </summary>
+    public DbSet<SignInToken> SignInTokens => Set<SignInToken>();
     public DbSet<Workspace> Workspaces => Set<Workspace>();
     public DbSet<WorkspaceMember> WorkspaceMembers => Set<WorkspaceMember>();
     public DbSet<WorkspaceInvitation> WorkspaceInvitations => Set<WorkspaceInvitation>();
@@ -306,6 +316,19 @@ public class HarboraDbContext : DbContext
             e.Property(x => x.IpAddress).HasMaxLength(64);
             // No navigation to User on purpose: AdminEmail is copied onto the row so a deleted
             // administrator does not turn a customer's support history into a list of blanks.
+        });
+
+        b.Entity<SignInToken>(e =>
+        {
+            // Redemption looks a token up by its hash alone — there is no signed-in caller yet to
+            // scope the read by. The owner's own list reads the other index, newest first.
+            e.HasIndex(x => x.TokenHash).IsUnique();
+            e.HasIndex(x => new { x.CreatedByUserId, x.CreatedAt });
+            e.Property(x => x.Purpose).HasMaxLength(SignInTokenAccess.MaxPurposeLength).IsRequired();
+            e.Property(x => x.RedeemedIp).HasMaxLength(64);
+            // No navigation to User: both ids on this row already name the same account (a token
+            // cannot elevate), and every read of it is by hash or by that id directly rather than by a
+            // join, the same shape ApiTokens and UserSessions above already use.
         });
 
         // Sub-project 4 (2026-08-20 platform-options plan).
@@ -1229,6 +1252,8 @@ public class HarboraDbContext : DbContext
             // per session; without this it is a table scan of every audit row the platform ever
             // wrote, on a page a worried customer opens.
             e.HasIndex(x => x.SupportSessionId);
+            // The identical read, for an owner asking what their own agent did under a token session.
+            e.HasIndex(x => x.SignInTokenId);
 
             // HARBORA-0056: deliberately NOT workspace-filtered, the same reasoning Job's and
             // NotificationDelivery's own remarks give — WorkspaceId is null for most rows (every

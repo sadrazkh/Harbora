@@ -18,12 +18,20 @@ namespace Harbora.Web.Infrastructure;
 /// on the request for the banner to draw. An expiry that lived only in the cookie would be an expiry
 /// whoever holds the cookie decides.
 /// </para>
+///
+/// <para>
+/// A session a <c>SignInToken</c> opened is checked immediately afterwards, by the identical means —
+/// see <see cref="Harbora.Infrastructure.Identity.SignInTokenService.LiveAsync"/>. An agent handed a
+/// token and then revoked mid-task stops at the very next request it makes, not whenever its ordinary
+/// seven-day session would otherwise have run out.
+/// </para>
 /// </summary>
 public sealed class WorkspaceMembershipValidationMiddleware(RequestDelegate next)
 {
     public async Task InvokeAsync(
         HttpContext context, HarboraDbContext db,
-        Harbora.Infrastructure.Identity.SupportSessionService supportSessions)
+        Harbora.Infrastructure.Identity.SupportSessionService supportSessions,
+        Harbora.Infrastructure.Identity.SignInTokenService signInTokens)
     {
         if (context.User.Identity?.IsAuthenticated != true)
         {
@@ -92,6 +100,28 @@ public sealed class WorkspaceMembershipValidationMiddleware(RequestDelegate next
                 }
 
                 context.Items[SupportSessionView.ItemKey] = support;
+            }
+
+            // The sign-in-token session, if this cookie was issued under one — the identical treatment
+            // just given the support claim above, for the identical reason: the token's own hour is
+            // enforced against the row, not the cookie, so a cookie whose row was revoked a second ago
+            // stops at the very next request rather than riding out its ordinary seven-day session.
+            if (context.User.FindFirstValue(HarboraClaims.SignInTokenSession) is { } tokenValue)
+            {
+                if (!Guid.TryParse(tokenValue, out var signInTokenId))
+                {
+                    await RejectAsync(context, "signin-token-session");
+                    return;
+                }
+
+                var token = await signInTokens.LiveAsync(signInTokenId, userId, context.RequestAborted);
+                if (token is null)
+                {
+                    await RejectAsync(context, "signin-token-session");
+                    return;
+                }
+
+                context.Items[SignInTokenSessionView.ItemKey] = token;
             }
         }
 

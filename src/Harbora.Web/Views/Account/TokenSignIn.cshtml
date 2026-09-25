@@ -1,0 +1,25 @@
+@model TokenSignInViewModel
+@{
+    Layout = "_Auth";
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+}
+<h1 class="title">@(isFa ? "ورود با توکن" : "Sign in with a token")</h1>
+<p class="subtitle">
+    @(isFa
+        ? "توکنی که برای شما ساخته شده را اینجا بچسبانید."
+        : "Paste the one-time token you were given.")
+</p>
+
+@if (Model.Error is not null)
+{
+    <div class="error" data-signin-token-error>@Model.Error</div>
+}
+
+<form asp-controller="Account" asp-action="SubmitTokenSignIn" method="post">
+    @Html.AntiForgeryToken()
+    <div class="field">
+        <label>@(isFa ? "توکن" : "Token")</label>
+        <input name="token" autocomplete="off" autofocus required dir="ltr" />
+    </div>
+    <button type="submit" class="btn btn-primary">@(isFa ? "ورود" : "Sign in")</button>
+</form>

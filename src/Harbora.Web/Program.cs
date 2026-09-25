@@ -74,6 +74,9 @@ builder.Services.AddScoped<ICurrentUser, HttpCurrentUser>();
 builder.Services.AddScoped<ISupportSession, HttpSupportSession>();
 // What the banner draws: the validated row, put on the request by the membership middleware.
 builder.Services.AddScoped<Harbora.Web.Infrastructure.SupportSessionView>();
+// The identical pair, for a session a SignInToken opened rather than a support impersonation.
+builder.Services.AddScoped<ISignInTokenSession, HttpSignInTokenSession>();
+builder.Services.AddScoped<Harbora.Web.Infrastructure.SignInTokenSessionView>();
 // Drives the DbContext's global query filters. Registered here (not in Infrastructure) because only
 // the web host has requests to scope; background work resolves the system scope and spans tenants.
 builder.Services.AddScoped<IWorkspaceScope, HttpWorkspaceScope>();

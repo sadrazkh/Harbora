@@ -1,0 +1,124 @@
+@model SignInTokensPageViewModel
+@using Harbora.Domain.Identity
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+}
+<div class="max-w-3xl space-y-5" data-signin-tokens>
+    <partial name="Design/_PageHeader" model="@(new PageHeaderModel(
+        isFa ? "توکن‌های ورود یک‌بارمصرف" : "One-time sign-in tokens",
+        isFa
+            ? "یک توکن بسازید و آن را به یک عامل هوش مصنوعی بدهید تا یک‌بار به‌جای شما وارد پنل شود، کارش را انجام دهد و نشستش پایان یابد."
+            : "Mint a token and hand it to an AI agent so it can sign in to the panel as you once, do its work, and be done."))" />
+
+    @if (Model.Error is not null)
+    {
+        <div class="rounded-lg bg-danger-soft border border-danger text-danger px-4 py-2 text-sm" data-signin-token-error>@Model.Error</div>
+    }
+
+    @if (Model.MintedPlaintext is not null)
+    {
+        @* Shown exactly once, on the response to the mint itself — never re-read from storage,
+           because it is never stored. Reloading this page will not bring it back. *@
+        <div class="rounded-xl border border-ok bg-ok-soft p-4 text-sm" data-signin-token-minted>
+            <p class="font-semibold text-ok">
+                @(isFa
+                    ? "این توکن را همین حالا کپی کنید — دیگر نمایش داده نمی‌شود."
+                    : "Copy this token now — it will not be shown again.")
+            </p>
+            <p class="mt-1 text-xs text-ok">@Model.MintedPurpose</p>
+            <div class="mt-2 flex items-center gap-2">
+                <code id="signin-token-secret" class="block flex-1 break-all rounded bg-surface px-3 py-2 font-mono text-xs text-ink" dir="ltr">@Model.MintedPlaintext</code>
+                <button type="button" data-copy-signin-token class="shrink-0 rounded-lg border border-line bg-surface px-3 py-2 text-xs font-semibold text-ink hover:bg-surface-2">
+                    @(isFa ? "کپی" : "Copy")
+                </button>
+            </div>
+        </div>
+    }
+
+    <section class="rounded-xl border border-line bg-surface p-4">
+        <h2 class="text-sm font-semibold text-ink mb-3">@(isFa ? "ساخت توکن تازه" : "Mint a new token")</h2>
+        <form asp-controller="Account" asp-action="CreateToken" method="post" class="space-y-3">
+            @Html.AntiForgeryToken()
+            <div>
+                <label for="signin-token-purpose" class="block text-sm text-ink-muted mb-1">
+                    @(isFa ? "این توکن برای چیست؟" : "What is this token for?")
+                </label>
+                <input id="signin-token-purpose" name="purpose" value="@Model.Purpose" autocomplete="off"
+                       maxlength="@Model.MaxPurposeLength"
+                       placeholder="@(isFa ? "مثلاً: رفع خطای استقرار روی shop" : "e.g. fixing the failing deploy on shop")"
+                       class="w-full rounded-lg bg-canvas border border-line px-3 py-2 text-sm" />
+                <p class="mt-1 text-xs text-ink-faint">
+                    @(isFa
+                        ? "این جمله روی نوار نشست عامل هم دیده می‌شود."
+                        : "The agent's banner shows this sentence too.")
+                </p>
+            </div>
+            <p class="text-xs text-ink-faint">
+                @(isFa
+                    ? $"توکن تا {Model.RedemptionLifetimeMinutes} دقیقه قابل استفاده است؛ پس از استفاده، نشستی تا {Model.SessionLifetimeMinutes} دقیقه باز می‌ماند."
+                    : $"The token itself stays redeemable for {Model.RedemptionLifetimeMinutes} minutes; once used, the session it opens stays live for up to {Model.SessionLifetimeMinutes} minutes.")
+            </p>
+            <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">
+                @(isFa ? "ساخت توکن" : "Mint token")
+            </button>
+        </form>
+    </section>
+
+    <section class="rounded-xl border border-line bg-surface">
+        <h2 class="text-sm font-semibold text-ink px-4 pt-4">@(isFa ? "توکن‌های شما" : "Your tokens")</h2>
+        @if (Model.Tokens.Count == 0)
+        {
+            <partial name="Design/_EmptyState" model="@(new EmptyStateModel(
+                "key-round",
+                isFa ? "هنوز هیچ توکنی نساخته‌اید." : "You have not minted a token yet."))" />
+        }
+        else
+        {
+            <div class="divide-y divide-line">
+                @foreach (var token in Model.Tokens)
+                {
+                    var (label, tone) = token.Status switch
+                    {
+                        SignInTokenStatus.Unredeemed => (isFa ? "استفاده‌نشده" : "unredeemed", "info"),
+                        SignInTokenStatus.RedeemedLive => (isFa ? "نشست فعال" : "session live", "warn"),
+                        SignInTokenStatus.Spent => (isFa ? "استفاده‌شده" : "spent", "idle"),
+                        SignInTokenStatus.Revoked => (isFa ? "لغوشده" : "revoked", "error"),
+                        SignInTokenStatus.Expired => (isFa ? "منقضی‌شده" : "expired", "idle"),
+                        _ => (isFa ? "نامشخص" : "unknown", "idle")
+                    };
+                    <div class="flex flex-wrap items-center gap-3 px-4 py-3 text-sm" data-signin-token-row="@token.Id">
+                        <partial name="Design/_StatusPill" model="@(new StatusPillModel(label, tone))" />
+                        <span class="min-w-0 flex-1 truncate text-ink">@token.Purpose</span>
+                        <span class="font-mono text-xs text-ink-faint" dir="ltr">@token.CreatedAt.ToLocalTime().ToString(Dates.Stamp)</span>
+                        @if (token.Status is SignInTokenStatus.Unredeemed or SignInTokenStatus.RedeemedLive)
+                        {
+                            <form method="post" asp-controller="Account" asp-action="RevokeToken" asp-route-id="@token.Id">
+                                @Html.AntiForgeryToken()
+                                <button class="rounded-lg border border-line px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger-soft">
+                                    @(isFa ? "لغو" : "Revoke")
+                                </button>
+                            </form>
+                        }
+                    </div>
+                }
+            </div>
+        }
+    </section>
+</div>
+
+@section Scripts {
+<script>
+    (function () {
+        var button = document.querySelector('[data-copy-signin-token]');
+        var code = document.getElementById('signin-token-secret');
+        if (!button || !code) return;
+        button.addEventListener('click', function () {
+            navigator.clipboard.writeText(code.textContent || '').then(function () {
+                var original = button.textContent;
+                button.textContent = '@(isFa ? "کپی شد" : "Copied")';
+                setTimeout(function () { button.textContent = original; }, 1500);
+            });
+        });
+    })();
+</script>
+}

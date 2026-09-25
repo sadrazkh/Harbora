@@ -56,3 +56,7 @@
         </form>
     </div>
 }
+@* _Layout.cshtml renders this one partial unconditionally on every page — the sign-in-token banner
+   below rides along in the same slot rather than needing a second line added there, the same way
+   _AnnouncementBanner composes beside this one instead of fighting it. *@
+<partial name="_SignInTokenSessionBanner" />

@@ -30,6 +30,7 @@ public sealed partial class AccountController(
     AccountSessionService sessions,
     ExternalLoginSettingsService externalLogins,
     SingleSignOnRequirementService ssoRequirement,
+    Harbora.Infrastructure.Identity.SignInTokenService signInTokens,
     IJobQueue jobs) : Controller
 {
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
