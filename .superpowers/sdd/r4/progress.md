@@ -146,3 +146,58 @@ Worth considering as a follow-up rather than a one-off shell command: the platfo
 tagged images and nothing else, so a dangling-image sweep — opt-in, reported, with the same
 per-server and not-examined discipline the rest of `DiskCleanupService` keeps — is the missing half
 of the feature. That is a design decision, not a bug fix, so it belongs in a plan.
+
+---
+
+# 2026-09-26 — the prune, and what the deploy history shows
+
+## Pruned, on the owner's instruction
+
+```
+before:  /dev/sda1 96G 92G 4.3G 96%    199 images, 165 dangling
+docker image prune -f      → 69.78 GB reclaimed
+docker builder prune -f    →  0.52 GB reclaimed
+after:   /dev/sda1 96G 27G  70G 28%     35 images
+```
+
+All 13 running containers identical before and after (names diffed), panel healthy, `0.10.0`.
+
+Still reclaimable: 6.9 GB of **tagged but unused** images — old `dotnet/sdk:8.0`/`9.0` bases, the
+n8n image, and two stale panel rollback tags (`before-docker29`, `before-0.10.0`). Not touched:
+removing them needs `prune -a`, which also removes build bases and forces re-pulls. Owner's call.
+
+## The transport fix is proven in production
+
+DriveUnion #40, 2026-09-11 08:07 — the first deployment after `0e8ee95`/`b5c7e28` went live — succeeded,
+and so did 41, 42, 43. Loomi, xuifleet and subscriptionlink have deployed repeatedly since. The Broken
+pipe is gone.
+
+## Two defects the history exposes — not fixed, waiting for a decision
+
+**1. `--cache-from` on the classic builder fails intermittently on Docker 29.** Loomi #9 and #12 and
+DriveUnion #44 all died on the same daemon error:
+
+```
+failed to restore cached image from "sha256:…" to sha256:…: failed to create cache image: …
+```
+
+Each was followed by a retry that succeeded. The classic builder is deprecated in Docker 29 and its
+cache-restore path is the flaky part — so the owner's original suspicion of cache-from was half right:
+it was not what caused the Broken pipe, but it does break some builds on its own.
+
+**2. When that error arrives as a plain `stream` line, the build is reported as successful.** For
+DriveUnion #44 the daemon sent it as an error message and `DescribesBuildFailure` caught it: *"Build of
+harbora/driveunion:build-44 failed at Step 19/23"*. For Loomi #12 the identical error arrived as an
+ordinary progress line (log sequence 67), nothing flagged it, the pipeline went on to *"Starting
+container …-loomi-12"*, and failed with `No such image: harbora/loomi:build-12`.
+
+That is the exact case `BuildImageFromTarAsync`'s own doc comment says it closes — *"the failure then
+only surfaces two steps later, as a confusing 'No such image'"* — still open for this message shape.
+
+## Recommended next step
+
+- After a build returns, **confirm the tag exists** before anything tries to run it; if it does not,
+  fail there with the last build lines. Closes defect 2 whatever shape the daemon's error takes, rather
+  than chasing message formats.
+- On a cache-restore failure, **retry once without `--cache-from`**. Keeps the feature the owner wants
+  to keep, and turns defect 1 from a failed deploy into a slower one.
