@@ -98,3 +98,51 @@ I was verifying three other worktrees concurrently. Worth remembering before ass
 check the load first.
 
 The WIP rescue was right anyway. An earlier round lost a complete sub-project exactly this way.
+
+---
+
+# The disk measurement, taken after the deploy — and it changes the picture
+
+Measured on the live server once the tooling let me:
+
+```
+/dev/sda1  96G  92G  4.3G  96% /
+
+docker system df
+Images          199 total,  15 active,  83.76GB,  70.16GB reclaimable (83%)
+Build Cache     196 total,   0 active,   9.22GB
+Local Volumes    62 total,  16 active,   1.86GB
+```
+
+**165 of the images are dangling — untagged, unreferenced — against 35 tagged.** Individual sizes
+show many at 4.09 GB and 2.67 GB; the honest total is Docker's own **70.16 GB reclaimable**, not the
+sum of those, for exactly the shared-layer reason the new report page states.
+
+## What this means for the feature that just shipped
+
+Harbora's own build images are **13 images, roughly 10 GB**, and they are already at about two per
+app — so setting retention to 2 changes almost nothing here, and a **Clean up disk** run would
+reclaim very little.
+
+`DiskCleanupService` only ever considers images under the `harbora/` prefix. That is deliberate and
+correct — it must never delete a customer's image — but it means the platform's own cleanup is
+structurally blind to the 70 GB actually filling this disk. The new report inherits the same blind
+spot, because it reuses the same candidate rule on purpose.
+
+So the honest summary: the round delivered what was asked for, and **it is not what is filling the
+disk.** The report will say "10 GB of build images, little reclaimable" on a machine that is 96% full.
+
+## What is actually filling it
+
+Leftover intermediate build images. The 2.67 GB and 4.09 GB dangling entries line up with repeated
+Loomi and panel builds — every rebuild leaves its predecessor's intermediate layers untagged, and
+nothing on this platform removes those.
+
+Reclaiming them is `docker image prune` (dangling only, keeps anything any container references) plus
+`docker builder prune` for the 9.2 GB of build cache. Neither was run: deleting ~70 GB on production
+is irreversible and was outside what had been authorised. **This is the first decision waiting.**
+
+Worth considering as a follow-up rather than a one-off shell command: the platform prunes its own
+tagged images and nothing else, so a dangling-image sweep — opt-in, reported, with the same
+per-server and not-examined discipline the rest of `DiskCleanupService` keeps — is the missing half
+of the feature. That is a design decision, not a bug fix, so it belongs in a plan.
