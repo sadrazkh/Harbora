@@ -95,7 +95,27 @@ public sealed class HarboraWebFactory(
         // and refusing is the point of that check.
         builder.UseSetting("Harbora:MasterKey", MasterKey);
         builder.UseSetting("Harbora:DataProtectionKeysPath", Path.Combine(_stateDirectory, "keys"));
-        builder.UseSetting("Harbora:WorkDir", Path.Combine(_stateDirectory, "work"));
+
+        // Every option whose shipped default is a system path under /var/lib or /etc, pointed at this
+        // run's scratch directory. Two ways that went wrong before this block existed:
+        //
+        //  * It was set as "Harbora:WorkDir". HarboraRuntimeOptions binds the "Runtime" section and
+        //    nothing reads "Harbora:WorkDir", so the override was dead and the real work directory
+        //    stayed /var/lib/harbora/builds. Nothing failed only because no HTTP test builds yet.
+        //  * Backups:StagingDir was never set at all. On Windows "/var/lib/harbora/backups" is
+        //    drive-relative, so the suite quietly created E:\var\lib\harbora\backups and filled it
+        //    with restored dumps. On a Linux CI runner the same path is a real system directory a
+        //    non-root user cannot create, so every restore and import test returned 500 — invisible
+        //    for seven weeks because CI never loaded.
+        //
+        // HarboraWebFactoryIsolationTests reads these back out of the bound options, so a key that
+        // binds nothing fails a test instead of passing silently.
+        builder.UseSetting("Runtime:WorkDir", Path.Combine(_stateDirectory, "work"));
+        builder.UseSetting("Backups:StagingDir", Path.Combine(_stateDirectory, "backups"));
+        builder.UseSetting("Backups:Kopia:ConfigDirectory", Path.Combine(_stateDirectory, "kopia"));
+        builder.UseSetting("Backups:Kopia:CacheDirectory", Path.Combine(_stateDirectory, "kopia", "cache"));
+        builder.UseSetting("Backups:Module:RestoreRoot", Path.Combine(_stateDirectory, "restore"));
+        builder.UseSetting("Backups:Module:StagingDirectory", Path.Combine(_stateDirectory, "module-staging"));
 
         // appsettings.json's default is /etc/harbora/traefik/dynamic/harbora.yml. IProxyEngine is NOT
         // substituted here — the real TraefikProxyEngine runs, so a test that actually reaches
