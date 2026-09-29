@@ -167,6 +167,31 @@ public sealed class DiskUsageReportDanglingTests : IDisposable
     }
 
     [Fact]
+    public async Task A_total_that_leaves_out_unread_dangling_images_says_so()
+    {
+        await AddServerAsync("panel", local: true);
+        var remote = await AddServerAsync("web-02");
+        _engines.On(remote.Id, new RemoteDockerEngine(
+            new StubAgentHandler.Factory(StubAgentHandler.OldAgent("[]")), "http://web-02.example.com", "token"));
+
+        var report = await Report().BuildAsync(default);
+
+        report.AnyNotExamined.Should().BeFalse("both servers were examined for tagged images");
+        report.AnyDanglingNotExamined.Should().BeTrue(
+            "but one could not be read for dangling images, so the total silently excludes them");
+    }
+
+    [Fact]
+    public async Task A_report_where_every_server_was_read_for_dangling_images_makes_no_such_claim()
+    {
+        await AddServerAsync("panel", local: true);
+
+        var report = await Report().BuildAsync(default);
+
+        report.AnyDanglingNotExamined.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task A_daemon_that_fails_the_dangling_read_does_not_fail_the_report()
     {
         await AddServerAsync("panel", local: true);

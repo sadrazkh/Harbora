@@ -112,12 +112,21 @@ public sealed record DiskUsageReportResult(IReadOnlyList<ServerDiskUsage> Server
 
     public bool AnyExamined => Servers.Any(s => s.NotExamined is null);
     public bool AnyNotExamined => Servers.Any(s => s.NotExamined is not null);
+
+    /// <summary>A server that WAS examined for tagged images but whose dangling images could not be read
+    /// — an agent too old to have the endpoint, a daemon that failed. Its dangling images are missing
+    /// from <see cref="ReclaimableBytes"/>, and the page has to say so rather than let a total that
+    /// excludes them read as complete.</summary>
+    public bool AnyDanglingNotExamined =>
+        Servers.Any(s => s.NotExamined is null && s.Dangling.NotExamined is not null);
 }
 
 /// <summary>
 /// The read-only half of what <see cref="DiskCleanupService"/> would do: per server, per app, the
 /// build-image count and bytes, which tag is active, which are rollback-eligible, and which a cleanup
-/// would remove right now — plus orphaned build images and known app-volume sizes.
+/// would remove right now — plus orphaned build images, known app-volume sizes, and each server's
+/// dangling (untagged, unreferenced) images, which every figure before them is blind to because they
+/// all read tagged images.
 ///
 /// <para>
 /// Every figure that decides "what is prunable" is the cleanup's own: <see cref="CleanupPlan.OrphanedBuildImages"/>
@@ -130,7 +139,7 @@ public sealed record DiskUsageReportResult(IReadOnlyList<ServerDiskUsage> Server
 /// <para>
 /// <see cref="ServerDiskUsage.ReclaimableBytes"/> sums on-host image sizes for the candidates above.
 /// That is deliberately an upper bound, not a prediction: Docker images share layers, so two prunable
-/// tags can double-count the same bytes on disk. <see cref="DiskCleanupService.RunAsync"/> itself never
+/// tags — or a dangling image and a tagged one — can double-count the same bytes on disk. <see cref="DiskCleanupService.RunAsync"/> itself never
 /// trusts this kind of sum — it measures the disk's own before/after difference — and a page that
 /// quoted this figure as an exact promise would teach people to distrust it the first time a real
 /// cleanup freed less. Say so on the page, not just here.

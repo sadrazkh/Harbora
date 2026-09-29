@@ -37,6 +37,16 @@
             ? "این عدد یک سقف بالاست، نه یک وعده: ایمیج‌های Docker لایه‌های مشترک دارند، پس جمع‌زدن اندازه‌ی هر ایمیج می‌تواند بیش از آنچه پاک‌سازی واقعاً آزاد می‌کند نشان دهد. به همین دلیل خود پاک‌سازی، اختلاف واقعیِ پیش و پس از حذف را روی دیسک اندازه می‌گیرد، نه این جمع را."
             : "This figure is an upper bound, not a promise: Docker images share layers, so adding up each image's own size can overstate what a cleanup actually frees. That is exactly why the cleanup itself measures the disk's real before/after difference rather than trusting this sum.")
     </p>
+    @if (Model.AnyDanglingNotExamined)
+    {
+        @* Distinct from the warning below: these servers WERE examined for tagged images, so they are
+           inside the total — but their dangling images were not read, and are not. *@
+        <p class="mt-2 text-xs text-warn" data-dangling-not-in-total>
+            @(isFa
+                ? "این جمع ایمیج‌های بی‌برچسب (dangling) سرورهایی را که در زیر «بررسی نشد» خورده‌اند شامل نمی‌شود."
+                : "This total does not include the dangling images of any server marked below as not examined for them.")
+        </p>
+    }
     @if (Model.AnyNotExamined)
     {
         <p class="mt-2 text-xs text-warn">

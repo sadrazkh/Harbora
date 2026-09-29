@@ -103,6 +103,8 @@ public class MonitoringDanglingHttpTests(HarboraHttpFixture fixture)
 
             html.Should().Contain("this agent is too old to be swept (test)");
             html.Should().Contain("Not examined:");
+            html.Should().Contain("does not include the dangling images",
+                "the reclaimable total excludes what could not be read, and the page says so above the servers");
         }
         finally
         {
