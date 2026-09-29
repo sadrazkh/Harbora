@@ -124,9 +124,27 @@ public sealed class WorkspaceFilterDeleteTests(PostgresLane lane)
         // exists as SQL, so it is pinned here. Both directions are below.
         var connectionString = await lane.FreshlyMigratedAsync("scoped_update");
 
-        var theirApp = new App { WorkspaceId = TenantTwo, Name = "api", Slug = "api", Status = AppStatus.Running };
+        // The other tenant's app needs a real environment to live in. 20260817214810_EnvironmentRequired
+        // made Apps.EnvironmentId NOT NULL with a foreign key; this test was written before that and
+        // never ran again until CI started loading, so it inserted Guid.Empty and failed on
+        // FK_Apps_Environments_EnvironmentId rather than on anything it exists to check.
+        var workspace = new Harbora.Domain.Identity.Workspace { Id = TenantTwo, Name = "tenant-two", Slug = "tenant-two" };
+        var project = new Harbora.Domain.Projects.Project { WorkspaceId = TenantTwo, Name = "shop", Slug = "shop" };
+        var environment = new Harbora.Domain.Projects.Environment
+        {
+            WorkspaceId = TenantTwo, ProjectId = project.Id,
+            Name = "production", Slug = "production", IsDefault = true
+        };
+        var theirApp = new App
+        {
+            WorkspaceId = TenantTwo, EnvironmentId = environment.Id,
+            Name = "api", Slug = "api", Status = AppStatus.Running
+        };
         await using (var system = PostgresLane.Open(connectionString))
         {
+            system.Workspaces.Add(workspace);
+            system.Projects.Add(project);
+            system.Environments.Add(environment);
             system.Apps.Add(theirApp);
             await system.SaveChangesAsync();
         }

@@ -107,40 +107,11 @@ internal static class UpgradeFromPreviousRelease
         await SeedBackupSnapshotsAsync(seed);
         await SeedRestoreJobsAsync(seed);
         await SeedTenancyPricingAsync(seed);
-        await SeedLogicalDatabaseMigrationAsync(seed);
     }
 
-    // ---------------------------------------------------------------------------------------
-    // LogicalDatabases (D1, 2026-08-25 shared-databases plan) — a ManagedService and its
-    // attachment exactly as they existed before this shipped, at a schema where
-    // ManagedServiceDatabases does not exist yet and AppManagedServices.ManagedServiceDatabaseId
-    // has not been added. What the migration must do to these rows is the whole point of D1's
-    // own safety requirement: materialise the instance's admin database as its first logical
-    // database, re-point the attachment at it, and change nothing an already-attached app reads.
-    // ---------------------------------------------------------------------------------------
+    // D1's LogicalDatabases seed moved to UpgradeAcrossLogicalDatabases: it needs its own boundary,
+    // immediately before that migration, not this file's 6 August one — see that class.
 
-    private static async Task SeedLogicalDatabaseMigrationAsync(SchemaSeed seed)
-    {
-        await seed.InsertAsync("Apps",
-            ("Id", Seeded.LegacyAttachedApp), ("WorkspaceId", Seeded.WorkspaceOne),
-            ("Name", "legacy-app"), ("Slug", "legacy-app"), ("ServerId", Seeded.Server));
-
-        // Type 0 is ManagedServiceType.PostgreSql, Status 1 is ServiceStatus.Running — frozen wire
-        // values, spelled as literals for the same reason the deployment-queue seed above does.
-        await seed.InsertAsync("ManagedServices",
-            ("Id", Seeded.LegacyDatabaseInstance), ("WorkspaceId", Seeded.WorkspaceOne),
-            ("ServerId", Seeded.Server), ("Name", "legacy-db"), ("Type", 0), ("Version", "16-alpine"),
-            ("Status", 1), ("ContainerName", "harbora-svc-legacy"), ("InternalPort", 5432),
-            ("Username", "harbora"), ("EncryptedPassword", "legacy-encrypted-admin-password"),
-            ("DatabaseName", "legacy_db"), ("VolumeName", "harbora-svc-legacy-data"));
-
-        // No ManagedServiceDatabaseId here — the column this migration adds does not exist at this
-        // schema, and the whole point is that the migration's own backfill is what sets it.
-        await seed.InsertAsync("AppManagedServices",
-            ("Id", Seeded.LegacyAttachment), ("AppId", Seeded.LegacyAttachedApp),
-            ("ManagedServiceId", Seeded.LegacyDatabaseInstance), ("Alias", "LEGACY_DB"),
-            ("AttachOrder", 1), ("HasUnpublishedChanges", false));
-    }
 
     // ---------------------------------------------------------------------------------------
     // PayAsYouGoBilling — ADD COLUMN "…Minor" bigint NULL, over rows that predate the price

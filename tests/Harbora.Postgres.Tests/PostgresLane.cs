@@ -49,6 +49,7 @@ public sealed class PostgresLane : IAsyncLifetime
 
     private readonly Lazy<Task<string>> _headSchema;
     private readonly Lazy<Task<UpgradedInstall>> _upgraded;
+    private readonly Lazy<Task<UpgradedInstall>> _upgradedAcrossLogicalDatabases;
 
     public PostgresLane()
     {
@@ -56,6 +57,8 @@ public sealed class PostgresLane : IAsyncLifetime
             () => FreshlyMigratedAsync("head"), LazyThreadSafetyMode.ExecutionAndPublication);
         _upgraded = new Lazy<Task<UpgradedInstall>>(
             () => UpgradeFromPreviousRelease.RunAsync(this), LazyThreadSafetyMode.ExecutionAndPublication);
+        _upgradedAcrossLogicalDatabases = new Lazy<Task<UpgradedInstall>>(
+            () => UpgradeAcrossLogicalDatabases.RunAsync(this), LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
     public async Task InitializeAsync()
@@ -131,6 +134,13 @@ public sealed class PostgresLane : IAsyncLifetime
     /// only read afterwards — see <see cref="UpgradeFromPreviousRelease"/>.
     /// </summary>
     public Task<UpgradedInstall> UpgradedAsync() => _upgraded.Value;
+
+    /// <summary>
+    /// A shared database carried across <c>LogicalDatabases</c> from the schema immediately before it —
+    /// see <see cref="UpgradeAcrossLogicalDatabases"/> for why that is not the same boundary as
+    /// <see cref="UpgradedAsync"/>.
+    /// </summary>
+    public Task<UpgradedInstall> UpgradedAcrossLogicalDatabasesAsync() => _upgradedAcrossLogicalDatabases.Value;
 
     /// <summary>
     /// A context over one of these databases. <paramref name="scope"/> defaults to the system scope,

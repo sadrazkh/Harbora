@@ -41,7 +41,7 @@ public sealed class LogicalDatabaseMigrationParityTests(PostgresLane lane)
     [PostgresFact]
     public async Task The_instances_existing_admin_database_becomes_its_one_default_logical_database()
     {
-        var upgraded = await lane.UpgradedAsync();
+        var upgraded = await lane.UpgradedAcrossLogicalDatabasesAsync();
         var service = await UpgradedReads.ManagedServiceAsync(upgraded.ConnectionString, Seeded.LegacyDatabaseInstance);
 
         var logical = await UpgradedReads.LogicalDatabaseForAsync(upgraded.ConnectionString, Seeded.LegacyDatabaseInstance);
@@ -56,7 +56,7 @@ public sealed class LogicalDatabaseMigrationParityTests(PostgresLane lane)
     [PostgresFact]
     public async Task An_attachment_that_predates_the_migration_is_re_pointed_at_the_default_database()
     {
-        var upgraded = await lane.UpgradedAsync();
+        var upgraded = await lane.UpgradedAcrossLogicalDatabasesAsync();
 
         var attachment = await UpgradedReads.AttachmentAsync(upgraded.ConnectionString, Seeded.LegacyAttachment);
         var logical = await UpgradedReads.LogicalDatabaseForAsync(upgraded.ConnectionString, Seeded.LegacyDatabaseInstance);
@@ -69,7 +69,7 @@ public sealed class LogicalDatabaseMigrationParityTests(PostgresLane lane)
     [PostgresFact]
     public async Task An_attached_apps_resolved_connection_string_is_unchanged_by_the_migration()
     {
-        var upgraded = await lane.UpgradedAsync();
+        var upgraded = await lane.UpgradedAcrossLogicalDatabasesAsync();
         var service = await UpgradedReads.ManagedServiceAsync(upgraded.ConnectionString, Seeded.LegacyDatabaseInstance);
 
         // The old scheme, spelled out exactly as ServiceCatalog.All[PostgreSql].Conn built it before
