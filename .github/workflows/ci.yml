@@ -331,7 +331,12 @@ jobs:
     steps:
       - name: No job may have failed, been skipped, or been cancelled
         run: |
-          results='${{ join(needs.*.result, " ") }}'
+          # Single quotes inside the expression, never double: GitHub's expression language has no
+          # double-quoted strings, and one `" "` here made this whole file invalid. From 2026-08-08
+          # every push produced a run with no jobs at all — named after the file path because the
+          # file never loaded — so for seven weeks nothing in this workflow executed, including the
+          # guard below that exists to stop a tick meaning less than "every suite ran".
+          results='${{ join(needs.*.result, ' ') }}'
           echo "Upstream job results: $results"
 
           for result in $results; do
