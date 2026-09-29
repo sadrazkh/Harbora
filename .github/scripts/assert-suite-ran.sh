@@ -123,9 +123,16 @@ def esc_prop(s):  # a property value (title=) must also escape ':' and ',' or th
 # the first run of this left no way to tell nine failures from nineteen.
 names = "\n".join(n for n, _ in failed)
 print(f"::error title={esc_prop(f'{suite} — all {len(failed)} failing test(s)')}::{esc(names)}")
-for name, text in failed[:8]:
+# One annotation per DISTINCT failure, not per test. When one broken fixture fails thirty tests with one
+# message, eight identical annotations crowd out the one test that failed for its own reason — which
+# is exactly how the first real Postgres run hid a sign-in-token failure behind a shared seed error.
+groups = {}
+for name, text in failed:
     first = "\n".join(text.splitlines()[:4])[:600] or "(no message recorded)"
-    print(f"::error title={esc_prop(suite + ' — ' + name)[:250]}::{esc(first)}")
+    groups.setdefault(first.splitlines()[0] if first else "", (first, []))[1].append(name)
+for key, (first, names_in_group) in list(groups.items())[:8]:
+    label = names_in_group[0] if len(names_in_group) == 1 else f"{names_in_group[0]} (+{len(names_in_group) - 1} more with this message)"
+    print(f"::error title={esc_prop(suite + ' — ' + label)[:250]}::{esc(first)}")
 for name, _ in failed:
     print(f"  - {name}")
 PY
