@@ -355,8 +355,8 @@ public sealed class DiskCleanupService(
             }
         }
 
-        // --- 3. Dangling images: the daemon's own prune, after the two above so the layers those
-        // removals orphan (an untagged parent left behind by a removed tag) are swept in the same run ---
+        // --- 3. Dangling images: the daemon's own prune. Last, so it sees the node as the first two
+        // sweeps left it — anything those removals leave untagged goes in this run, not the next one ---
         var dangling = await PruneDanglingAsync(docker, serverId, serverName, ct);
 
         // Measured after ALL THREE sweeps, so FreedBytes stays the honest total of the run rather than

@@ -62,6 +62,20 @@ public class RemoteDockerEngineDanglingTests
             "which is the only route from here to a named image");
     }
 
+    [Fact]
+    public void The_agent_serves_exactly_the_two_routes_the_engine_calls_and_hands_them_to_the_engine()
+    {
+        // The tests above prove which URLs the engine calls; nothing here can boot Harbora.Agent (it is
+        // its own host with no test project). This ties the two ends together at the source: if the
+        // agent's routes and the engine's URLs ever drift, every agent in the field reads as "too old"
+        // — a 404 — and nothing is swept, silently. The agent must also never answer 404 itself.
+        var program = File.ReadAllText(
+            Path.Combine(TestPaths.RepoRoot, "src", "Harbora.Agent", "Program.cs"));
+
+        program.Should().Contain("app.MapGet(\"/agent/images/dangling\", (IDockerEngine e, CancellationToken ct) => e.GetDanglingImagesAsync(ct));");
+        program.Should().Contain("app.MapPost(\"/agent/images/dangling/prune\", (IDockerEngine e, CancellationToken ct) => e.PruneDanglingImagesAsync(ct));");
+    }
+
     // ---- the agent predates them ----
 
     [Fact]
