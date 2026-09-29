@@ -40,6 +40,15 @@ internal sealed class DockerContainerExec(
     /// </summary>
     internal static readonly TimeSpan DefaultResizeTimeout = TimeSpan.FromSeconds(5);
 
+    // The browser sends a resize for every frame of a window drag, and the caller does not await
+    // them. Left alone they would race each other to the daemon over separate connections, and
+    // whichever landed last — not whichever was sent last — would be the size the shell kept. That
+    // is the symptom this exists to fix, so they go one at a time, in order, and one that has been
+    // overtaken by a newer size is not sent. Never disposed: it holds no wait handle, and a resize
+    // arriving after the session ended must find it working, not throw.
+    private readonly SemaphoreSlim _oneAtATime = new(1, 1);
+    private int _latest;
+
     public async Task<int> ReadAsync(Memory<byte> buffer, CancellationToken ct)
     {
         var scratch = new byte[buffer.Length];
@@ -72,6 +81,10 @@ internal sealed class DockerContainerExec(
     /// deliberately left without one: a second transport for endpoints no deployment runs on is
     /// code nobody exercises. On those the shell keeps the size it opened with.</para>
     ///
+    /// <para><b>One at a time, newest wins.</b> Resizes reach the daemon in the order they were made,
+    /// and one that a newer call has overtaken while it waited is dropped rather than sent — see
+    /// <c>_oneAtATime</c> for why the final size would otherwise be a matter of luck.</para>
+    ///
     /// <para><b>It never fails the session.</b> A resize that does not land is a wrongly-drawn
     /// screen; letting it escape would turn that into a lost one. The caller does not await this, so
     /// anything thrown would surface nowhere useful anyway. Cancellation — the session ending while
@@ -82,10 +95,22 @@ internal sealed class DockerContainerExec(
     {
         if (!DockerBuildTransport.Handles(endpoint)) return;
 
+        // Numbered before the first await, so the numbers follow the order the calls were made in.
+        var mine = Interlocked.Increment(ref _latest);
+        var held = false;
+
         try
         {
+            await _oneAtATime.WaitAsync(ct).ConfigureAwait(false);
+            held = true;
+
+            // A newer size is already waiting behind this one, and it is the size the window has
+            // now. Sending this first would only give the shell a size for a moment it is past.
+            if (mine != Volatile.Read(ref _latest)) return;
+
             // The deadline is this token rather than HttpClient.Timeout, so a timeout and a session
-            // ending are told apart below: only the second is silent.
+            // ending are told apart below: only the second is silent. It starts once this resize has
+            // its turn, so waiting behind another one does not spend it.
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
             deadline.CancelAfter(resizeTimeout ?? DefaultResizeTimeout);
 
@@ -113,6 +138,10 @@ internal sealed class DockerContainerExec(
             logger.LogWarning(
                 "Terminal resize for exec {Exec} failed: {Msg}; the shell keeps its previous size",
                 execId, ex.Message);
+        }
+        finally
+        {
+            if (held) _oneAtATime.Release();
         }
     }
 

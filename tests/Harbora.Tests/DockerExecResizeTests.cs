@@ -201,6 +201,62 @@ public class DockerExecResizeTests
         head.Split("\r\n")[0].Should().Be($"POST /v1.41/exec/abc123/resize?h={safeRows}&w={safeColumns} HTTP/1.1");
     }
 
+    // --- A window drag is a burst of resizes, and the last one has to be the one that sticks --
+
+    [Fact]
+    public async Task Resizes_made_while_one_is_in_flight_are_not_all_sent_and_the_newest_is_the_last_sent()
+    {
+        // The browser sends a resize for every frame of a drag and nothing awaits them. The first is
+        // held at the daemon so the next two are definitely queued behind it.
+        using var daemon = new FakeDaemon(status: 201, holdFirstReply: true);
+        await using var exec = NewExec(daemon.Endpoint, new RecordingLogger());
+
+        var first = exec.ResizeAsync(columns: 100, rows: 30, CancellationToken.None);
+        await daemon.RequestHead.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var second = exec.ResizeAsync(columns: 110, rows: 35, CancellationToken.None);
+        var third = exec.ResizeAsync(columns: 120, rows: 40, CancellationToken.None);
+
+        daemon.ReleaseFirstReply();
+        await Task.WhenAll(first, second, third).WaitAsync(TimeSpan.FromSeconds(10));
+
+        // The middle size was overtaken before it was sent, and the last one still went out — after
+        // the first, not racing it.
+        daemon.RequestLines.Should().Equal(
+            "POST /v1.41/exec/abc123/resize?h=30&w=100 HTTP/1.1",
+            "POST /v1.41/exec/abc123/resize?h=40&w=120 HTTP/1.1");
+    }
+
+    [Fact]
+    public async Task Resizes_made_one_after_another_are_all_sent_in_the_order_they_were_made()
+    {
+        using var daemon = new FakeDaemon(status: 201);
+        await using var exec = NewExec(daemon.Endpoint, new RecordingLogger());
+
+        await exec.ResizeAsync(100, 30, CancellationToken.None);
+        await exec.ResizeAsync(110, 35, CancellationToken.None);
+        await exec.ResizeAsync(120, 40, CancellationToken.None);
+
+        daemon.RequestLines.Should().Equal(
+            "POST /v1.41/exec/abc123/resize?h=30&w=100 HTTP/1.1",
+            "POST /v1.41/exec/abc123/resize?h=35&w=110 HTTP/1.1",
+            "POST /v1.41/exec/abc123/resize?h=40&w=120 HTTP/1.1");
+    }
+
+    [Fact]
+    public async Task A_resize_that_fails_does_not_stop_the_next_one_being_sent()
+    {
+        using var daemon = new FakeDaemon(status: null);
+        var log = new RecordingLogger();
+        await using var exec = NewExec(daemon.Endpoint, log, timeout: TimeSpan.FromMilliseconds(200));
+
+        await exec.ResizeAsync(100, 30, CancellationToken.None);   // times out
+        await exec.ResizeAsync(120, 40, CancellationToken.None);   // must still get its turn
+
+        daemon.RequestLines.Should().HaveCount(2);
+        log.Entries.Should().HaveCount(2).And.OnlyContain(e => e.Level == LogLevel.Warning);
+    }
+
     // --- Harness -----------------------------------------------------------------------------
 
     private static DockerContainerExec NewExec(
@@ -218,63 +274,101 @@ public class DockerExecResizeTests
         new("unix://" + (socketPath.StartsWith('/') ? "" : "/") + socketPath.Replace('\\', '/'));
 
     /// <summary>
-    /// Stands in for the daemon on a real Unix socket: accepts one connection, records the request
-    /// it sends, and answers with <paramref name="status"/> — or, when that is null, holds the
-    /// connection open and never answers, which is a daemon that has hung.
+    /// Stands in for the daemon on a real Unix socket: records the request every connection sends
+    /// and answers each with <paramref name="status"/> — or, when that is null, holds the connection
+    /// open and never answers, which is a daemon that has hung.
+    ///
+    /// <para><paramref name="holdFirstReply"/> keeps the first connection unanswered until
+    /// <see cref="ReleaseFirstReply"/>, so a test can have one resize definitely in flight while
+    /// others are made behind it.</para>
     /// </summary>
     private sealed class FakeDaemon : IDisposable
     {
         private readonly Socket _listener;
         private readonly string _path = NewSocketPath();
         private readonly CancellationTokenSource _stop = new();
-        private readonly TaskCompletionSource<string> _requestHead =
+        private readonly List<string> _heads = [];
+        private readonly TaskCompletionSource<string> _firstHead =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _released =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public FakeDaemon(int? status)
+        public FakeDaemon(int? status, bool holdFirstReply = false)
         {
             _listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
             _listener.Bind(new UnixDomainSocketEndPoint(_path));
-            _listener.Listen(1);
+            _listener.Listen(16);
 
-            _ = ServeAsync(status);
+            _ = AcceptAsync(status, holdFirstReply);
         }
 
         public Uri Endpoint => UnixEndpoint(_path);
 
-        /// <summary>The request line and headers, as received.</summary>
-        public Task<string> RequestHead => _requestHead.Task;
+        /// <summary>The first request line and headers, as received.</summary>
+        public Task<string> RequestHead => _firstHead.Task;
 
-        private async Task ServeAsync(int? status)
+        /// <summary>Every request line received so far, in arrival order.</summary>
+        public IReadOnlyList<string> RequestLines
+        {
+            get { lock (_heads) return _heads.Select(h => h.Split("\r\n")[0]).ToList(); }
+        }
+
+        public void ReleaseFirstReply() => _released.TrySetResult();
+
+        private async Task AcceptAsync(int? status, bool holdFirstReply)
         {
             try
             {
-                using var connection = await _listener.AcceptAsync(_stop.Token);
+                var first = true;
 
-                var buffer = new byte[4096];
-                var head = new StringBuilder();
-
-                while (!head.ToString().Contains("\r\n\r\n", StringComparison.Ordinal))
+                while (true)
                 {
-                    var read = await connection.ReceiveAsync(buffer, SocketFlags.None, _stop.Token);
-                    if (read == 0) break;
-                    head.Append(Encoding.ASCII.GetString(buffer, 0, read));
-                }
-
-                _requestHead.TrySetResult(head.ToString());
-
-                if (status is { } code)
-                {
-                    var reply = $"HTTP/1.1 {code} Reply\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-                    await connection.SendAsync(Encoding.ASCII.GetBytes(reply), SocketFlags.None, _stop.Token);
-                }
-                else
-                {
-                    await Task.Delay(Timeout.Infinite, _stop.Token);
+                    var connection = await _listener.AcceptAsync(_stop.Token);
+                    _ = ServeAsync(connection, status, hold: holdFirstReply && first);
+                    first = false;
                 }
             }
             catch (Exception e) when (e is OperationCanceledException or SocketException or ObjectDisposedException)
             {
                 // The test finished with the daemon still up; nothing to report.
+            }
+        }
+
+        private async Task ServeAsync(Socket connection, int? status, bool hold)
+        {
+            using (connection)
+            {
+                try
+                {
+                    var buffer = new byte[4096];
+                    var head = new StringBuilder();
+
+                    while (!head.ToString().Contains("\r\n\r\n", StringComparison.Ordinal))
+                    {
+                        var read = await connection.ReceiveAsync(buffer, SocketFlags.None, _stop.Token);
+                        if (read == 0) break;
+                        head.Append(Encoding.ASCII.GetString(buffer, 0, read));
+                    }
+
+                    lock (_heads) _heads.Add(head.ToString());
+                    _firstHead.TrySetResult(head.ToString());
+
+                    if (hold) await _released.Task.WaitAsync(_stop.Token);
+
+                    if (status is { } code)
+                    {
+                        var reply = $"HTTP/1.1 {code} Reply\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                        await connection.SendAsync(Encoding.ASCII.GetBytes(reply), SocketFlags.None, _stop.Token);
+                    }
+                    else
+                    {
+                        await Task.Delay(Timeout.Infinite, _stop.Token);
+                    }
+                }
+                catch (Exception e) when (e is OperationCanceledException or SocketException or ObjectDisposedException)
+                {
+                    // The test finished with the daemon still up; nothing to report.
+                }
             }
         }
 
