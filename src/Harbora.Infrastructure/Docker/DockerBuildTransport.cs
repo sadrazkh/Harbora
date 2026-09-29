@@ -30,6 +30,10 @@ namespace Harbora.Infrastructure.Docker;
 /// request-then-response, which is the shape <c>ManagedHandler</c> handles correctly — so they stay
 /// on Docker.DotNet, where the typed models and error handling already live. This covers the one
 /// endpoint that streams in both directions at the same time.</para>
+///
+/// <para>The one exception is for a different reason: the terminal's exec resize
+/// (<see cref="DockerContainerExec.ResizeAsync"/>) has no method on the client at all any more, so it
+/// posts directly and borrows only <see cref="CreateSocketHandler"/> from here.</para>
 /// </summary>
 internal static class DockerBuildTransport
 {
@@ -44,28 +48,25 @@ internal static class DockerBuildTransport
             || endpoint.Scheme.Equals("unix+http", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
-    /// Streams <paramref name="context"/> to <c>/build</c> and reports every progress message the
-    /// daemon sends back, as it sends it.
+    /// A handler whose every connection is the daemon's Unix socket. The one piece of setup this
+    /// transport owns, so that anything else this platform posts to the daemon directly — the
+    /// terminal's exec resize, which Docker.DotNet.Enhanced no longer exposes — reaches it the same
+    /// way <c>/build</c> does rather than through a second copy of the socket code.
+    ///
+    /// <para>Only the connection lives here. Lifetimes, timeouts and what is sent are the caller's:
+    /// a build must outlive any deadline, a resize must not outlive a few seconds.</para>
+    ///
+    /// <para><c>ConnectCallback</c> is the whole point: SocketsHttpHandler does full-duplex
+    /// properly, so a response is drained while a body is still going out. The scheme on the request
+    /// URI is http because that is what is spoken over the socket; the host is a placeholder the
+    /// callback ignores.</para>
     /// </summary>
-    /// <param name="apiVersion">
-    /// Pinned rather than negotiated, and pinned to what Docker.DotNet itself asks for, so this
-    /// transport and the rest of the client cannot end up speaking to two different API surfaces.
-    /// </param>
-    public static async Task BuildAsync(
-        Uri endpoint,
-        ImageBuildParameters parameters,
-        Stream context,
-        IProgress<JSONMessage> progress,
-        string apiVersion,
-        CancellationToken ct)
+    /// <param name="endpoint">An endpoint <see cref="Handles"/> accepts.</param>
+    public static SocketsHttpHandler CreateSocketHandler(Uri endpoint)
     {
         var socketPath = endpoint.LocalPath;
 
-        // ConnectCallback is the whole point: SocketsHttpHandler does full-duplex properly, so the
-        // response is drained while the body is still going out. The scheme on the request URI is
-        // http because that is what is spoken over the socket; the host is a placeholder the
-        // callback ignores.
-        using var handler = new SocketsHttpHandler
+        return new SocketsHttpHandler
         {
             ConnectCallback = async (_, token) =>
             {
@@ -84,12 +85,31 @@ internal static class DockerBuildTransport
                     throw;
                 }
             },
-
-            // A build is not a request with a deadline. npm install and dotnet publish inside a
-            // Dockerfile take as long as they take, and the pipeline's own CancellationToken is what
-            // is allowed to end this.
-            PooledConnectionLifetime = Timeout.InfiniteTimeSpan,
         };
+    }
+
+    /// <summary>
+    /// Streams <paramref name="context"/> to <c>/build</c> and reports every progress message the
+    /// daemon sends back, as it sends it.
+    /// </summary>
+    /// <param name="apiVersion">
+    /// Pinned rather than negotiated, and pinned to what Docker.DotNet itself asks for, so this
+    /// transport and the rest of the client cannot end up speaking to two different API surfaces.
+    /// </param>
+    public static async Task BuildAsync(
+        Uri endpoint,
+        ImageBuildParameters parameters,
+        Stream context,
+        IProgress<JSONMessage> progress,
+        string apiVersion,
+        CancellationToken ct)
+    {
+        using var handler = CreateSocketHandler(endpoint);
+
+        // A build is not a request with a deadline. npm install and dotnet publish inside a
+        // Dockerfile take as long as they take, and the pipeline's own CancellationToken is what
+        // is allowed to end this.
+        handler.PooledConnectionLifetime = Timeout.InfiniteTimeSpan;
 
         using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
 

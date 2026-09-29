@@ -673,8 +673,9 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
         // dropped the standalone resize-after-start round trip this used to need for the initial
         // size — ConsoleSize now travels directly on both the create and the start parameters, so the
         // terminal opens at the right size from its first frame instead of drawing once at Docker's
-        // default and then resizing. See DockerContainerExec.ResizeAsync for what this client version
-        // can no longer do: resize a session that is already open.
+        // default and then resizing. Resizing a session that is already open has no call on this
+        // client version at all; DockerContainerExec.ResizeAsync posts it to the daemon directly,
+        // which is why it is handed the exec id and the endpoint.
         var size = new ConsoleSize { Width = (ulong)cols, Height = (ulong)lines };
 
         var exec = await client.Exec.CreateContainerExecAsync(containerId, new ContainerExecCreateParameters
@@ -694,7 +695,10 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
         var stream = await client.Exec.StartContainerExecAsync(exec.ID,
             new ContainerExecStartParameters { TTY = true, ConsoleSize = size }, ct);
 
-        return new DockerContainerExec(stream);
+        // The same pinned API version and the same endpoint /build goes to, so a resize cannot end up
+        // on a different API surface than everything else here.
+        return new DockerContainerExec(
+            stream, exec.ID, client.Configuration.EndpointBaseUri, BuildApiVersion, logger);
     }
 
     public async Task<HostInfo> GetHostInfoAsync(CancellationToken ct)

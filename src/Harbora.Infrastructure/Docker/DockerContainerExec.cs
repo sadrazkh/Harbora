@@ -1,5 +1,6 @@
 ﻿using Docker.DotNet;
 using Harbora.Application.Abstractions;
+using Microsoft.Extensions.Logging;
 
 namespace Harbora.Infrastructure.Docker;
 
@@ -12,9 +13,33 @@ namespace Harbora.Infrastructure.Docker;
 /// a read of zero with <c>EOF</c>, and treating that as "nothing right now" instead of "it is over"
 /// leaves a session spinning against a shell that exited.
 /// </summary>
-internal sealed class DockerContainerExec(MultiplexedStream stream)
+/// <param name="stream">The attached exec stream.</param>
+/// <param name="execId">The exec instance, which is what <c>/exec/{id}/resize</c> addresses.</param>
+/// <param name="endpoint">
+/// Where the daemon is, as <c>IDockerClient.Configuration.EndpointBaseUri</c> reports it. Only a
+/// Unix socket can be resized — see <see cref="ResizeAsync"/>.
+/// </param>
+/// <param name="apiVersion">
+/// The API version the resize is posted to; <see cref="DockerEngine"/> passes the one it pins for
+/// <c>/build</c>, so the direct calls and the typed client cannot end up on different API surfaces.
+/// </param>
+/// <param name="logger">Where a resize that did not land is recorded — it is never thrown.</param>
+/// <param name="resizeTimeout">How long one resize may take. Defaults to <see cref="DefaultResizeTimeout"/>.</param>
+internal sealed class DockerContainerExec(
+    MultiplexedStream stream,
+    string execId,
+    Uri? endpoint,
+    string apiVersion,
+    ILogger logger,
+    TimeSpan? resizeTimeout = null)
     : IContainerExec
 {
+    /// <summary>
+    /// A resize is a few bytes to a local socket. If the daemon has not answered in this long it is
+    /// not going to, and nothing should be left waiting on it.
+    /// </summary>
+    internal static readonly TimeSpan DefaultResizeTimeout = TimeSpan.FromSeconds(5);
+
     public async Task<int> ReadAsync(Memory<byte> buffer, CancellationToken ct)
     {
         var scratch = new byte[buffer.Length];
@@ -30,26 +55,91 @@ internal sealed class DockerContainerExec(MultiplexedStream stream)
         stream.WriteAsync(data.ToArray(), 0, data.Length, ct);
 
     /// <summary>
-    /// Unverified / known regression from the Docker.DotNet.Enhanced 3.131.1 migration (the fork
-    /// this moved to for Docker 29 support). The old client's
-    /// <c>IExecOperations.ResizeContainerExecTtyAsync</c> — <c>POST /exec/{id}/resize</c> — has no
-    /// replacement here: decompiling the shipped assembly shows <c>IExecOperations</c> now has
-    /// exactly three methods (create, start, inspect exec), none of them resize, and
-    /// <c>IContainerOperations.ResizeContainerTtyAsync</c> only ever posts to
-    /// <c>/containers/{id}/resize</c> — a different endpoint that would 404 against an exec ID rather
-    /// than a container one. The Docker Engine API itself still has the exec-resize route; this
-    /// client version just cannot reach it, and there is no other public surface on <c>IDockerClient</c>
-    /// (its request-building methods are all internal) to call it directly either.
+    /// Tells the shell its window changed size: <c>POST /exec/{id}/resize</c>.
     ///
-    /// A live resize (a browser window resized while the session is already open) is therefore a
-    /// no-op now: the shell keeps running at whatever size it opened with — the same fallback this
-    /// method already used for a resize the daemon rejected, just for every resize now rather than an
-    /// occasional one. The INITIAL size is unaffected: <see cref="DockerEngine.ExecAsync"/> sets it
-    /// via <c>ConsoleSize</c> on the exec create/start calls themselves, which this client version
-    /// does support, so a session still opens at the right size — it just cannot be resized again
-    /// afterwards.
+    /// <para><b>Why this posts by hand.</b> Docker.DotNet.Enhanced 3.131.1 (the fork this moved to
+    /// for Docker 29 support) has no exec-resize call. <c>IExecOperations</c> is create, start and
+    /// inspect; <c>IContainerOperations.ResizeContainerTtyAsync</c> posts to
+    /// <c>/containers/{id}/resize</c>, which 404s for an exec id; and the request-building methods on
+    /// <c>IDockerClient</c> are internal. The Docker Engine API still has the route, so this sends
+    /// it through <see cref="DockerBuildTransport.CreateSocketHandler"/> — the same Unix-socket
+    /// connection <c>/build</c> already uses. The initial size is unaffected: it travels as
+    /// <c>ConsoleSize</c> on the exec create and start calls.</para>
+    ///
+    /// <para><b>A no-op for any endpoint that is not a Unix socket.</b> The socket connection is the
+    /// only one there is here, and <see cref="DockerBuildTransport.Handles"/> is what says which
+    /// endpoints it serves. A named pipe on a Windows development machine and a TCP daemon are
+    /// deliberately left without one: a second transport for endpoints no deployment runs on is
+    /// code nobody exercises. On those the shell keeps the size it opened with.</para>
+    ///
+    /// <para><b>It never fails the session.</b> A resize that does not land is a wrongly-drawn
+    /// screen; letting it escape would turn that into a lost one. The caller does not await this, so
+    /// anything thrown would surface nowhere useful anyway. Cancellation — the session ending while
+    /// a resize is in flight — is expected and silent; every other failure is logged and swallowed.
+    /// </para>
     /// </summary>
-    public Task ResizeAsync(uint columns, uint rows, CancellationToken ct) => Task.CompletedTask;
+    public async Task ResizeAsync(uint columns, uint rows, CancellationToken ct)
+    {
+        if (!DockerBuildTransport.Handles(endpoint)) return;
+
+        try
+        {
+            // The deadline is this token rather than HttpClient.Timeout, so a timeout and a session
+            // ending are told apart below: only the second is silent.
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            deadline.CancelAfter(resizeTimeout ?? DefaultResizeTimeout);
+
+            using var handler = DockerBuildTransport.CreateSocketHandler(endpoint!);
+            using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+            using var request = ResizeRequest(apiVersion, execId, columns, rows);
+
+            using var response = await http
+                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token)
+                .ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                logger.LogWarning(
+                    "Terminal resize for exec {Exec} refused by the daemon with {Status}; the shell keeps its previous size",
+                    execId, (int)response.StatusCode);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // The session ended first. Nothing is left to resize.
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                "Terminal resize for exec {Exec} failed: {Msg}; the shell keeps its previous size",
+                execId, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// The request a resize sends, and nothing else — no socket, no daemon — so the wire format is
+    /// something a test can pin: <c>POST /v{apiVersion}/exec/{id}/resize?h={rows}&amp;w={columns}</c>.
+    /// Docker's query is height first, which is the opposite of the order this method's callers pass
+    /// them in.
+    ///
+    /// <para>The size goes through <see cref="Terminals.TerminalAccess.Size"/>, the same clamp the
+    /// initial size gets, so a window reporting zero while a page loads is not sent to the daemon
+    /// as zero. The host is a placeholder the socket connection ignores.</para>
+    /// </summary>
+    internal static HttpRequestMessage ResizeRequest(string apiVersion, string execId, uint columns, uint rows)
+    {
+        var (safeColumns, safeRows) = Terminals.TerminalAccess.Size(Saturate(columns), Saturate(rows));
+
+        return new HttpRequestMessage(
+            HttpMethod.Post,
+            $"http://localhost/v{apiVersion}/exec/{Uri.EscapeDataString(execId)}/resize?h={safeRows}&w={safeColumns}");
+    }
+
+    /// <summary>
+    /// <c>TerminalAccess.Size</c> takes an int; a uint above <see cref="int.MaxValue"/> must clamp
+    /// to the top of the range, not wrap negative and clamp to the bottom.
+    /// </summary>
+    private static int Saturate(uint value) => (int)Math.Min(value, (uint)int.MaxValue);
 
     public ValueTask DisposeAsync()
     {
