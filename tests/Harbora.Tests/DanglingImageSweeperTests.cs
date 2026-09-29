@@ -209,7 +209,10 @@ public sealed class DanglingImageSweeperTests : IDisposable
     {
         await AddServerAsync("panel", local: true);
         _panel.SeedDangling(2, 100);
-        var scopes = new FlakyScopeFactory(Provider().GetRequiredService<IServiceScopeFactory>(), failFirst: 1);
+        // Two, not one: each pass opens a scope to ask whether a build is running before the run opens
+        // its own. The first failure is swallowed by that check (it cannot tell, so it does not postpone);
+        // the second is the run's, and that is the one this test needs to see logged.
+        var scopes = new FlakyScopeFactory(Provider().GetRequiredService<IServiceScopeFactory>(), failFirst: 2);
         var sweeper = Sweeper(scopes, interval: TimeSpan.FromMilliseconds(30));
 
         await sweeper.StartAsync(default);
@@ -250,6 +253,90 @@ public sealed class DanglingImageSweeperTests : IDisposable
         }
 
         _panel.CountOf(nameof(IDockerEngine.PruneDanglingImagesAsync)).Should().BeGreaterThanOrEqualTo(3);
+    }
+
+    // ---- a running build holds the sweep back ----
+
+    private async Task AddDeploymentAsync(Harbora.Domain.Common.DeploymentStatus status, DateTimeOffset startedAt)
+    {
+        await using var scope = Provider().CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
+        db.Deployments.Add(new Harbora.Domain.Deployments.Deployment
+        {
+            AppId = Guid.NewGuid(), WorkspaceId = Guid.NewGuid(), Number = 1,
+            Status = status, StartedAt = startedAt
+        });
+        await db.SaveChangesAsync();
+    }
+
+    [Fact]
+    public async Task A_build_in_progress_postpones_the_sweep_and_says_so()
+    {
+        // The classic builder leaves each step's image dangling for an instant before the next step
+        // builds on it. A prune in that instant fails the build with an error naming neither.
+        await AddServerAsync("panel", local: true);
+        _panel.SeedDangling(2, 100);
+        await AddDeploymentAsync(Harbora.Domain.Common.DeploymentStatus.Building, DateTimeOffset.UtcNow);
+        var sweeper = Sweeper(interval: TimeSpan.FromMilliseconds(30));
+
+        await sweeper.StartAsync(default);
+        try
+        {
+            await WaitUntilAsync(() => _log.Entries.Count(e => e.Message.Contains("postponed")) >= 2);
+        }
+        finally
+        {
+            await sweeper.StopAsync(default);
+        }
+
+        _panel.CountOf(nameof(IDockerEngine.PruneDanglingImagesAsync)).Should().Be(0,
+            "nothing may be pruned while a build is running");
+        _log.Entries.Where(e => e.Message.Contains("postponed"))
+            .Should().OnlyContain(e => e.Message.StartsWith(DanglingImageSweeper.LogPrefix),
+                "the postponement is still one line with the prefix a monitoring rule keys on");
+    }
+
+    [Fact]
+    public async Task A_build_stuck_in_building_for_hours_does_not_hold_the_sweep_back_for_ever()
+    {
+        // Without an age bound, one deployment left in Building would starve the sweep permanently —
+        // worse than the race the guard exists to avoid.
+        await AddServerAsync("panel", local: true);
+        _panel.SeedDangling(2, 100);
+        await AddDeploymentAsync(Harbora.Domain.Common.DeploymentStatus.Building,
+            DateTimeOffset.UtcNow - DanglingImageSweeper.StuckBuildAge - TimeSpan.FromMinutes(5));
+        var sweeper = Sweeper(interval: TimeSpan.FromMilliseconds(30));
+
+        await sweeper.StartAsync(default);
+        try
+        {
+            await WaitUntilAsync(() => _panel.CountOf(nameof(IDockerEngine.PruneDanglingImagesAsync)) >= 1);
+        }
+        finally
+        {
+            await sweeper.StopAsync(default);
+        }
+
+        _log.Entries.Should().NotContain(e => e.Message.Contains("postponed"));
+    }
+
+    [Fact]
+    public async Task A_finished_deployment_does_not_hold_the_sweep_back()
+    {
+        await AddServerAsync("panel", local: true);
+        _panel.SeedDangling(2, 100);
+        await AddDeploymentAsync(Harbora.Domain.Common.DeploymentStatus.Succeeded, DateTimeOffset.UtcNow);
+        var sweeper = Sweeper(interval: TimeSpan.FromMilliseconds(30));
+
+        await sweeper.StartAsync(default);
+        try
+        {
+            await WaitUntilAsync(() => _panel.CountOf(nameof(IDockerEngine.PruneDanglingImagesAsync)) >= 1);
+        }
+        finally
+        {
+            await sweeper.StopAsync(default);
+        }
     }
 
     [Fact]

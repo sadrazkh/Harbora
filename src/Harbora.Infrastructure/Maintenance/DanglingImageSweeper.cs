@@ -1,4 +1,7 @@
+using Harbora.Data;
+using DeploymentStatus = Harbora.Domain.Common.DeploymentStatus;
 using Harbora.Infrastructure.Deployments;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -122,10 +125,69 @@ public sealed class DanglingImageSweeper : BackgroundService
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            if (await BuildInProgressAsync(stoppingToken))
+            {
+                var retry = interval.Value < BuildInProgressRetry ? interval.Value : BuildInProgressRetry;
+                _logger.LogInformation(
+                    "Dangling image sweep: postponed — a build is in progress, and pruning mid-build can remove " +
+                    "the intermediate image it is about to build on. Trying again in {Retry}.", retry);
+
+                try { await Task.Delay(retry, stoppingToken); }
+                catch (OperationCanceledException) { return; }
+                continue;
+            }
+
             await RunOnceAsync(stoppingToken);
 
             try { await Task.Delay(interval.Value, stoppingToken); }
             catch (OperationCanceledException) { return; }
+        }
+    }
+
+    /// <summary>How long a sweep waits before trying again when a build is running.</summary>
+    internal static readonly TimeSpan BuildInProgressRetry = TimeSpan.FromMinutes(15);
+
+    /// <summary>
+    /// A build that started longer ago than this is treated as stuck rather than in progress, so one
+    /// deployment left in Building forever cannot hold the sweep back forever. Well past any real build
+    /// on this platform, and past the job timeout that would have ended it.
+    /// </summary>
+    internal static readonly TimeSpan StuckBuildAge = TimeSpan.FromHours(2);
+
+    /// <summary>
+    /// Whether a build is running right now, in which case this pass waits.
+    ///
+    /// <para>
+    /// The classic builder commits each step as an image and builds the next step on it. Between the
+    /// commit and the next step that image is untagged and referenced by no container — dangling, by
+    /// the daemon's own definition — so a prune landing in that instant can remove the parent the build
+    /// is about to use, and the build then fails with an error that names neither the prune nor the
+    /// sweep. That is exactly the kind of failure this round exists to remove, so a sweep defers to a
+    /// running build rather than racing it. The Clean up disk button is not gated: an operator pressing
+    /// it can see what is deploying.
+    /// </para>
+    ///
+    /// <para>
+    /// Never throws. If the question cannot be answered the sweep runs as it would have without it,
+    /// and <see cref="RunOnceAsync"/> reports any real failure on its own line.
+    /// </para>
+    /// </summary>
+    internal async Task<bool> BuildInProgressAsync(CancellationToken ct)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<HarboraDbContext>();
+            var now = scope.ServiceProvider.GetService<Harbora.Application.Abstractions.ISystemClock>()?.UtcNow
+                      ?? DateTimeOffset.UtcNow;
+            var since = now - StuckBuildAge;
+
+            return await db.Deployments.IgnoreQueryFilters().AnyAsync(
+                d => d.Status == DeploymentStatus.Building && (d.StartedAt ?? d.UpdatedAt) > since, ct);
+        }
+        catch (Exception)
+        {
+            return false;
         }
     }
 
