@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Identity;
@@ -177,9 +177,11 @@ public sealed class SignInTokenService(
 
         if (db.Database.IsRelational())
         {
-            return await unclaimed.ExecuteUpdateAsync(s => s
+            var claimed = await unclaimed.ExecuteUpdateAsync(s => s
                 .SetProperty(t => t.RedeemedAt, now)
                 .SetProperty(t => t.RedeemedIp, ipAddress), ct);
+            await RefreshTrackedAsync(tokenId, ct);
+            return claimed;
         }
 
         var row = await unclaimed.FirstOrDefaultAsync(ct);
@@ -200,6 +202,7 @@ public sealed class SignInTokenService(
                 .ExecuteUpdateAsync(s => s
                     .SetProperty(t => t.SessionId, sessionId)
                     .SetProperty(t => t.SessionExpiresAt, sessionExpiresAt), ct);
+            await RefreshTrackedAsync(tokenId, ct);
             return;
         }
 
@@ -218,6 +221,26 @@ public sealed class SignInTokenService(
     /// <para>Called on every request under a token-session claim. This is the enforcement: the cookie
     /// says only which row to look at.</para>
     /// </summary>
+    /// <summary>
+    /// Brings a tracked copy of this row back in line with the database after an
+    /// <c>ExecuteUpdateAsync</c>, which writes straight to Postgres and never touches the change
+    /// tracker.
+    ///
+    /// <para>
+    /// Without this, a context that had already loaded the row — <see cref="IssueAsync"/> leaves the
+    /// row it just added tracked — kept serving the pre-update copy to every later tracked query in
+    /// the same scope. The first Postgres-lane run showed it: issue, redeem, then
+    /// <see cref="LiveAsync"/> on one context answered "not live" for a session that had just been
+    /// opened, because identity resolution handed back the tracked row with <c>RedeemedAt</c> still
+    /// null. It never failed on EF InMemory, whose fallback path writes through tracked entities.
+    /// </para>
+    /// </summary>
+    private async Task RefreshTrackedAsync(Guid tokenId, CancellationToken ct)
+    {
+        var tracked = db.ChangeTracker.Entries<SignInToken>().FirstOrDefault(e => e.Entity.Id == tokenId);
+        if (tracked is not null) await tracked.ReloadAsync(ct);
+    }
+
     public async Task<SignInToken?> LiveAsync(Guid tokenId, Guid userId, CancellationToken ct)
     {
         var now = clock.UtcNow;
