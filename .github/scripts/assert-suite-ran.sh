@@ -98,8 +98,8 @@ if grep -q 'outcome="Failed"' "$trx"; then
   #
   # Parsed as XML rather than grepped: the message lives in a child element that spans lines, and a
   # regex that happens to work on one TRX is the kind of check that silently reports nothing on the
-  # next. GitHub keeps ten error annotations per step, so the first nine are individual and the rest
-  # are counted in a tenth. Every name is still printed to the log below them.
+  # next. GitHub keeps ten error annotations per step, so the full list is one annotation and the
+  # first eight failures get one each. Every name is also printed to the log.
   python3 - "$trx" "$suite" <<'PY' || true
 import sys, xml.etree.ElementTree as ET
 path, suite = sys.argv[1], sys.argv[2]
@@ -118,11 +118,14 @@ def esc(s):  # GitHub workflow-command escaping for a message
 def esc_prop(s):  # a property value (title=) must also escape ':' and ',' or the title is cut short
     return esc(s).replace(":", "%3A").replace(",", "%2C")
 
-for name, text in failed[:9]:
+# The complete list goes out FIRST, as one annotation. GitHub keeps ten error annotations per step and
+# the header line above already used one, so a "N more" line written last was the one it dropped —
+# the first run of this left no way to tell nine failures from nineteen.
+names = "\n".join(n for n, _ in failed)
+print(f"::error title={esc_prop(f'{suite} — all {len(failed)} failing test(s)')}::{esc(names)}")
+for name, text in failed[:8]:
     first = "\n".join(text.splitlines()[:4])[:600] or "(no message recorded)"
     print(f"::error title={esc_prop(suite + ' — ' + name)[:250]}::{esc(first)}")
-if len(failed) > 9:
-    print(f"::error::{suite} — {len(failed) - 9} more failing test(s); every name is listed in the log.")
 for name, _ in failed:
     print(f"  - {name}")
 PY
