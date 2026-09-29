@@ -463,6 +463,12 @@ internal static class UpgradeFromPreviousRelease
 /// <summary>Reading the upgraded rows back. Unscoped, because the sweepers that own them are.</summary>
 internal static class UpgradedReads
 {
+    public static async Task<Harbora.Domain.Deployments.Deployment> DeploymentAsync(string connectionString, Guid id)
+    {
+        await using var db = PostgresLane.Open(connectionString);
+        return await db.Deployments.IgnoreQueryFilters().AsNoTracking().SingleAsync(d => d.Id == id);
+    }
+
     public static async Task<Job> JobAsync(string connectionString, Guid id)
     {
         await using var db = PostgresLane.Open(connectionString);
