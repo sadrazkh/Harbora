@@ -112,6 +112,47 @@ public sealed class RemoteDockerEngine(
     public Task RemoveImageAsync(string imageRef, CancellationToken ct) =>
         PostJson("agent/images/remove", new { image = imageRef }, ct);
 
+    /// <summary>
+    /// Why a machine behind an inbound agent is reported <i>not examined</i> for dangling images when
+    /// the agent answers 404: the two endpoints were added after agents were already deployed, and an
+    /// agent keeps the code it was installed with until somebody updates it. Not a failure of the sweep
+    /// and never a zero — the machine was not asked, and the sentence says what to do about it.
+    /// </summary>
+    public const string AgentTooOldReason =
+        "this agent is too old to be swept for dangling images (it does not have the endpoint yet, and " +
+        "answered 404); update Harbora.Agent on this server and it will be examined";
+
+    /// <summary>The agent's own <see cref="IDockerEngine.GetDanglingImagesAsync"/>, over HTTP. A 404 is
+    /// the endpoint not existing — see <see cref="AgentTooOldReason"/> — and is refused by name.
+    /// Anything else that is not a success (a 401 for a bad token, a 500 from the daemon) is a real
+    /// failure and is thrown as one, not folded into "too old".</summary>
+    public async Task<DanglingImages> GetDanglingImagesAsync(CancellationToken ct)
+    {
+        using var res = await Client().GetAsync("agent/images/dangling", ct);
+        ThrowIfAgentTooOld(res);
+        res.EnsureSuccessStatusCode();
+        return await res.Content.ReadFromJsonAsync<DanglingImages>(Json, ct)
+               ?? throw new InvalidOperationException("Agent returned no dangling-image summary.");
+    }
+
+    /// <summary>The agent's own <see cref="IDockerEngine.PruneDanglingImagesAsync"/> — the agent hosts
+    /// the same <c>DockerEngine</c> this panel would use locally, so this is the daemon's own dangling
+    /// prune on that machine, not a list-and-remove loop driven from here.</summary>
+    public async Task<DanglingImagesPruned> PruneDanglingImagesAsync(CancellationToken ct)
+    {
+        using var res = await Client().PostAsync("agent/images/dangling/prune", null, ct);
+        ThrowIfAgentTooOld(res);
+        res.EnsureSuccessStatusCode();
+        return await res.Content.ReadFromJsonAsync<DanglingImagesPruned>(Json, ct)
+               ?? throw new InvalidOperationException("Agent returned no dangling-image prune result.");
+    }
+
+    private static void ThrowIfAgentTooOld(HttpResponseMessage res)
+    {
+        if (res.StatusCode == System.Net.HttpStatusCode.NotFound)
+            throw new ImageSweepUnavailableException(AgentTooOldReason);
+    }
+
     public async Task<string> RunContainerAsync(DockerRunRequest request, CancellationToken ct)
     {
         var res = await Client().PostAsJsonAsync("agent/containers/run", request, Json, ct);

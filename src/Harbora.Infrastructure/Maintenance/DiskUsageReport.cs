@@ -41,6 +41,26 @@ public sealed record AppImageUsage(
 public sealed record OrphanedImagesUsage(int Count, long TotalBytes, IReadOnlyList<string> Tags);
 
 /// <summary>
+/// A server's dangling images — untagged, referenced by nothing, and invisible to every figure above
+/// because those all read tagged images under the build prefix. On the server that prompted this line
+/// they were 165 images and 70 GB of a disk at 96%.
+/// </summary>
+/// <param name="TotalBytes">
+/// The sum of each image's own size, so an upper bound: dangling layers can be shared too (with each
+/// other and with tagged images), which is why the cleanup measures the disk instead of trusting it.
+/// </param>
+/// <param name="NotExamined">
+/// Why the daemon was not asked, or null when it answered: a v1 node, an inbound agent too old to have
+/// the endpoint, or a listing that failed. When this is set <paramref name="Count"/> and
+/// <paramref name="TotalBytes"/> are zero because nothing was read — <b>not</b> because nothing is
+/// there — and the page must say so rather than render them.
+/// </param>
+public sealed record DanglingImagesUsage(int Count, long TotalBytes, string? NotExamined)
+{
+    public static DanglingImagesUsage NotExaminedBecause(string reason) => new(0, 0, reason);
+}
+
+/// <summary>
 /// One app volume as the database already knows it: <see cref="SizeBytes"/> is
 /// <see cref="Domain.Apps.Volume.StorageBytes"/>, last written by <c>StorageMeasurer</c>'s periodic
 /// walk — null when that walk has not reached this volume yet, which is a different fact from "empty"
@@ -56,11 +76,17 @@ public sealed record VolumeUsage(string Name, long? SizeBytes, DateTimeOffset? M
 /// </summary>
 /// <param name="ReclaimableBytes">
 /// <see cref="OrphanedImagesUsage.TotalBytes"/> plus every app's <see cref="AppImageUsage.PrunableNowBytes"/>
-/// — an upper bound, not a promise: Docker layers are shared, so adding up per-image sizes can overstate
+/// plus <see cref="DanglingImagesUsage.TotalBytes"/> (when the dangling images were actually read) —
+/// an upper bound, not a promise: Docker layers are shared, so adding up per-image sizes can overstate
 /// what a cleanup actually frees, which is exactly why <see cref="DiskCleanupService"/> measures the
 /// disk's own before/after difference instead of trusting this sum. Zero on a server that was not
 /// examined, which is why callers must always check <see cref="NotExamined"/> first — zero here never
 /// means "clean".
+/// </param>
+/// <param name="Dangling">
+/// The untagged, unreferenced images on this server. Has its own <see cref="DanglingImagesUsage.NotExamined"/>
+/// because a server can be examined for tagged images and still not for these — an inbound agent that
+/// predates the dangling endpoints lists tagged images perfectly well.
 /// </param>
 public sealed record ServerDiskUsage(
     Guid ServerId,
@@ -69,10 +95,12 @@ public sealed record ServerDiskUsage(
     IReadOnlyList<AppImageUsage> Apps,
     OrphanedImagesUsage Orphaned,
     IReadOnlyList<VolumeUsage> Volumes,
-    long ReclaimableBytes)
+    long ReclaimableBytes,
+    DanglingImagesUsage Dangling)
 {
     public static ServerDiskUsage Skip(Guid id, string name, string reason) =>
-        new(id, name, reason, [], new OrphanedImagesUsage(0, 0, []), [], 0);
+        new(id, name, reason, [], new OrphanedImagesUsage(0, 0, []), [], 0,
+            DanglingImagesUsage.NotExaminedBecause(reason));
 }
 
 /// <summary>The full report: one entry per server this run knew about, examined or not.</summary>
@@ -198,9 +226,7 @@ public sealed class DiskUsageReport(
         }
 
         if (Nodes.NodeWorkloadEngine.NodeBehind(docker) is { } nodeId)
-            return ServerDiskUsage.Skip(serverId, serverName,
-                $"node {nodeId} manages its own images; the panel can neither list nor remove them, " +
-                "so nothing here was examined");
+            return ServerDiskUsage.Skip(serverId, serverName, Nodes.NodeWorkloadEngine.ImagesManagedByNodeReason(nodeId));
 
         var onHost = await docker.ListImagesAsync(opt.ImagePrefix + "/", ct);
         var bytesByTag = onHost
@@ -251,8 +277,39 @@ public sealed class DiskUsageReport(
         var orphanBytes = orphanTags.Sum(t => bytesByTag.GetValueOrDefault(t));
         var orphaned = new OrphanedImagesUsage(orphanTags.Count, orphanBytes, orphanTags);
 
-        var reclaimable = orphanBytes + appUsages.Sum(a => a.PrunableNowBytes);
+        // The half of the disk none of the figures above can see: untagged images. A cleanup now
+        // prunes these too, so — when they were actually read — they are part of what it would reclaim.
+        var dangling = await ReadDanglingAsync(docker, serverName, ct);
 
-        return new ServerDiskUsage(serverId, serverName, null, appUsages, orphaned, volumes, reclaimable);
+        var reclaimable = orphanBytes + appUsages.Sum(a => a.PrunableNowBytes)
+            + (dangling.NotExamined is null ? dangling.TotalBytes : 0);
+
+        return new ServerDiskUsage(serverId, serverName, null, appUsages, orphaned, volumes, reclaimable, dangling);
+    }
+
+    /// <summary>
+    /// The dangling images on one machine, or the reason they could not be read. Read with the same
+    /// <c>dangling=true</c> filter the prune uses, so the count here is what a prune would consider.
+    /// Never fails the page: a machine whose tagged images were read fine but whose dangling images
+    /// could not be (an agent that predates the endpoint, a daemon that errored) is named as not
+    /// examined for these alone, never as having none.
+    /// </summary>
+    private async Task<DanglingImagesUsage> ReadDanglingAsync(IDockerEngine docker, string serverName, CancellationToken ct)
+    {
+        try
+        {
+            var found = await docker.GetDanglingImagesAsync(ct);
+            return new DanglingImagesUsage(found.Count, found.SizeBytes, null);
+        }
+        catch (ImageSweepUnavailableException e)
+        {
+            logger.LogInformation("Dangling images on {Server} were not examined: {Reason}", serverName, e.Reason);
+            return DanglingImagesUsage.NotExaminedBecause(e.Reason);
+        }
+        catch (Exception e) when (!ct.IsCancellationRequested)
+        {
+            logger.LogWarning(e, "Disk usage report could not read the dangling images on {Server}.", serverName);
+            return DanglingImagesUsage.NotExaminedBecause($"listing its dangling images failed: {e.Message}");
+        }
     }
 }

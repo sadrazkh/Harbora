@@ -61,6 +61,57 @@ public sealed class HarboraRuntimeOptions
     /// </summary>
     public int ImageRetentionCount { get; set; } = 5;
 
+    /// <summary>
+    /// How often, in hours, the panel prunes every server's DANGLING images on its own — and
+    /// <c>0</c> (or less) turns that background sweep off. Default 24: once a day.
+    ///
+    /// <para>
+    /// Dangling images are the untagged layers each classic-builder rebuild leaves behind. They are the
+    /// part of the disk that <c>ImageRetentionCount</c> cannot reach, because retention is about TAGGED
+    /// build images; on the server that prompted this setting 165 of them (70 GB) took the disk to 96%
+    /// while the tagged build images were about 10 GB. Only dangling images are ever pruned, through
+    /// the daemon's own prune call — never a tagged image, so build bases and rollback tags are safe at
+    /// any value here.
+    /// </para>
+    ///
+    /// <para>
+    /// A day is the shape of the leak (it grows with rebuilds, over days and weeks, not minutes), so a
+    /// shorter period only adds daemon work and more chances to overlap a build, and a longer one lets
+    /// the disk refill in between. Fractions are accepted (<c>0.5</c> is every half hour).
+    /// </para>
+    /// </summary>
+    public double DanglingImageSweepHours { get; set; } = 24;
+
+    /// <summary>The longest the sweep interval is allowed to be. Not a policy: a timer or delay refuses
+    /// a period past about 49 days, and a configuration typo that made the background service throw
+    /// while starting would stop the panel from starting at all — which is the one thing this sweep
+    /// must never do. A larger value is read as this, not rejected.</summary>
+    internal static readonly TimeSpan MaxDanglingImageSweepInterval = TimeSpan.FromDays(30);
+
+    /// <summary>The shortest: one minute. Below that a typo would have every server's daemon pruned in
+    /// a tight loop, each pass logging a line, for no benefit a person could measure.</summary>
+    internal static readonly TimeSpan MinDanglingImageSweepInterval = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// <see cref="DanglingImageSweepHours"/> as a period, or null when the sweep is off — a value of
+    /// zero or less, and also a value that is not a number, which is read as off rather than thrown.
+    /// Anything else is clamped into [one minute, thirty days].
+    /// </summary>
+    internal TimeSpan? DanglingImageSweepInterval
+    {
+        get
+        {
+            // "Not greater than zero" rather than "less than or equal", so NaN lands here too.
+            if (!(DanglingImageSweepHours > 0)) return null;
+
+            // Capped in hours BEFORE it becomes a TimeSpan: FromHours throws OverflowException for a
+            // value past what a TimeSpan can hold, and 1e12 or infinity is a typo, not a request.
+            var span = TimeSpan.FromHours(Math.Min(DanglingImageSweepHours, MaxDanglingImageSweepInterval.TotalHours));
+
+            return span < MinDanglingImageSweepInterval ? MinDanglingImageSweepInterval : span;
+        }
+    }
+
     // ---- Health gate (the cutover decision) ----
     // Defaults reproduce the previous hardcoded behaviour: up to 16s to reach "running", then up to
     // 20s of HTTP probing. Configurable because a slow-booting app (JVM, migrations on start) needs

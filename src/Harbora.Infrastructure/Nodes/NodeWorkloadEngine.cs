@@ -83,6 +83,15 @@ public sealed class NodeWorkloadEngine(
     private string NodeId => nodeId;
 
     /// <summary>
+    /// Why a machine behind a v1 node is reported <i>not examined</i> by every image sweep and report —
+    /// one sentence in one place, so the disk cleanup, the disk report and this engine's own refusal of
+    /// the dangling-image calls can never word the same fact three ways.
+    /// </summary>
+    public static string ImagesManagedByNodeReason(string nodeId) =>
+        $"node {nodeId} manages its own images; the panel can neither list nor remove them, " +
+        "so nothing here was examined";
+
+    /// <summary>
     /// Digests resolved during this deployment, so the run does not re-resolve what the pull already
     /// looked up — and, more importantly, cannot resolve a moving tag to something different between
     /// the two calls.
@@ -144,6 +153,21 @@ public sealed class NodeWorkloadEngine(
         logger.LogDebug("Ignoring an image removal for node {NodeId}; a v1 node manages its own images.", nodeId);
         return Task.CompletedTask;
     }
+
+    /// <summary>
+    /// Refused by name, not answered empty. A node manages its own images, so "how many dangling
+    /// images does it hold" is a question the panel has no way to ask — and an empty answer would read
+    /// as a clean machine, which is the exact reading this refusal exists to prevent. The reason is the
+    /// same sentence <see cref="NodeBehind"/>'s callers already report for this case.
+    /// </summary>
+    public Task<DanglingImages> GetDanglingImagesAsync(CancellationToken ct) =>
+        throw new ImageSweepUnavailableException(ImagesManagedByNodeReason(nodeId));
+
+    /// <summary>Refused by name for the same reason as <see cref="GetDanglingImagesAsync"/>: the node
+    /// prunes its own images, and a silent no-op here would report "0 reclaimed" for a machine the
+    /// panel never touched.</summary>
+    public Task<DanglingImagesPruned> PruneDanglingImagesAsync(CancellationToken ct) =>
+        throw new ImageSweepUnavailableException(ImagesManagedByNodeReason(nodeId));
 
     /// <summary>
     /// Empty, which the pipeline already treats as "we cannot tell" rather than "it listens

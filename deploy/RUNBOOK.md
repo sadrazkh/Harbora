@@ -105,6 +105,25 @@ newly-lowered value immediately to apps that have not deployed since, use **Clea
 Monitoring page — it re-runs the same retention rule against every app's current images with today's
 configured value, which is exactly how it catches apps the pipeline itself has not touched yet.
 
+Tagged build images are only part of what fills a disk. Every rebuild the classic builder does also
+leaves its predecessor's **dangling** images behind — untagged layers that nothing tagged names, so the
+retention above cannot see them. On the server that prompted this, 165 of them held 70 GB of a disk at
+96% while the tagged build images were about 10 GB. The panel now prunes them itself:
+
+| Variable | Default | What it is |
+|---|---|---|
+| `Runtime__DanglingImageSweepHours` | `24` | How often, in hours, the panel prunes every server's dangling images on its own. `0` turns the background sweep off (**Clean up disk** still does it when pressed). Fractions work (`0.5` is every half hour); a value below one minute is read as one minute and one above thirty days as thirty. Set it in `.env` and run `docker compose up -d panel` — no rebuild |
+
+It only ever prunes images that are untagged and not referenced by any container, through Docker's own
+prune with the dangling filter. It never touches a tagged image, so build bases such as `dotnet/sdk`
+and the rollback tags above are safe at any value. The first pass is about ten minutes after the panel
+starts, so a panel that restarts daily still sweeps, and every pass logs one line, starting
+`Dangling image sweep:`, including a pass that reclaimed nothing. A server the panel cannot ask is named as
+**not examined**, in that line, on the disk report and in **Clean up disk**'s result, and is never shown
+as zero: a machine behind a v1 node manages its own images, and an inbound agent installed before this
+existed answers 404 to the request, so it says *this agent is too old to be swept* — update the agent
+on that server to include it.
+
 And one you should not normally touch:
 
 | Variable | Default | What it is |

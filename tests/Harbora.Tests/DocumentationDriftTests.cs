@@ -321,7 +321,10 @@ public class DocumentationDriftTests
     {
         var escaped = Regex.Escape(name);
         var substituted = new Regex(@"\$\{" + escaped + @"(?![A-Za-z0-9_])");
-        var passedThroughBare = new Regex(@"(?m)^[ \t]*" + escaped + @":[ \t]*(#.*)?$");
+        // `\r?` before the end of the line: a Windows checkout (`* text=auto`) has CRLF working files, and
+        // `$` in multiline mode stops before `\n` only — so without it a bare key at the end of a line
+        // looked absent, and every one of these checks passed or failed depending on the OS that ran it.
+        var passedThroughBare = new Regex(@"(?m)^[ \t]*" + escaped + @":[ \t]*(#.*)?\r?$");
         return substituted.IsMatch(compose) || passedThroughBare.IsMatch(compose);
     }
 
@@ -417,6 +420,48 @@ public class DocumentationDriftTests
             .Should().BeFalse(
                 "the compose entry must be a bare key so an unset .env reaches HarboraRuntimeOptions' " +
                 "own default rather than a literal duplicated here");
+    }
+
+    // ---- HARBORA-0065's third instance, caught before it shipped: the dangling-image sweep interval ----
+
+    [Fact]
+    public void Runtime_dangling_image_sweep_hours_is_passed_through_by_the_compose_file()
+    {
+        // "0 turns the periodic sweep off" is only true on the shipped stack if the compose file hands the
+        // variable to the panel container. The RUNBOOK documents it, and this repo has twice shipped a
+        // documented setting that was set, visible in `docker inspect`, and inert. No Docker here to
+        // prove it end to end, so this reads the compose file and the binding path.
+        var compose = Read("deploy", "docker-compose.yml");
+
+        ReachesAContainer("Runtime__DanglingImageSweepHours", compose).Should().BeTrue(
+            "deploy/docker-compose.yml must pass Runtime__DanglingImageSweepHours into the panel's " +
+            "environment, or an operator cannot turn the background dangling-image sweep off");
+
+        Regex.IsMatch(compose, @"(?m)^\s*Runtime__DanglingImageSweepHours:\s*\$\{Runtime__DanglingImageSweepHours:-")
+            .Should().BeFalse(
+                "the compose entry must be a bare key so an unset .env reaches HarboraRuntimeOptions' own " +
+                "default rather than a literal duplicated here");
+    }
+
+    [Fact]
+    public void The_dangling_sweep_default_the_runbook_states_matches_the_code_s_own_default()
+    {
+        var optionsSource = Read("src", "Harbora.Infrastructure", "Deployments", "HarboraRuntimeOptions.cs");
+        var runbook = Read("deploy", "RUNBOOK.md");
+
+        var codeDefault = Regex.Match(optionsSource,
+            @"DanglingImageSweepHours\s*\{\s*get;\s*set;\s*\}\s*=\s*(\d+);");
+        codeDefault.Success.Should().BeTrue(
+            "HarboraRuntimeOptions.DanglingImageSweepHours's default was not found in the expected " +
+            "`{ get; set; } = N;` shape — update this test's regex if that declaration changed");
+
+        var documented = Regex.Match(runbook,
+            @"\|\s*`Runtime__DanglingImageSweepHours`\s*\|\s*`(\d+)`\s*\|");
+        documented.Success.Should().BeTrue(
+            "deploy/RUNBOOK.md must document Runtime__DanglingImageSweepHours in a table row with its default");
+
+        documented.Groups[1].Value.Should().Be(codeDefault.Groups[1].Value,
+            $"the RUNBOOK says the default is {documented.Groups[1].Value} hours but the code's is {codeDefault.Groups[1].Value}");
     }
 
     [Fact]

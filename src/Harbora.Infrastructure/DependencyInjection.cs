@@ -338,6 +338,11 @@ public static class DependencyInjection
         services.Configure<Maintenance.RetentionOptions>(
             config.GetSection(Maintenance.RetentionOptions.SectionName));
         services.AddHostedService<Maintenance.DataRetentionSweeper>();
+        // The daily, unattended half of disk cleanup: the daemon's own prune of DANGLING images, per
+        // server, and nothing else (Runtime:DanglingImageSweepHours, default 24; 0 turns it off).
+        // Below the gate opener for the same reason the retention sweeper is — a timer, not a startup
+        // reconciler — and it never throws into the host, so it cannot stop the panel starting.
+        services.AddHostedService<Maintenance.DanglingImageSweeper>();
 
         // 2.2 (2026-09 log-retention plan): persisted per-app log retention, searchable by
         // LogsController after the container that wrote it is gone. The disk-budget half of

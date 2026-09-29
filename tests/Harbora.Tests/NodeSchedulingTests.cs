@@ -434,6 +434,8 @@ public sealed class NodeSchedulingTests : IDisposable
         public Task<IReadOnlyList<ImageInfo>> ListImagesAsync(string? p, CancellationToken ct) => Task.FromResult<IReadOnlyList<ImageInfo>>([]);
         public Task<bool> ImageExistsAsync(string imageRef, CancellationToken ct) => Task.FromResult(false);
         public Task RemoveImageAsync(string imageRef, CancellationToken ct) => Task.CompletedTask;
+        public Task<DanglingImages> GetDanglingImagesAsync(CancellationToken ct) => Task.FromResult(new DanglingImages(0, 0));
+        public Task<DanglingImagesPruned> PruneDanglingImagesAsync(CancellationToken ct) => Task.FromResult(new DanglingImagesPruned(0, 0));
         public Task<IReadOnlyList<int>> GetImagePortsAsync(string imageRef, CancellationToken ct) => Task.FromResult<IReadOnlyList<int>>([]);
         public Task<string> RunContainerAsync(DockerRunRequest r, CancellationToken ct) => throw new NotSupportedException();
         public Task StopContainerAsync(string id, CancellationToken ct) => Task.CompletedTask;

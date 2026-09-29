@@ -116,6 +116,35 @@
                     <p class="mt-3 text-xs text-ink-faint">@(isFa ? "هیچ اپی روی این سرور نیست." : "No apps on this server.")</p>
                 }
 
+                @* Dangling images: the thing that actually filled a production disk to 96% (165 images,
+                   70 GB, against ~10 GB of tagged build images) and that every figure above is blind to,
+                   because they all read TAGGED images. Its own not-examined state, distinct from the
+                   server's: an agent too old to have the dangling endpoints still lists tagged images
+                   fine, and "0" must never stand in for "not asked". The size is an upper bound for the
+                   same reason the total is — dangling layers can be shared too. *@
+                <div class="mt-4 rounded-lg bg-surface-2/40 p-3" data-dangling-images>
+                    <div class="text-xs text-ink-faint uppercase tracking-wide mb-1">@(isFa ? "ایمیج‌های بی‌برچسب (dangling)" : "Dangling images")</div>
+                    @if (server.Dangling.NotExamined is not null)
+                    {
+                        <div class="rounded-lg bg-warn-soft border border-warn text-warn px-3 py-2 text-xs">
+                            @(isFa ? "بررسی نشد:" : "Not examined:") @server.Dangling.NotExamined
+                        </div>
+                    }
+                    else if (server.Dangling.Count == 0)
+                    {
+                        <p class="text-sm text-ink-muted">@(isFa ? "هیچ‌کدام یافت نشد." : "None found.")</p>
+                    }
+                    else
+                    {
+                        <p class="text-sm text-ink" dir="ltr">@server.Dangling.Count · @Bytes(server.Dangling.TotalBytes)</p>
+                    }
+                    <p class="mt-1 text-xs text-ink-faint">
+                        @(isFa
+                            ? "ایمیج‌هایی بدون برچسب که هیچ ایمیج برچسب‌داری روی آن‌ها بنا نشده و هیچ کانتینری از آن‌ها استفاده نمی‌کند — لایه‌هایی که هر بازسازی به جا می‌گذارد. «پاک‌سازی دیسک» و جاروی روزانهٔ پس‌زمینه فقط همین‌ها را و با دستور prune خود Docker حذف می‌کنند؛ ایمیج‌های برچسب‌دار، ایمیج‌های پایهٔ ساخت و برچسب‌های بازگردانی هرگز دست نمی‌خورند. این حجم هم یک سقف بالاست: لایه‌های بی‌برچسب هم می‌توانند مشترک باشند."
+                            : "Untagged images that no tagged image builds on and no container uses — the layers every rebuild leaves behind. Clean up disk and the daily background sweep remove only these, through Docker's own prune; tagged images, build bases and rollback tags are never touched. This size is an upper bound too: dangling layers can be shared.")
+                    </p>
+                </div>
+
                 <div class="mt-4 grid sm:grid-cols-2 gap-4">
                     <div class="rounded-lg bg-surface-2/40 p-3">
                         <div class="text-xs text-ink-faint uppercase tracking-wide mb-1">@(isFa ? "ایمیج‌های یتیم" : "Orphaned build images")</div>

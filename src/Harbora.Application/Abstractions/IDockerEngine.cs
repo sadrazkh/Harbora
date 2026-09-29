@@ -34,6 +34,51 @@ public interface IDockerEngine
     Task RemoveImageAsync(string imageRef, CancellationToken ct);
 
     /// <summary>
+    /// How many dangling images this node holds and how large they are — the half of the disk that
+    /// <see cref="ListImagesAsync"/> cannot see, because it answers only for TAGGED images.
+    ///
+    /// <para>
+    /// A dangling image is untagged and is not the parent of any tagged image: the daemon's own
+    /// <c>dangling=true</c> filter. Every classic-builder rebuild leaves its predecessor's untagged
+    /// layers behind, and nothing tagged ever names them — which is how 165 of them (70 GB) filled a
+    /// production disk to 96% while the platform's cleanup, which only considers tags under its own
+    /// build prefix, reported almost nothing to reclaim.
+    /// </para>
+    ///
+    /// <para>
+    /// The size is a sum of per-image sizes and so an upper bound: layers are shared, and a dangling
+    /// image can share them with a tagged one. No default implementation, for the same reason
+    /// <see cref="ListVolumesAsync"/> has none — an engine that cannot examine its node's disk must
+    /// say so in its own words by throwing <see cref="ImageSweepUnavailableException"/>, not by
+    /// answering an empty result that would read as "this machine is clean" when the truth is "this
+    /// machine was never asked".
+    /// </para>
+    /// </summary>
+    /// <exception cref="ImageSweepUnavailableException">
+    /// This engine cannot be asked — a v1 node, or an agent that predates the endpoint.
+    /// </exception>
+    Task<DanglingImages> GetDanglingImagesAsync(CancellationToken ct);
+
+    /// <summary>
+    /// Removes this node's dangling images through the DAEMON'S OWN prune call with the dangling
+    /// filter, and reports what the daemon says it did.
+    ///
+    /// <para>
+    /// This is the only removal in the interface that is not aimed at a named image, and that is the
+    /// point: the daemon decides what is dangling at the instant it prunes, and never removes an image
+    /// any container — running or stopped — still references. A caller that listed dangling images and
+    /// removed them one by one would reintroduce the race that call already handles. It never touches
+    /// a tagged image, unused or not: build bases such as <c>dotnet/sdk</c> and the panel's rollback
+    /// tags are tagged and are out of reach by construction. No "all unused images" variant exists on
+    /// this interface and none should be added here.
+    /// </para>
+    /// </summary>
+    /// <exception cref="ImageSweepUnavailableException">
+    /// This engine cannot be asked — a v1 node, or an agent that predates the endpoint.
+    /// </exception>
+    Task<DanglingImagesPruned> PruneDanglingImagesAsync(CancellationToken ct);
+
+    /// <summary>
     /// The container ports an image declares (its <c>EXPOSE</c> lines). Empty when it declares none,
     /// which is common and means "we cannot tell" rather than "it listens nowhere".
     /// </summary>
@@ -277,6 +322,40 @@ public record ContainerLifecycle(int? RestartCount, DateTimeOffset? StartedAt);
 public record TimedLogLine(DateTimeOffset Timestamp, string Text);
 
 public record ImageInfo(string Id, string Tag, DateTimeOffset CreatedAt, long SizeBytes);
+
+/// <summary>
+/// The dangling images on one node, as <see cref="IDockerEngine.GetDanglingImagesAsync"/> reads them.
+/// <paramref name="SizeBytes"/> is the sum of each image's own size — an upper bound on what pruning
+/// them would free, since layers can be shared.
+/// </summary>
+public sealed record DanglingImages(int Count, long SizeBytes);
+
+/// <summary>
+/// What the daemon reported when <see cref="IDockerEngine.PruneDanglingImagesAsync"/> asked it to
+/// prune. Both figures are the DAEMON'S words, not the platform's arithmetic, which is why they are
+/// carried separately from the disk's own measured before/after difference in
+/// <c>DiskCleanupServerResult.FreedBytes</c>.
+/// </summary>
+/// <param name="ImagesDeleted">Images the daemon reported deleting (its <c>Deleted</c> entries; an
+/// untag-only entry is not a deletion).</param>
+/// <param name="BytesReclaimed">The daemon's own <c>SpaceReclaimed</c>.</param>
+public sealed record DanglingImagesPruned(int ImagesDeleted, long BytesReclaimed);
+
+/// <summary>
+/// This engine cannot examine or prune its node's dangling images, and <see cref="Reason"/> says why in
+/// words an operator can act on — a v1 node that manages its own images, or an inbound agent old enough
+/// not to have the endpoints.
+///
+/// <para>
+/// A distinct type, not a plain failure and never a zero: callers report the machine as <i>not
+/// examined</i> with this reason, so a server that could not be asked can never read as a server that
+/// was asked and found clean.
+/// </para>
+/// </summary>
+public sealed class ImageSweepUnavailableException(string reason) : NotSupportedException(reason)
+{
+    public string Reason { get; } = reason;
+}
 
 /// <summary>
 /// One volume as the daemon itself names it — <see cref="Name"/> is the exact docker volume name, the

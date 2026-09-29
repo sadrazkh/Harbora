@@ -333,6 +333,89 @@ public sealed class FakeDockerEngine : IDockerEngine
         return Task.CompletedTask;
     }
 
+    // ---- dangling images ----
+    //
+    // Deliberately a separate store from the tagged images above, exactly as it is on a real daemon: a
+    // dangling image has no tag, so nothing that lists or removes BY TAG can see it — which is the
+    // whole reason the platform's cleanup was blind to them. The only thing that can touch this store
+    // is the prune call, so a test that seeds tagged images beside dangling ones and finds the tagged
+    // ones intact afterwards is asserting what the caller asked the engine to do, not what the fake
+    // happens to do.
+
+    private readonly List<long> _dangling = [];
+
+    /// <summary>Puts <paramref name="count"/> dangling images of <paramref name="bytesEach"/> on the
+    /// node, as a run of classic-builder rebuilds would have left there.</summary>
+    public FakeDockerEngine SeedDangling(int count, long bytesEach)
+    {
+        lock (_gate)
+            for (var i = 0; i < count; i++) _dangling.Add(bytesEach);
+        return this;
+    }
+
+    /// <summary>Dangling images still on the node.</summary>
+    public int DanglingCount { get { lock (_gate) return _dangling.Count; } }
+
+    /// <summary>When set, both dangling calls throw this instead of answering — an
+    /// <see cref="ImageSweepUnavailableException"/> simulates an agent too old to have the endpoint or
+    /// a v1 node, anything else a daemon that errored.</summary>
+    public Exception? DanglingThrows { get; set; }
+
+    /// <summary>When set, only the PRUNE throws this — a daemon that lists fine and then fails.</summary>
+    public Exception? PruneDanglingThrows { get; set; }
+
+    /// <summary>Runs inside the prune, after it has decided what it removed — lets a test move
+    /// <see cref="FreeDiskBytes"/> the way a real prune moves the disk, so the daemon's own reported
+    /// figure and the measured before/after can be told apart.</summary>
+    public Action? OnPruneDangling { get; set; }
+
+    /// <summary>Overrides the figure the daemon "reports" as reclaimed, independent of the images'
+    /// own sizes — the real one is the daemon's own <c>SpaceReclaimed</c> and need not equal the sum.</summary>
+    public long? DaemonReportsReclaimed { get; set; }
+
+    /// <summary>Cancelled the instant a prune is attempted — the host shutting down, or a deadline
+    /// firing, while the daemon call is in flight. The call then fails with the cancellation, as an
+    /// HTTP request over a dead token does.</summary>
+    public CancellationTokenSource? CancelWhenPruneIsAttempted { get; set; }
+
+    /// <summary>Silently drops every dangling image, as if something outside Harbora had pruned them.
+    /// Not recorded — nothing in the platform did this.</summary>
+    public FakeDockerEngine ForgetDangling()
+    {
+        lock (_gate) _dangling.Clear();
+        return this;
+    }
+
+    public Task<DanglingImages> GetDanglingImagesAsync(CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (DanglingThrows is not null) throw DanglingThrows;
+        lock (_gate) return Task.FromResult(new DanglingImages(_dangling.Count, _dangling.Sum()));
+    }
+
+    public Task<DanglingImagesPruned> PruneDanglingImagesAsync(CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        Record(nameof(PruneDanglingImagesAsync), "dangling");
+        if (CancelWhenPruneIsAttempted is { } dying)
+        {
+            dying.Cancel();
+            ct.ThrowIfCancellationRequested();
+        }
+        if (DanglingThrows is not null) throw DanglingThrows;
+        if (PruneDanglingThrows is not null) throw PruneDanglingThrows;
+
+        DanglingImagesPruned pruned;
+        lock (_gate)
+        {
+            pruned = new DanglingImagesPruned(_dangling.Count, DaemonReportsReclaimed ?? _dangling.Sum());
+            _dangling.Clear();
+        }
+
+        OnPruneDangling?.Invoke();
+        return Task.FromResult(pruned);
+    }
+
     public Task<string> RunContainerAsync(DockerRunRequest request, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();

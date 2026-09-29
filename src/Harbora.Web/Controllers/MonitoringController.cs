@@ -35,9 +35,11 @@ public sealed class MonitoringController(
         System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
 
     /// <summary>
-    /// Remove Harbora's own leftover images: orphans of deleted apps, and anything past each
-    /// living app's rollback window. The figures reported are the disk's own before/after, because
-    /// summed image sizes overstate shared layers.
+    /// Remove Harbora's own leftover images: orphans of deleted apps, anything past each living app's
+    /// rollback window, and — through the daemon's own prune — dangling (untagged, unreferenced)
+    /// images. Tagged images outside the first two are never touched. The headline figure is the
+    /// disk's own before/after, because summed image sizes overstate shared layers; the daemon's own
+    /// reclaimed figure for the dangling prune is reported beside it, labelled as the daemon's.
     /// </summary>
     [HttpPost("cleanup")]
     [Authorize(Policy = Harbora.Domain.Authorization.Capabilities.ServersManage)]
@@ -54,6 +56,8 @@ public sealed class MonitoringController(
                 superseded = result.RetentionRemoved,
                 refused = result.Failed,
                 freedBytes = result.FreedBytes,
+                dangling = result.DanglingRemoved,
+                danglingReclaimedBytes = result.DanglingReclaimedBytes,
                 servers = result.Servers
             }),
             // Cleans up the shared node's own leftover images across every workspace's apps at once
@@ -74,9 +78,29 @@ public sealed class MonitoringController(
                 ? $" این سرورها بررسی نشدند: {string.Join("، ", skipped)}."
                 : $" Not examined: {string.Join(", ", skipped)}.";
 
+        // The daemon's own claim, said as such — it sits beside the measured "freed" figure and never
+        // replaces it. Unknown, not zero, when no machine could be pruned.
+        var danglingBytes = result.DanglingReclaimedBytes is { } d
+            ? Harbora.Infrastructure.Tenancy.ByteSize.Measured(d)
+            : (IsFa ? "نامشخص" : "unknown");
+
+        // A machine whose dangling images were not examined — a v1 node, an agent too old to have the
+        // endpoint, a prune that failed — is named WITH its reason: the other two sweeps may well have
+        // run there, so "Not examined" above does not cover it, and the fix (update the agent) is only
+        // in the reason. Servers already listed above as not swept are not repeated.
+        var danglingSkipped = result.Servers
+            .Where(s => s.DanglingNotExamined is not null && s.Skipped is null)
+            .Select(s => $"{s.ServerName} ({s.DanglingNotExamined})")
+            .ToList();
+        var danglingNote = danglingSkipped.Count == 0
+            ? string.Empty
+            : IsFa
+                ? $" ایمیج‌های بی‌برچسب این سرورها بررسی نشدند: {string.Join("؛ ", danglingSkipped)}."
+                : $" Dangling images not examined: {string.Join("; ", danglingSkipped)}.";
+
         TempData["Message"] = (IsFa
-            ? $"پاک‌سازی: {removed} ایمیج حذف شد ({result.OrphanRemoved} یتیم، {result.RetentionRemoved} قدیمی)، {result.Failed} در حال استفاده ماند؛ فضای آزادشده: {freed}."
-            : $"Cleanup removed {removed} image(s) ({result.OrphanRemoved} orphaned, {result.RetentionRemoved} superseded), {result.Failed} in use and kept; freed: {freed}.") + note;
+            ? $"پاک‌سازی: {removed} ایمیج حذف شد ({result.OrphanRemoved} یتیم، {result.RetentionRemoved} قدیمی)، {result.DanglingRemoved} ایمیج بی‌برچسب (dangling) حذف شد (طبق گزارش Docker: {danglingBytes})، {result.Failed} در حال استفاده ماند؛ فضای آزادشده: {freed}."
+            : $"Cleanup removed {removed} image(s) ({result.OrphanRemoved} orphaned, {result.RetentionRemoved} superseded), pruned {result.DanglingRemoved} dangling image(s) (the daemon reported {danglingBytes}), {result.Failed} in use and kept; freed: {freed}.") + note + danglingNote;
 
         return RedirectToAction(nameof(Index));
     }

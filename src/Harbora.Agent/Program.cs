@@ -114,6 +114,14 @@ app.MapGet("/agent/images/exists", async (string image, IDockerEngine e, Cancell
 app.MapPost("/agent/images/remove", (ImageBody b, IDockerEngine e, CancellationToken ct) =>
     e.RemoveImageAsync(b.Image, ct));
 
+// Dangling images — the untagged layers every classic-builder rebuild leaves behind, which the tagged
+// listing above cannot see. The panel's RemoteDockerEngine reads a 404 from these two routes as "this
+// agent is too old to be swept", so they must never answer 404 themselves. The prune is the daemon's
+// own image prune with dangling=true (DockerEngine.DanglingFilter): it removes only images that are
+// untagged and unreferenced by any container, never a tagged image.
+app.MapGet("/agent/images/dangling", (IDockerEngine e, CancellationToken ct) => e.GetDanglingImagesAsync(ct));
+app.MapPost("/agent/images/dangling/prune", (IDockerEngine e, CancellationToken ct) => e.PruneDanglingImagesAsync(ct));
+
 app.MapPost("/agent/build", async (string tag, string dockerfile, bool noCache, HttpContext ctx, DockerEngine e, CancellationToken ct) =>
 {
     var buildArgs = ParseBuildArgs(ctx.Request.Headers["X-Build-Args"].ToString());

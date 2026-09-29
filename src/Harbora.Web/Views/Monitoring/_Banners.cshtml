@@ -29,14 +29,16 @@
 }
 @if (User.IsInRole("Owner") || User.IsInRole("Admin"))
 {
-    @* Removes only Harbora's own build images: orphans of deleted apps, and anything past each
-       app's rollback window. Customer images are never candidates, and an image still in use is
-       left alone by the engine's own contract. Kept beside the disk banner rather than folded away
-       — it is the one action a person reading a disk warning actually wants right now. *@
+    @* Removes Harbora's own build images — orphans of deleted apps, and anything past each app's
+       rollback window — plus DANGLING images (untagged, referenced by nothing) through the daemon's
+       own prune. No tagged image beyond the first two is ever a candidate, so customer images, build
+       bases and rollback tags are untouched, and an image still in use is left alone by the engine's
+       own contract. Kept beside the disk banner rather than folded away — it is the one action a
+       person reading a disk warning actually wants right now. *@
     <form asp-controller="Monitoring" asp-action="Cleanup" method="post" class="mb-4 flex items-center gap-3 flex-wrap">
         @Html.AntiForgeryToken()
         <button class="rounded-lg bg-surface-2 hover:bg-surface-2 px-4 py-2 text-sm">🧹 @(isFa ? "پاک‌سازی دیسک" : "Clean up disk")</button>
-        <span class="text-xs text-ink-faint">@(isFa ? "فقط ایمیج‌های ساخت خود Harbora؛ بازهٔ بازگردانی دست نمی‌خورد." : "Only Harbora's own build images; the rollback window is untouched.")</span>
+        <span class="text-xs text-ink-faint">@(isFa ? "ایمیج‌های ساخت خود Harbora و ایمیج‌های بی‌برچسب و بی‌مصرف (dangling)؛ ایمیج‌های برچسب‌دار دیگر و بازهٔ بازگردانی دست نمی‌خورد." : "Harbora's own build images and dangling (untagged, unused) images; other tagged images and the rollback window are untouched.")</span>
         @* Read-only, before-you-press-the-button view: what a cleanup would remove, per server and
            per app, and why. Reuses the same figures the button acts on — see DiskUsageReport. *@
         <a href="/monitoring/disk-report" class="text-xs rounded-lg bg-surface-2 hover:bg-surface-2 px-3 py-1.5 text-ink-muted">

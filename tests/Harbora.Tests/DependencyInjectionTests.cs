@@ -110,6 +110,62 @@ public class DependencyInjectionTests
     }
 
     [Fact]
+    public void The_dangling_image_sweeper_is_registered_and_starts_after_the_gate()
+    {
+        // A timer, not a startup reconciler: it settles nothing the job worker is waiting on, so it
+        // belongs below the opener exactly as the retention sweeper does. And it has to be registered at
+        // all — a sweeper that exists and is never added to the host is the same as no sweeper.
+        var hostedServices = BuildServices()
+            .Where(d => d.ServiceType == typeof(IHostedService))
+            .Select(d => d.ImplementationType)
+            .ToList();
+
+        var sweeperIndex = hostedServices.IndexOf(typeof(DanglingImageSweeper));
+        var openerIndex = hostedServices.IndexOf(typeof(JobStartupGateOpener));
+
+        sweeperIndex.Should().BeGreaterThan(-1, "the dangling-image sweeper must be a hosted service at all");
+        sweeperIndex.Should().BeGreaterThan(openerIndex,
+            "a timer-driven sweeper is not a startup reconciler and belongs below the gate opener");
+    }
+
+    [Fact]
+    public void The_dangling_image_sweeper_can_be_built_by_the_container_it_is_registered_in()
+    {
+        // Two constructors — a public one for the container and an internal one for tests — and the
+        // container must pick the first. A registration whose sweeper cannot be constructed fails when
+        // the host STARTS, which is exactly the thing this service must never do to the panel.
+        // Built through ActivatorUtilities, which selects a constructor the way the container does, from
+        // the real registration's own services — rather than resolving every hosted service the platform
+        // has just to reach this one.
+        var services = BuildServices();
+        services.AddLogging();
+        using var provider = services.BuildServiceProvider();
+
+        var sweeper = ActivatorUtilities.CreateInstance<DanglingImageSweeper>(provider);
+
+        sweeper.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void The_dangling_sweep_interval_is_read_from_configuration_and_defaults_to_a_day()
+    {
+        static HarboraRuntimeOptions Read(params (string Key, string Value)[] settings) =>
+            BuildServices(settings).BuildServiceProvider()
+                .GetRequiredService<IOptions<HarboraRuntimeOptions>>().Value;
+
+        Read().DanglingImageSweepHours.Should().Be(24, "an install that says nothing sweeps once a day");
+        Read().DanglingImageSweepInterval.Should().Be(TimeSpan.FromHours(24));
+
+        var sixHourly = Read(("Runtime:DanglingImageSweepHours", "6"));
+        sixHourly.DanglingImageSweepHours.Should().Be(6);
+        sixHourly.DanglingImageSweepInterval.Should().Be(TimeSpan.FromHours(6));
+
+        var off = Read(("Runtime:DanglingImageSweepHours", "0"));
+        off.DanglingImageSweepHours.Should().Be(0);
+        off.DanglingImageSweepInterval.Should().BeNull("0 turns the periodic sweep off");
+    }
+
+    [Fact]
     public void Every_retention_cutoff_is_readable_from_configuration()
     {
         // "An operator can see and change every cutoff" is the acceptance criterion, and an option

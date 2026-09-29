@@ -338,6 +338,66 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
         }
     }
 
+    /// <summary>
+    /// The one filter every dangling-image call in this class sends the daemon: <c>dangling=true</c>,
+    /// and nothing else. Pulled out as its own pure static — the same reason
+    /// <see cref="BuildParameters"/> is — because what this engine ASKS the daemon for is the whole
+    /// safety argument of the dangling sweep, and it is reachable from a test with no daemon involved.
+    ///
+    /// <para>
+    /// The value is <b>explicit</b> even though <c>true</c> is what the daemon assumes when the filter
+    /// is absent: <c>dangling=false</c> is <c>docker image prune -a</c> — every unused TAGGED image,
+    /// build bases and rollback tags included — and a call that leaned on a default here would be one
+    /// refactor from being that call.
+    /// </para>
+    /// </summary>
+    internal static IDictionary<string, IDictionary<string, bool>> DanglingFilter() =>
+        new Dictionary<string, IDictionary<string, bool>>
+        {
+            ["dangling"] = new Dictionary<string, bool> { ["true"] = true }
+        };
+
+    /// <summary>What <see cref="GetDanglingImagesAsync"/> asks the daemon to list.</summary>
+    internal static ImagesListParameters DanglingListParameters() =>
+        new() { All = false, Filters = DanglingFilter() };
+
+    /// <summary>What <see cref="PruneDanglingImagesAsync"/> asks the daemon to prune.</summary>
+    internal static ImagesPruneParameters DanglingPruneParameters() =>
+        new() { Filters = DanglingFilter() };
+
+    /// <summary>
+    /// The daemon's own listing with the same filter the prune uses, so what is reported as
+    /// reclaimable and what a prune would remove are the same set by construction. Each image's
+    /// <c>Size</c> counts layers it shares with other images, so the total is an upper bound.
+    /// </summary>
+    public async Task<DanglingImages> GetDanglingImagesAsync(CancellationToken ct)
+    {
+        var images = await client.Images.ListImagesAsync(DanglingListParameters(), ct);
+        return new DanglingImages(images.Count, images.Sum(i => i.Size));
+    }
+
+    /// <summary>
+    /// The daemon's own image prune with the dangling filter — see <see cref="DanglingFilter"/>. This
+    /// is deliberately NOT a list-then-<see cref="RemoveImageAsync"/> loop: the daemon decides what is
+    /// dangling at the instant it prunes and never removes an image a container (running or stopped)
+    /// references, and a loop over a stale listing would reintroduce the race that call handles.
+    /// </summary>
+    public async Task<DanglingImagesPruned> PruneDanglingImagesAsync(CancellationToken ct)
+    {
+        var response = await client.Images.PruneImagesAsync(DanglingPruneParameters(), ct);
+
+        // "Deleted" is an image removed; an entry with only "Untagged" set is a tag dropped, which is
+        // not a deletion and would overstate the count if it were included.
+        var deleted = response.ImagesDeleted?.Count(i => !string.IsNullOrEmpty(i.Deleted)) ?? 0;
+        var reclaimed = (long)Math.Min(response.SpaceReclaimed, (ulong)long.MaxValue);
+
+        logger.LogInformation(
+            "Pruned {Deleted} dangling image(s); the daemon reported {Bytes} byte(s) reclaimed.",
+            deleted, reclaimed);
+
+        return new DanglingImagesPruned(deleted, reclaimed);
+    }
+
     public async Task<string> RunContainerAsync(DockerRunRequest r, CancellationToken ct)
     {
         var id = await CreateContainerAsync(r, ct);

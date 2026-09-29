@@ -196,6 +196,13 @@ services:
       # in this file. `install.sh update` backfills the key with today's default (5) so it is visible
       # and editable; a value the operator already set is never touched.
       Runtime__ImageRetentionCount:
+      # How often, in hours, the panel prunes every server's DANGLING images on its own (default 24;
+      # 0 turns the background sweep off). Without this line the setting the RUNBOOK documents would
+      # be exactly what HARBORA-0065 found twice already: visible in .env, and inert. A bare key for the
+      # same reason as the two above — an unset .env reaches HarboraRuntimeOptions' own default rather
+      # than a literal duplicated here. No install.sh backfill: unlike those two, nothing about this
+      # value is worth an operator meeting for the first time in a file they did not know to open.
+      Runtime__DanglingImageSweepHours:
     # Without this a panel whose process has died or hung stays "running" forever: Docker never
     # restarts it, and every request gets a 502 with nothing to explain why. Observed in production.
     healthcheck:
