@@ -154,12 +154,26 @@ internal static class UpgradeFromPreviousRelease
 
     private static async Task SeedDeploymentQueueAsync(SchemaSeed seed)
     {
+        // The apps live in a real environment, as every app on an install at this schema does:
+        // 20260730220251_ProjectsAndEnvironments placed every row that existed then, and every creation
+        // path has set EnvironmentId since. This seed was written on 8 August, before
+        // 20260817214810_EnvironmentRequired, and left EnvironmentId null — harmless then. That later
+        // migration deliberately turns a still-null EnvironmentId into Guid.Empty and lets the foreign
+        // key refuse it: a loud failure for a state a real install cannot be in. So the seed, not the
+        // migration, was wrong, and it failed 25 tests the first time CI ran it after seven weeks off.
+        await seed.InsertAsync("Projects",
+            ("Id", Seeded.ProjectOne), ("WorkspaceId", Seeded.WorkspaceOne), ("Name", "shop"), ("Slug", "shop"));
+
+        await seed.InsertAsync("Environments",
+            ("Id", Seeded.EnvironmentOne), ("WorkspaceId", Seeded.WorkspaceOne), ("ProjectId", Seeded.ProjectOne),
+            ("Name", "production"), ("Slug", "production"), ("IsDefault", true));
+
         await seed.InsertAsync("Apps",
-            ("Id", Seeded.AppOne), ("WorkspaceId", Seeded.WorkspaceOne),
+            ("Id", Seeded.AppOne), ("WorkspaceId", Seeded.WorkspaceOne), ("EnvironmentId", Seeded.EnvironmentOne),
             ("Name", "one"), ("Slug", "one"), ("ServerId", Seeded.Server));
 
         await seed.InsertAsync("Apps",
-            ("Id", Seeded.AppTwo), ("WorkspaceId", Seeded.WorkspaceOne),
+            ("Id", Seeded.AppTwo), ("WorkspaceId", Seeded.WorkspaceOne), ("EnvironmentId", Seeded.EnvironmentOne),
             ("Name", "two"), ("Slug", "two"), ("ServerId", Seeded.Server));
 
         // Two deployments of one app — the case ExclusiveWith exists for. Under the serial worker
@@ -387,6 +401,9 @@ internal static class UpgradeFromPreviousRelease
         public static readonly Guid WorkspaceOne = new("11111111-0000-0000-0000-000000000001");
         public static readonly Guid WorkspaceTwo = new("11111111-0000-0000-0000-000000000002");
         public static readonly Guid Server = new("55555555-0000-0000-0000-000000000001");
+
+        public static readonly Guid ProjectOne = new("99999999-0000-0000-0000-000000000001");
+        public static readonly Guid EnvironmentOne = new("99999999-0000-0000-0000-000000000002");
 
         public static readonly Guid AppOne = new("aaaaaaaa-0000-0000-0000-000000000001");
         public static readonly Guid AppTwo = new("aaaaaaaa-0000-0000-0000-000000000002");
