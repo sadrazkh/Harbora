@@ -1,9 +1,9 @@
 using System.Net;
-using System.Reflection;
 using Docker.DotNet;
 using Docker.DotNet.Models;
 using FluentAssertions;
 using Harbora.Infrastructure.Docker;
+using Harbora.Tests.Fakes;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -38,7 +38,7 @@ public class DockerEngineBuildImageExistsTests
 
     private static JSONMessage Line(string text) => new() { Stream = text + "\n" };
 
-    private static async Task<string> BuildAsync(FakeDaemon daemon, List<string>? logged = null)
+    private static async Task<string> BuildAsync(ScriptedDockerClient daemon, List<string>? logged = null)
     {
         var engine = new DockerEngine(daemon.Client, NullLogger<DockerEngine>.Instance);
         var log = new Harbora.Infrastructure.Deployments.InlineProgress<string>(l => logged?.Add(l));
@@ -52,7 +52,7 @@ public class DockerEngineBuildImageExistsTests
     [Fact]
     public async Task A_stream_that_reports_nothing_wrong_but_leaves_no_image_fails_naming_the_image_and_the_last_step()
     {
-        var daemon = new FakeDaemon(imageExists: false,
+        var daemon = new ScriptedDockerClient(imageExists: false,
             Line("Step 18/23 : RUN npm ci"),
             Line("added 214 packages in 3s"),
             Line("Step 19/23 : COPY . ."),
@@ -77,7 +77,7 @@ public class DockerEngineBuildImageExistsTests
         // deliver late, on the thread pool, after the build call has already returned.
         for (var run = 0; run < 25; run++)
         {
-            var daemon = new FakeDaemon(imageExists: false,
+            var daemon = new ScriptedDockerClient(imageExists: false,
                 Line("Step 3/3 : RUN make"), Line($"final line {run}"));
 
             var act = () => BuildAsync(daemon);
@@ -91,7 +91,7 @@ public class DockerEngineBuildImageExistsTests
     public async Task Only_the_last_few_lines_are_quoted_not_the_whole_build_output()
     {
         var lines = Enumerable.Range(1, 60).Select(i => Line($"output line {i:D2}")).ToArray();
-        var daemon = new FakeDaemon(imageExists: false, lines);
+        var daemon = new ScriptedDockerClient(imageExists: false, lines);
 
         var act = () => BuildAsync(daemon);
 
@@ -105,7 +105,7 @@ public class DockerEngineBuildImageExistsTests
     [Fact]
     public async Task A_very_long_line_is_cut_rather_than_stored_whole()
     {
-        var daemon = new FakeDaemon(imageExists: false, Line(new string('x', 50_000)));
+        var daemon = new ScriptedDockerClient(imageExists: false, Line(new string('x', 50_000)));
 
         var act = () => BuildAsync(daemon);
 
@@ -116,7 +116,7 @@ public class DockerEngineBuildImageExistsTests
     [Fact]
     public async Task A_build_that_printed_no_step_at_all_still_names_the_image_and_says_no_step_was_seen()
     {
-        var daemon = new FakeDaemon(imageExists: false, Line("Sending build context to Docker daemon"));
+        var daemon = new ScriptedDockerClient(imageExists: false, Line("Sending build context to Docker daemon"));
 
         var act = () => BuildAsync(daemon);
 
@@ -129,7 +129,7 @@ public class DockerEngineBuildImageExistsTests
     [Fact]
     public async Task A_build_that_printed_nothing_at_all_and_left_no_image_still_fails_with_the_image_named()
     {
-        var daemon = new FakeDaemon(imageExists: false);
+        var daemon = new ScriptedDockerClient(imageExists: false);
 
         var act = () => BuildAsync(daemon);
 
@@ -142,7 +142,7 @@ public class DockerEngineBuildImageExistsTests
     public async Task A_build_that_succeeds_and_whose_tag_exists_is_unaffected()
     {
         var logged = new List<string>();
-        var daemon = new FakeDaemon(imageExists: true,
+        var daemon = new ScriptedDockerClient(imageExists: true,
             Line("Step 1/2 : FROM node:20"), Line("Successfully built abc123"),
             Line($"Successfully tagged {Image}"));
 
@@ -157,7 +157,7 @@ public class DockerEngineBuildImageExistsTests
     public async Task A_failure_the_daemon_did_report_keeps_its_own_message_and_never_reaches_the_image_check()
     {
         // The existing detection is kept: this is a backstop for what it misses, not its replacement.
-        var daemon = new FakeDaemon(imageExists: true,
+        var daemon = new ScriptedDockerClient(imageExists: true,
             Line("Step 6/23 : RUN npm run build"),
             new JSONMessage { Error = new JSONError { Message = "The command '/bin/sh -c npm run build' returned a non-zero code: 1" } });
 
@@ -173,7 +173,7 @@ public class DockerEngineBuildImageExistsTests
     [Fact]
     public async Task A_daemon_that_cannot_be_asked_whether_the_image_exists_surfaces_that_error_not_a_false_success()
     {
-        var daemon = new FakeDaemon(imageExists: true, Line("Step 1/1 : FROM scratch"))
+        var daemon = new ScriptedDockerClient(imageExists: true, Line("Step 1/1 : FROM scratch"))
         {
             InspectFailure = new DockerApiException(HttpStatusCode.InternalServerError, "daemon is unhappy")
         };
@@ -183,82 +183,59 @@ public class DockerEngineBuildImageExistsTests
         await act.Should().ThrowAsync<DockerApiException>();
     }
 
-    // ---- the stand-in daemon ----
+    // ---- the socket transport ----
+    //
+    // The live server talks to Docker over a Unix socket, where BuildImageFromTarAsync does not use
+    // Docker.DotNet's build call at all (see DockerBuildTransport). The image check sits after both
+    // branches, and these two tests hold it to that: the same scenario, sent through the socket.
+    // The "daemon" is a script listening on a real Unix socket — the transport code is the real one,
+    // the daemon behind it is not.
 
-    /// <summary>
-    /// Just enough of <see cref="IDockerClient"/> for <c>BuildImageFromTarAsync</c>: an endpoint that
-    /// is not a Unix socket (so the typed call is used), a build call that reports scripted messages,
-    /// and an image inspect that answers found or not-found. Every other member throws, so a test that
-    /// starts depending on more says so loudly instead of passing on a default.
-    /// </summary>
-    private sealed class FakeDaemon
+    private static async Task<string> BuildOverSocketAsync(ScriptedDockerClient client)
     {
-        private readonly JSONMessage[] _messages;
-        private readonly bool _imageExists;
+        var engine = new DockerEngine(client.Client, NullLogger<DockerEngine>.Instance);
+        using var tar = new MemoryStream([1, 2, 3]);
 
-        public List<string> InspectedImages { get; } = [];
-        public Exception? InspectFailure { get; init; }
-        public IDockerClient Client { get; }
-
-        public FakeDaemon(bool imageExists, params JSONMessage[] messages)
-        {
-            _imageExists = imageExists;
-            _messages = messages;
-
-            var images = Proxy.Create<IImageOperations>(Images);
-            Client = Proxy.Create<IDockerClient>((method, _) => method.Name switch
-            {
-                "get_Configuration" => new DockerClientConfiguration(new Uri("tcp://127.0.0.1:2375")),
-                "get_Images" => images,
-                _ => throw new NotSupportedException($"IDockerClient.{method.Name} is not scripted.")
-            });
-        }
-
-        private object? Images(MethodInfo method, object?[] args)
-        {
-            switch (method.Name)
-            {
-                case "BuildImageFromDockerfileAsync":
-                    var progress = args.OfType<IProgress<JSONMessage>>().Single();
-                    foreach (var message in _messages) progress.Report(message);
-                    return CompletedTask(method.ReturnType);
-
-                case "InspectImageAsync":
-                    InspectedImages.Add((string)args[0]!);
-                    if (InspectFailure is not null) return Task.FromException<ImageInspectResponse>(InspectFailure);
-                    return _imageExists
-                        ? Task.FromResult(new ImageInspectResponse { ID = "sha256:abc" })
-                        : Task.FromException<ImageInspectResponse>(
-                            new DockerImageNotFoundException(HttpStatusCode.NotFound, "No such image"));
-
-                default:
-                    throw new NotSupportedException($"IImageOperations.{method.Name} is not scripted.");
-            }
-        }
-
-        private static object CompletedTask(Type taskType)
-        {
-            if (taskType == typeof(Task)) return Task.CompletedTask;
-            var result = taskType.GetGenericArguments()[0];
-            return typeof(Task).GetMethod(nameof(Task.FromResult))!
-                .MakeGenericMethod(result).Invoke(null, [null])!;
-        }
+        return await engine.BuildImageFromTarAsync(
+            tar, "Dockerfile", Image, new Dictionary<string, string>(),
+            new Harbora.Infrastructure.Deployments.InlineProgress<string>(_ => { }), CancellationToken.None,
+            cacheFrom: ["harbora/loomi:build-11"]);
     }
 
-    /// <summary>A hand-rolled interface stand-in: no mocking library in this project, and the interfaces
-    /// here are too wide to implement by hand for the two members that matter.</summary>
-    public class Proxy : DispatchProxy
+    [Fact]
+    public async Task Over_the_socket_a_stream_that_reports_nothing_wrong_but_leaves_no_image_fails_the_same_way()
     {
-        private Func<MethodInfo, object?[], object?>? _handler;
+        await using var daemon = new FakeUnixBuildDaemon(
+            """{"stream":"Step 18/23 : RUN npm ci"}""",
+            """{"stream":"Step 19/23 : COPY . ."}""",
+            """{"stream":"failed to restore cached image from \"sha256:1d3c\" to sha256:9f8a: failed to create cache image: x"}""");
+        var client = ScriptedDockerClient.OnSocket(daemon.Endpoint, imageExists: false);
 
-        public static T Create<T>(Func<MethodInfo, object?[], object?> handler) where T : class
-        {
-            var proxy = Create<T, Proxy>();
-            ((Proxy)(object)proxy)._handler = handler;
-            return proxy;
-        }
+        var act = () => BuildOverSocketAsync(client);
 
-        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args) =>
-            _handler!(targetMethod!, args ?? []);
+        var thrown = (await act.Should().ThrowAsync<DockerBuildException>()).Which;
+        daemon.ServeFailure.Should().BeNull();
+        daemon.RequestLine.Should().StartWith("POST /v1.41/build?");
+        client.TypedBuildCalls.Should().Be(0, "this build must have gone through the socket transport, not the typed call");
+        thrown.Message.Should().Contain(Image);
+        thrown.Message.Should().Contain("The last step reported was Step 19/23 : COPY . .");
+        thrown.Message.Should().Contain("failed to restore cached image");
+        client.InspectedImages.Should().Equal(Image);
+    }
+
+    [Fact]
+    public async Task Over_the_socket_a_build_that_succeeds_and_whose_tag_exists_is_unaffected()
+    {
+        await using var daemon = new FakeUnixBuildDaemon(
+            """{"stream":"Step 1/1 : FROM scratch"}""",
+            """{"stream":"Successfully built abc123"}""");
+        var client = ScriptedDockerClient.OnSocket(daemon.Endpoint, imageExists: true);
+
+        var built = await BuildOverSocketAsync(client);
+
+        built.Should().Be(Image);
+        daemon.ServeFailure.Should().BeNull();
+        client.TypedBuildCalls.Should().Be(0);
+        client.InspectedImages.Should().Equal(Image);
     }
 }
