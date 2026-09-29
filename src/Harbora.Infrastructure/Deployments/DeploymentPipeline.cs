@@ -1481,10 +1481,27 @@ public sealed class DeploymentPipeline(
         await log(LogStream.System, $"Build cache: {cachePlan.Reason}");
 
         await log(LogStream.System, $"Building image {imageTag} …");
-        return await docker.BuildImageAsync(
-            new DockerBuildRequest(contextPath, dockerfile, imageTag, BuildArgsFor(app),
-                cachePlan.CacheFrom, NoCache: deployment.ForceRebuild),
-            buildLog, ct);
+        var request = new DockerBuildRequest(contextPath, dockerfile, imageTag, BuildArgsFor(app),
+            cachePlan.CacheFrom, NoCache: deployment.ForceRebuild);
+
+        try
+        {
+            return await docker.BuildImageAsync(request, buildLog, ct);
+        }
+        // The classic builder is deprecated in Docker 29 and its cache-restore step fails
+        // intermittently — three live deployments died on it, each followed by a retry that passed.
+        // The build cache is a feature the owner keeps, so its failure is made cheap rather than
+        // fatal: one more build without the cache source, and only for that failure. Never for a
+        // build that used no cache (there is nothing to drop), never for any other error (a real
+        // `RUN npm ci` failure must fail once, not twice at double the wait), and never a third
+        // time: the retry is outside this catch, so whatever it throws is the deployment's failure.
+        catch (Exception ex) when (cachePlan.CacheFrom is { Count: > 0 } && BuildCache.IsCacheRestoreFailure(ex))
+        {
+            await log(LogStream.System,
+                "Build cache: the daemon could not restore the cached image, so the build is being " +
+                "repeated once without it.");
+            return await docker.BuildImageAsync(request with { CacheFrom = null }, buildLog, ct);
+        }
     }
 
     /// <summary>

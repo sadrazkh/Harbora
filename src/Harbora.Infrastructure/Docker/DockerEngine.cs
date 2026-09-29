@@ -68,7 +68,17 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
         string? lastStep = null;
         JSONMessage? failure = null;
 
-        var progress = new Progress<JSONMessage>(m =>
+        // The last few lines the daemon said, kept so that a build that ends with no error and no
+        // image can still say what it was doing when it stopped — see the image check below.
+        const int TailLines = 6;
+        const int TailLineChars = 300;
+        var tail = new Queue<string>(TailLines);
+
+        // Reports inline, not through Progress<T>: that posts every message to the thread pool, so
+        // when the build call returns the final messages — the ones carrying a failure, and the ones
+        // the image check below quotes — may not have been handled yet. Both are read the moment the
+        // call returns, so they have to have been handled by then.
+        var progress = new Harbora.Infrastructure.Deployments.InlineProgress<JSONMessage>(m =>
         {
             // Docker.DotNet.Enhanced 3.131.1's JSONMessage dropped the free-text ErrorMessage
             // property; Error.Message (the structured field) is now the only place a failure's text
@@ -79,6 +89,10 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
                 var trimmed = line.TrimEnd('\n');
                 log.Report(trimmed);
                 if (IsStepLine(trimmed)) lastStep = trimmed.Trim();
+
+                var kept = trimmed.Trim();
+                if (tail.Count == TailLines) tail.Dequeue();
+                tail.Enqueue(kept.Length <= TailLineChars ? kept : kept[..TailLineChars] + "…");
             }
             if (DescribesBuildFailure(m)) failure ??= m;
         });
@@ -107,6 +121,22 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
 
         if (failure is not null)
             throw new DockerBuildException(BuildFailureMessage(imageTag, lastStep, failure));
+
+        // The backstop. Everything above only catches a failure the daemon put in a shape this code
+        // knows to look for, and the daemon's shapes are not a closed set: Docker 29's cache-restore
+        // error ("failed to restore cached image …") arrived as an ordinary progress line on two live
+        // deployments, no error message anywhere in the stream, and this method returned the tag of
+        // an image that did not exist. So the one fact that matters is checked directly, after
+        // whichever transport ran: is the image there. Answering for every shape at once is the
+        // point — do not teach this method to recognise that line by its text instead.
+        if (!await ImageExistsAsync(imageTag, ct))
+        {
+            var said = tail.Count == 0 ? "the daemon printed nothing" : string.Join(" | ", tail);
+            throw new DockerBuildException(
+                $"Build of {imageTag} ended without an error, but the image does not exist. " +
+                (lastStep is null ? "No build step was reported. " : $"The last step reported was {lastStep}. ") +
+                $"Last output: {said}");
+        }
 
         return imageTag;
     }

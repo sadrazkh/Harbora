@@ -73,6 +73,48 @@ public static class BuildCache
 
         return new BuildCachePlan([candidate], $"reusing layers from {candidate} (this app's previous successful build).");
     }
+
+    /// <summary>
+    /// The one place that decides whether a failed build failed because the daemon could not restore
+    /// the <c>--cache-from</c> image — the only failure a build is repeated for. Anything else (a
+    /// <c>RUN npm ci</c> that exits non-zero, a bad Dockerfile, a full disk) is the app's own
+    /// problem, and building it again would only make the deployment fail after twice the wait.
+    ///
+    /// <para>
+    /// It keys on this daemon text, which Docker 29's classic builder produces intermittently while
+    /// restoring a cache source it was handed:
+    /// <c>failed to restore cached image from "sha256:…" to sha256:…: failed to create cache image: …</c>.
+    /// The fixed part is <c>failed to restore cached image</c>; what follows it (the image ids, and
+    /// the reason it could not be created) differs every time, so it is not part of the match.
+    /// </para>
+    ///
+    /// <para>
+    /// Text is the only signal there is. The daemon reports it as a free-text message with no error
+    /// code: DriveUnion #44 got it as the stream's error message, Loomi #9 and #12 as an ordinary
+    /// progress line, and the exception type it ends up as depends on which of those it was and on
+    /// which engine ran the build — a build on a remote node's agent crosses HTTP, where a
+    /// <c>DockerBuildException</c> becomes a plain <c>HttpRequestException</c>, or something else
+    /// again. So this reads every message in the exception's chain and never the type, and matches
+    /// whether the text is the whole message, one sentence inside a longer one, or the tail of what
+    /// <see cref="FailureText.Describe"/> joined together.
+    /// </para>
+    /// </summary>
+    public static bool IsCacheRestoreFailure(Exception? failure)
+    {
+        if (failure is null) return false;
+
+        if (failure is AggregateException aggregate)
+            return aggregate.InnerExceptions.Any(IsCacheRestoreFailure);
+
+        return IsCacheRestoreFailure(failure.Message) || IsCacheRestoreFailure(failure.InnerException);
+    }
+
+    /// <summary>The same decision for text that has already been flattened — a stored deployment
+    /// error, or a line of build output — see <see cref="IsCacheRestoreFailure(Exception?)"/>.</summary>
+    public static bool IsCacheRestoreFailure(string? text) =>
+        text is not null && text.Contains(CacheRestoreFailureText, StringComparison.OrdinalIgnoreCase);
+
+    private const string CacheRestoreFailureText = "failed to restore cached image";
 }
 
 /// <param name="CacheFrom">

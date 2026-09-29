@@ -86,6 +86,20 @@ public sealed class FakeDockerEngine : IDockerEngine
     /// <summary>When set, <see cref="BuildImageAsync"/> throws — simulates a failing build.</summary>
     public Exception? BuildFailure { get; set; }
 
+    private readonly ConcurrentQueue<Exception?> _scriptedBuildOutcomes = new();
+
+    /// <summary>
+    /// Scripts the outcome of the next builds, one entry per call, in order: an exception makes that
+    /// call fail, <c>null</c> makes it succeed. Calls after the script runs out fall back to
+    /// <see cref="BuildFailure"/> (or success when that is unset). What "fail first, succeed second"
+    /// needs — <see cref="BuildFailure"/> alone cannot express it, because it fails every call.
+    /// </summary>
+    public FakeDockerEngine ScriptBuilds(params Exception?[] outcomes)
+    {
+        foreach (var outcome in outcomes) _scriptedBuildOutcomes.Enqueue(outcome);
+        return this;
+    }
+
     /// <summary>When set, <see cref="RunContainerAsync"/> throws — simulates a container that won't start.</summary>
     public Exception? RunFailure { get; set; }
 
@@ -232,7 +246,11 @@ public sealed class FakeDockerEngine : IDockerEngine
         ct.ThrowIfCancellationRequested();
         Record(nameof(BuildImageAsync), request.ImageTag);
         BuildRequests.Add(request);
-        if (BuildFailure is not null) throw BuildFailure;
+        if (_scriptedBuildOutcomes.TryDequeue(out var outcome))
+        {
+            if (outcome is not null) throw outcome;
+        }
+        else if (BuildFailure is not null) throw BuildFailure;
         SeedImage(request.ImageTag);
         log.Report($"built {request.ImageTag}");
         return Task.FromResult(request.ImageTag);
