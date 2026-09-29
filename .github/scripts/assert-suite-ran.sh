@@ -91,8 +91,41 @@ fi
 
 if grep -q 'outcome="Failed"' "$trx"; then
   echo "::error::$suite — the TRX records failing tests."
-  grep -o '<UnitTestResult[^>]*outcome="Failed"[^>]*>' "$trx" \
-    | grep -o 'testName="[^"]*"' | sed 's/^testName="/  - /; s/"$//' || true
+  # One annotation per failing test, carrying the first lines of its own error message. Printing the
+  # names as plain log lines, as this used to, put them where only someone with repository access who
+  # downloads the job log could read them — the job page showed "the TRX records failing tests" and
+  # nothing about which. Annotations are on the run page and in the public check-run API.
+  #
+  # Parsed as XML rather than grepped: the message lives in a child element that spans lines, and a
+  # regex that happens to work on one TRX is the kind of check that silently reports nothing on the
+  # next. GitHub keeps ten error annotations per step, so the first nine are individual and the rest
+  # are counted in a tenth. Every name is still printed to the log below them.
+  python3 - "$trx" "$suite" <<'PY' || true
+import sys, xml.etree.ElementTree as ET
+path, suite = sys.argv[1], sys.argv[2]
+ns = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
+failed = []
+for r in ET.parse(path).getroot().iterfind(".//t:UnitTestResult", ns):
+    if r.get("outcome") != "Failed":
+        continue
+    msg = r.find("t:Output/t:ErrorInfo/t:Message", ns)
+    text = (msg.text or "").strip() if msg is not None else ""
+    failed.append((r.get("testName", "?"), text))
+
+def esc(s):  # GitHub workflow-command escaping for a message
+    return s.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+def esc_prop(s):  # a property value (title=) must also escape ':' and ',' or the title is cut short
+    return esc(s).replace(":", "%3A").replace(",", "%2C")
+
+for name, text in failed[:9]:
+    first = "\n".join(text.splitlines()[:4])[:600] or "(no message recorded)"
+    print(f"::error title={esc_prop(suite + ' — ' + name)[:250]}::{esc(first)}")
+if len(failed) > 9:
+    print(f"::error::{suite} — {len(failed) - 9} more failing test(s); every name is listed in the log.")
+for name, _ in failed:
+    print(f"  - {name}")
+PY
   exit 1
 fi
 
