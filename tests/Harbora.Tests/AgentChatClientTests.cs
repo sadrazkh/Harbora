@@ -30,7 +30,7 @@ public class AgentChatClientTests
 {
     // ---- harness ---------------------------------------------------------------------------
 
-    private sealed class PassthroughProtector : ISecretProtector
+    internal sealed class PassthroughProtector : ISecretProtector
     {
         public string Protect(string plaintext) => "enc:" + plaintext;
 
@@ -40,7 +40,7 @@ public class AgentChatClientTests
         public byte[] DeriveKey(string purpose) => new byte[32];
     }
 
-    private sealed record Rig(
+    internal sealed record Rig(
         OpenAiCompatibleAgentChatClient Client, RecordingChatHandler Handler,
         RecordingChatHandler.Factory Factory, HarboraDbContext Db);
 
@@ -48,8 +48,9 @@ public class AgentChatClientTests
     /// A client over an in-memory settings table. <paramref name="settings"/> overrides the defaults
     /// (a configured OpenRouter, key "sk-test"); a null value removes that default.
     /// </summary>
-    private static Rig Build(
-        RecordingChatHandler handler, Dictionary<string, string?>? settings = null, TimeSpan? timeout = null)
+    internal static Rig Build(
+        RecordingChatHandler handler, Dictionary<string, string?>? settings = null, TimeSpan? timeout = null,
+        TimeSpan? streamIdle = null)
     {
         var db = new HarboraDbContext(new DbContextOptionsBuilder<HarboraDbContext>()
             .UseInMemoryDatabase("agent-chat-" + Guid.NewGuid()).Options);
@@ -76,19 +77,20 @@ public class AgentChatClientTests
 
         var client = new OpenAiCompatibleAgentChatClient(assistant, new AgentSettingsService(db), factory)
         {
-            RequestTimeout = timeout ?? TimeSpan.FromSeconds(90)
+            RequestTimeout = timeout ?? TimeSpan.FromSeconds(90),
+            StreamIdleTimeout = streamIdle ?? TimeSpan.FromSeconds(45)
         };
         return new Rig(client, handler, factory, db);
     }
 
-    private static AgentChatRequest Ask(string text = "hello", IReadOnlyList<AgentToolSpec>? tools = null, int max = 2048) =>
+    internal static AgentChatRequest Ask(string text = "hello", IReadOnlyList<AgentToolSpec>? tools = null, int max = 2048) =>
         new([new AgentChatMessage(AgentRole.User, text)], tools ?? [], max);
 
-    private static readonly AgentToolSpec RestartApp = new(
+    internal static readonly AgentToolSpec RestartApp = new(
         "restart_app", "Restart a running app.",
         """{"type":"object","properties":{"app":{"type":"string"}},"required":["app"]}""");
 
-    private static void ShouldFailInBothLanguages(AgentChatResponse response)
+    internal static void ShouldFailInBothLanguages(AgentChatResponse response)
     {
         response.Ok.Should().BeFalse();
         response.Message.Should().BeNull("a failure carries no message — nothing may read as an answer");

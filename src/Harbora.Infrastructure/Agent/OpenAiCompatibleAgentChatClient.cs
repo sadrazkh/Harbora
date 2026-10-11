@@ -24,8 +24,13 @@ namespace Harbora.Infrastructure.Agent;
 /// with the provider's own words where it gave any. The one exception that does escape is the
 /// caller's own cancellation: that is the caller's decision, not a failure of the provider.
 /// </para>
+///
+/// <para>
+/// The streamed overload lives in <c>OpenAiCompatibleAgentChatClient.Streaming.cs</c>; it builds the
+/// same request and returns the same response, only reading the answer as it is written.
+/// </para>
 /// </summary>
-public sealed class OpenAiCompatibleAgentChatClient(
+public sealed partial class OpenAiCompatibleAgentChatClient(
     AssistantService assistant,
     AgentSettingsService agentSettings,
     IHttpClientFactory httpClientFactory) : IAgentChatClient
@@ -56,7 +61,17 @@ public sealed class OpenAiCompatibleAgentChatClient(
     public async Task<string?> GetModelAsync(CancellationToken ct) =>
         (await ResolveAsync(ct)).Models.Primary;
 
-    public async Task<AgentChatResponse> CompleteAsync(AgentChatRequest request, CancellationToken ct)
+    public Task<AgentChatResponse> CompleteAsync(AgentChatRequest request, CancellationToken ct) =>
+        CompleteAsync(request, onTextDelta: null, ct);
+
+    /// <summary>
+    /// With a callback the answer is streamed and the callback gets each piece of text as it is
+    /// written; without one it is the single round trip it always was. Either way the returned
+    /// response is the complete one. A callback that throws is not a provider failure, so its
+    /// exception is the caller's to see.
+    /// </summary>
+    public async Task<AgentChatResponse> CompleteAsync(
+        AgentChatRequest request, Func<string, Task>? onTextDelta, CancellationToken ct)
     {
         var target = await ResolveAsync(ct);
 
@@ -71,20 +86,15 @@ public sealed class OpenAiCompatibleAgentChatClient(
         var (body, bodyProblem) = BuildBody(request, target.Models);
         if (body is null) return bodyProblem!;
 
-        using var message = new HttpRequestMessage(HttpMethod.Post, url)
-        {
-            Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json")
-        };
+        return onTextDelta is null
+            ? await SendWholeAsync(url, target, body, ct)
+            : await StreamAsync(url, target, body, onTextDelta, ct);
+    }
 
-        // A local endpoint may have no key at all — see AssistantAvailability.
-        if (!string.IsNullOrWhiteSpace(target.Config.ApiKey))
-            message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", target.Config.ApiKey);
-
-        if (IsOpenRouter(url))
-        {
-            message.Headers.TryAddWithoutValidation("HTTP-Referer", OpenRouterReferer);
-            message.Headers.TryAddWithoutValidation("X-Title", OpenRouterTitle);
-        }
+    /// <summary>The non-streaming round trip: one request, one JSON body.</summary>
+    private async Task<AgentChatResponse> SendWholeAsync(Uri url, Target target, JsonObject body, CancellationToken ct)
+    {
+        using var message = NewMessage(url, target, body);
 
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
         budget.CancelAfter(RequestTimeout);
@@ -99,20 +109,51 @@ public sealed class OpenAiCompatibleAgentChatClient(
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             // Our own budget, not the caller giving up. (HttpClient's own timeout lands here too.)
-            var seconds = Math.Max(1, (int)Math.Ceiling(RequestTimeout.TotalSeconds));
-            return AgentChatResponse.Failed(
-                $"The AI provider did not answer within {seconds} seconds.",
-                $"ارائه‌دهندهٔ هوش مصنوعی ظرف {seconds} ثانیه پاسخ نداد.");
+            return TimedOut();
         }
         catch (HttpRequestException ex)
         {
-            // The message, not the stack: this goes onto a page, and "connection refused" or a DNS
-            // failure is the useful part.
-            return AgentChatResponse.Failed(
-                $"The AI provider could not be reached: {ex.Message}",
-                $"اتصال به ارائه‌دهندهٔ هوش مصنوعی برقرار نشد: {ex.Message}");
+            return Unreachable(ex);
         }
     }
+
+    /// <summary>The POST both paths send: JSON body, the key, and OpenRouter's two headers for OpenRouter.</summary>
+    private static HttpRequestMessage NewMessage(Uri url, Target target, JsonObject body)
+    {
+        var message = new HttpRequestMessage(HttpMethod.Post, url)
+        {
+            Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json")
+        };
+
+        // A local endpoint may have no key at all — see AssistantAvailability.
+        if (!string.IsNullOrWhiteSpace(target.Config.ApiKey))
+            message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", target.Config.ApiKey);
+
+        if (IsOpenRouter(url))
+        {
+            message.Headers.TryAddWithoutValidation("HTTP-Referer", OpenRouterReferer);
+            message.Headers.TryAddWithoutValidation("X-Title", OpenRouterTitle);
+        }
+
+        return message;
+    }
+
+    private AgentChatResponse TimedOut()
+    {
+        var seconds = Math.Max(1, (int)Math.Ceiling(RequestTimeout.TotalSeconds));
+        return AgentChatResponse.Failed(
+            $"The AI provider did not answer within {seconds} seconds.",
+            $"ارائه‌دهندهٔ هوش مصنوعی ظرف {seconds} ثانیه پاسخ نداد.");
+    }
+
+    /// <summary>
+    /// The message, not the stack: this goes onto a page, and "connection refused" or a DNS failure
+    /// is the useful part.
+    /// </summary>
+    private static AgentChatResponse Unreachable(Exception ex) =>
+        AgentChatResponse.Failed(
+            $"The AI provider could not be reached: {ex.Message}",
+            $"اتصال به ارائه‌دهندهٔ هوش مصنوعی برقرار نشد: {ex.Message}");
 
     // ---- configuration ---------------------------------------------------------------------
 
@@ -329,13 +370,7 @@ public sealed class OpenAiCompatibleAgentChatClient(
 
             // A 200 that carries an error object: OpenRouter does this when an upstream fails after
             // it has already accepted the request.
-            if (providerError is not null)
-            {
-                var said = providerError.Length > 0 ? providerError : "(no message)";
-                return AgentChatResponse.Failed(
-                    $"The AI provider reported an error: {said}",
-                    $"ارائه‌دهندهٔ هوش مصنوعی خطا گزارش کرد: {said}");
-            }
+            if (providerError is not null) return Reported(providerError);
 
             return ParseChoice(json);
         }
@@ -360,19 +395,33 @@ public sealed class OpenAiCompatibleAgentChatClient(
         if (!choice.TryGetProperty("message", out var message) || message.ValueKind != JsonValueKind.Object)
         {
             var choiceError = choice.ValueKind == JsonValueKind.Object ? ErrorDetail(choice) : null;
-            var said = string.IsNullOrEmpty(choiceError) ? "(no message)" : choiceError;
             return choiceError is not null
-                ? AgentChatResponse.Failed(
-                    $"The AI provider reported an error: {said}",
-                    $"ارائه‌دهندهٔ هوش مصنوعی خطا گزارش کرد: {said}")
+                ? Reported(choiceError)
                 : AgentChatResponse.Failed(
                     "The AI provider's reply had no choices.",
                     "پاسخ ارائه‌دهندهٔ هوش مصنوعی هیچ گزینه‌ای نداشت.");
         }
 
-        var content = ContentOf(message);
-        var calls = ToolCallsOf(message);
+        return Answer(ContentOf(message), ToolCallsOf(message), StringOf(root, "model"), UsageOf(root), finishReason);
+    }
 
+    /// <summary>An <c>error</c> the provider put in a reply or a stream; empty means it said nothing more.</summary>
+    private static AgentChatResponse Reported(string detail)
+    {
+        var said = detail.Length > 0 ? detail : "(no message)";
+        return AgentChatResponse.Failed(
+            $"The AI provider reported an error: {said}",
+            $"ارائه‌دهندهٔ هوش مصنوعی خطا گزارش کرد: {said}");
+    }
+
+    /// <summary>
+    /// The answer, from its parts. The one place it is assembled — the whole reply and the streamed
+    /// one both end here, so "the streamed response equals the whole one" is a property of the code
+    /// and not of two copies that happen to agree.
+    /// </summary>
+    private static AgentChatResponse Answer(
+        string? content, List<AgentToolCall> calls, string? model, AgentChatUsage? usage, string? finishReason)
+    {
         // Neither words nor a call is not an answer. Handing the pane an empty assistant message
         // would read as "the agent has nothing to say", a claim nobody made — AssistantClient makes
         // the same call. A reasoning model that spent its whole budget thinking ends up here.
@@ -388,8 +437,8 @@ public sealed class OpenAiCompatibleAgentChatClient(
             Ok: true,
             Message: new AgentChatMessage(AgentRole.Assistant, string.IsNullOrWhiteSpace(content) ? null : content,
                 calls.Count > 0 ? calls : null),
-            Model: StringOf(root, "model"),
-            Usage: UsageOf(root),
+            Model: model,
+            Usage: usage,
             FinishReason: finishReason,
             Error: null,
             ErrorFa: null);
