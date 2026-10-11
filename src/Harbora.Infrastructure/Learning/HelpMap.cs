@@ -74,6 +74,11 @@ public static class HelpMap
 
         ("/admin/ai", "08-ai"),
         ("/ai", "08-ai"),
+        // The page the assistant's locked toggle in the top bar opens: what the assistant is and who
+        // can switch it on, which chapter 8 explains from the owner's side. Only this feature page —
+        // "/features/admin" is the console for every feature, and a chapter about one of them
+        // would be the wrong answer there.
+        ("/features/assistant", "08-ai"),
 
         ("/users", "09-administration"),
         ("/servers", "09-administration"),
@@ -83,6 +88,9 @@ public static class HelpMap
         ("/git", "09-administration"),
         ("/tenants", "09-administration"),
         ("/admin/settings", "09-administration"),
+        // The assistant's own settings (provider, agent model, the test button) are a section of this
+        // page, not a route of their own, so the page answers chapter 9 — which points to chapter 8
+        // for that section. The map matches paths; it cannot tell one section of a page from another.
         ("/settings", "09-administration"),
     ];
 
