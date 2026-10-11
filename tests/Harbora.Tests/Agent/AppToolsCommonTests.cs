@@ -207,6 +207,28 @@ public class AppToolsCommonTests
         }
     }
 
+    [Theory]
+    [InlineData("delete_env_var")]
+    [InlineData("remove_domain")]
+    [InlineData("remove_volume")]
+    [InlineData("restart_app")]
+    [InlineData("stop_app")]
+    [InlineData("rollback_app")]
+    [InlineData("delete_app")]
+    public async Task A_tool_that_needs_the_app_as_it_is_now_does_not_accept_one_that_is_only_planned(string name)
+    {
+        // Removing, restarting, rolling back or deleting something that does not exist yet has nothing to
+        // act on — and nothing to show on its card — so these tools accept only an app that exists.
+        using var h = new AppToolsHarness();
+        var scope = new AgentPlanScope();
+        scope.Add(new AgentPlannedResource(AgentResourceKinds.App, "web", h.ProjectSlug, "production"));
+
+        var verdict = await h.ValidateAsync(h.Tool(name), ArgsFor(name, "web"), scope);
+
+        verdict.Ok.Should().BeFalse();
+        verdict.Error.Should().Be("No app named 'web' that you can see.");
+    }
+
     [Fact]
     public async Task Execution_without_a_scope_does_not_accept_an_app_that_was_only_planned()
     {

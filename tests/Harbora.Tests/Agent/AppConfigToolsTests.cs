@@ -474,6 +474,24 @@ public class AppConfigToolsTests
     }
 
     [Fact]
+    public async Task A_volume_made_protected_after_the_card_keeps_its_data_and_its_mount()
+    {
+        using var h = new AppToolsHarness();
+        var app = h.SeedApp("web");
+        (await h.ValidateAsync(h.RemoveVolume(), new { app = "web", mountPath = "/files", deleteData = true })).Ok.Should().BeTrue();
+        (await h.Db.Volumes.SingleAsync(v => v.AppId == app.Id)).Protected = true;
+        await h.Db.SaveChangesAsync();
+        h.Db.ChangeTracker.Clear();
+        var before = h.Snapshot();
+
+        var result = await h.ExecuteAsync(h.RemoveVolume(), new { app = "web", mountPath = "/files", deleteData = true });
+
+        result.Ok.Should().BeFalse();
+        result.Error.Should().Contain("Protected");
+        h.Snapshot().Should().Be(before);
+    }
+
+    [Fact]
     public async Task Data_docker_did_not_delete_fails_the_step_and_says_where_it_still_is()
     {
         using var h = new AppToolsHarness();
