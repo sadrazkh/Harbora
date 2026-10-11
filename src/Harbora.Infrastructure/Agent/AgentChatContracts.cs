@@ -75,4 +75,15 @@ public interface IAgentChatClient
 
     /// <summary>One chat-completions round trip. Never throws for provider or network failures.</summary>
     Task<AgentChatResponse> CompleteAsync(AgentChatRequest request, CancellationToken ct);
+
+    /// <summary>
+    /// The same round trip, streamed: <paramref name="onTextDelta"/> receives each piece of the model's
+    /// text as it arrives, so the pane can show the answer being written. The returned response is the
+    /// complete one — text, tool calls, usage — exactly as <see cref="CompleteAsync(AgentChatRequest, CancellationToken)"/>
+    /// would return it; the deltas are display only. The default does not stream (one call, no deltas),
+    /// so a client or fake that cannot stream stays correct.
+    /// </summary>
+    Task<AgentChatResponse> CompleteAsync(
+        AgentChatRequest request, Func<string, Task>? onTextDelta, CancellationToken ct) =>
+        CompleteAsync(request, ct);
 }

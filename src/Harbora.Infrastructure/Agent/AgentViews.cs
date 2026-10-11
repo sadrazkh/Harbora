@@ -67,11 +67,15 @@ public sealed record AgentPlanResultView(
     IReadOnlyList<AgentPlanStepResultView> Steps);
 
 /// <summary><c>GET /assistant/conversations/{id}</c>.</summary>
+/// <param name="InProgress">A turn is still being answered for this conversation — the person reloaded
+/// or came back mid-answer. The pane shows the typing indicator and reads the conversation again until
+/// this is false; the answer is saved by the server whether or not anybody is still listening.</param>
 public sealed record AgentConversationView(
     Guid Id,
     string Title,
     IReadOnlyList<AgentMessageView> Messages,
-    AgentPlanView? PendingPlan);
+    AgentPlanView? PendingPlan,
+    bool InProgress = false);
 
 /// <summary>Body of <c>POST /assistant/conversations/{id}/messages</c>.</summary>
 public sealed record AgentSendMessageRequest(string Text, AgentPageContext? Page);
@@ -91,6 +95,13 @@ public static class AgentStreamEvents
 
     /// <summary><c>{ name, kind, state: "running"|"done"|"failed", summaryEn, summaryFa }</c>.</summary>
     public const string Tool = "tool";
+
+    /// <summary>
+    /// <c>{ text }</c> — the next piece of the model's text as it is written, appended to the bubble being
+    /// typed. Purely for display: the <see cref="Message"/> event that follows carries the whole text and
+    /// is the one that counts (it replaces what the deltas built).
+    /// </summary>
+    public const string Delta = "delta";
 
     /// <summary>An <see cref="AgentMessageView"/> — the model's text.</summary>
     public const string Message = "message";
