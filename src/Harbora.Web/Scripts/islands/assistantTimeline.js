@@ -74,10 +74,12 @@ export function applyStreamEvent(state, name, data) {
       // The server has the new message. It expires a plan that was still waiting and tells the model
       // that plan did not run, so a card left offering Run would be offering something that no
       // longer exists. Only plans from before this turn: this turn's own plan has not arrived yet.
+      // A card whose Run or Cancel is still in flight is left alone: the server claimed it before this
+      // message arrived, so it is running (or being rejected), and "nothing ran" would be false.
       const from = currentTurnStart(state);
       for (let i = 0; i < from; i++) {
         const item = state.items[i];
-        if (item.kind === 'plan' && item.plan.status === 'pending') {
+        if (item.kind === 'plan' && item.plan.status === 'pending' && !item.busy) {
           item.plan = { ...item.plan, status: 'expired' };
           item.superseded = true;
         }

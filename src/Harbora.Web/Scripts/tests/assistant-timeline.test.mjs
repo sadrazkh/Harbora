@@ -194,6 +194,16 @@ test('a new message the server has received supersedes a card that was still wai
   assert.equal(state.items[0].superseded, true);
 });
 
+test('a card whose Run is still in flight is not superseded: the server is executing it', () => {
+  const state = createTimeline();
+  applyStreamEvent(state, 'plan', plan());
+  state.items[0].busy = true;
+  addUserMessage(state, 'and also this');
+  applyStreamEvent(state, 'started', { conversationId: 'c1' });
+  assert.equal(state.items[0].plan.status, 'pending');
+  assert.equal(state.items[0].superseded, false);
+});
+
 test('superseding leaves finished cards and this turn\'s own new plan alone', () => {
   const state = createTimeline();
   applyStreamEvent(state, 'plan', { ...plan(), id: 'old-done', status: 'executed' });
