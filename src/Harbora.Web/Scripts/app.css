@@ -144,6 +144,34 @@
   .app-backdrop { position: fixed; inset: 0; z-index: 30; background: rgba(0,0,0,.55); backdrop-filter: blur(2px); }
 }
 
+/* ---- Assistant drawer (_Layout's #assistant-panel, Scripts/assistantDrawer.js) ----
+   On the side opposite the main menu — the logical end, so left in Persian and right in English —
+   over the content under the topbar, never pushing it. z-index 15 sits above anything the pages
+   draw (they stop at z-10) and below the topbar's z-20, so the account and "new resource" menus
+   still open over the drawer instead of behind it. Closed is `visibility: hidden` as well as slid
+   away, so nothing inside it can take focus or be read out while it is off screen; the visibility
+   change waits for the slide to finish when closing. On a phone it is the whole screen, above the
+   topbar and the slide-over menu, with its own close button. */
+.assistant-drawer {
+  position: absolute; inset-block: 0; inset-inline-end: 0; z-index: 15;
+  display: flex; flex-direction: column;
+  width: min(420px, 100%);
+  background: rgb(var(--surface));
+  border-inline-start: 1px solid rgb(var(--border));
+  box-shadow: 0 10px 40px rgb(16 12 40 / .14);
+  visibility: hidden;
+  transform: translateX(100%);
+  transition: transform .2s ease, visibility 0s linear .2s;
+}
+html[dir="rtl"] .assistant-drawer { transform: translateX(-100%); }
+html[dir] .assistant-drawer.is-open { visibility: visible; transform: none; transition: transform .2s ease, visibility 0s; }
+@media (max-width: 639px) {
+  .assistant-drawer { position: fixed; inset: 0; z-index: 60; width: 100%; border-inline-start: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .assistant-drawer, html[dir] .assistant-drawer.is-open { transition: none; }
+}
+
 /* Tiny inline spinner for loading buttons. */
 .btn-spin::before {
   content: ""; display: inline-block; width: .85em; height: .85em; margin-inline-end: .4em;

@@ -1,10 +1,19 @@
 ﻿@using System.Globalization
 @inject ViteManifest Vite
+@inject Harbora.Web.Infrastructure.FeatureView Features
+@inject Microsoft.AspNetCore.Antiforgery.IAntiforgery Antiforgery
 @{
     var culture = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
     var isRtl = culture == "fa";
     var dir = isRtl ? "rtl" : "ltr";
     var (viteJs, viteCss) = Vite.Resolve("Scripts/main.ts");
+
+    // The assistant drawer is drawn only for a signed-in person whose workspace is entitled to it.
+    // Locked is the topbar's business (a greyed button linking to the page that explains it); a
+    // drawer behind a locked button would be a pane whose every request is refused. FeatureView is
+    // the same per-request answer the sidebar and the topbar read, so the three cannot disagree.
+    var assistantEnabled = User.Identity?.IsAuthenticated == true
+        && (await Features.GetAsync(Harbora.Domain.Features.PlatformFeatures.Assistant)).IsEnabled;
 }
 <!DOCTYPE html>
 <html lang="@culture" dir="@dir" class="h-full">
@@ -101,6 +110,11 @@
             }
             var railHtml = railBuffer.ToString();
         }
+        @* The positioning box for the assistant drawer: everything under the topbar, so the drawer is
+           full height beneath it whatever banners are showing above. `overflow-hidden` clips the
+           drawer while it is slid off-screen, which would otherwise widen the page; the scrolling
+           itself still happens in #content-scroll, exactly as before. *@
+        <div class="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         @* id="content-scroll": this is the element that actually scrolls the page (not `body` —
            see the mobile slide-over comment below). The mobile sidebar module locks/restores this
            element's own overflow while the slide-over is open. *@
@@ -114,6 +128,32 @@
                     @Html.Raw(railHtml)
                 </aside>
             }
+        </div>
+
+        @* The assistant: a drawer on the side opposite the main menu (logical end — left in Persian,
+           right in English), over the content rather than beside it, full screen on a phone. Outside
+           #content-scroll so it does not scroll away with the page. The Vue island inside is loaded
+           the first time it opens (Scripts/assistantDrawer.js); until then this placeholder is what
+           shows, and if the chunk never arrives the drawer says so instead of loading for ever. *@
+        @if (assistantEnabled)
+        {
+            <aside id="assistant-panel" class="assistant-drawer" aria-hidden="true"
+                   aria-label="@(isRtl ? "دستیار هوشمند" : "AI assistant")"
+                   data-csrf="@Antiforgery.GetAndStoreTokens(Context).RequestToken"
+                   data-lang="@(isRtl ? "fa" : "en")"
+                   @Harbora.Web.Infrastructure.AssistantPageContext.Attribute(ViewData)>
+                @* The island mounts into the host, replacing its contents; the classes on the host stay. *@
+                <div data-assistant-host class="flex h-full min-h-0 flex-col">
+                    <div class="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-sm text-ink-faint">
+                        <p data-assistant-loading>@(isRtl ? "در حال بارگذاری دستیار…" : "Loading the assistant…")</p>
+                        <p data-assistant-load-failed hidden class="text-danger">@(isRtl
+                            ? "دستیار بارگذاری نشد. آن را ببندید و دوباره باز کنید، یا صفحه را دوباره بارگذاری کنید."
+                            : "The assistant could not be loaded. Close it and open it again, or reload the page.")</p>
+                        <button type="button" data-assistant-toggle aria-controls="assistant-panel" aria-expanded="false" class="btn-secondary">@(isRtl ? "بستن" : "Close")</button>
+                    </div>
+                </div>
+            </aside>
+        }
         </div>
     </div>
 </div>

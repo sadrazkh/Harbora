@@ -9,6 +9,8 @@
     var app = Model.App;
 
     ViewData["Title"] = app.Name;
+    // What "this app" means to the assistant pane, sent with every message asked from this page.
+    AssistantPageContext.Declare(ViewData, appId: app.Id, environmentId: app.EnvironmentId);
 
     // Simple mode folds the specialist parts of this page; Advanced leaves them open, so the page
     // is unchanged for anyone who was already using it. Folded, never dropped — the settings are

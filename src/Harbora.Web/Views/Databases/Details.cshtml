@@ -12,6 +12,8 @@
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     var db = Model.Database;
     ViewData["Title"] = db.Name;
+    // What "this database" means to the assistant pane, sent with every message asked from this page.
+    AssistantPageContext.Declare(ViewData, serviceId: db.Id);
 
     // The Message/Error banner now renders once in _Shell.cshtml, above every tab — not here.
     // TempData is consumed on read, so a second read site here would just find it already gone.

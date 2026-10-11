@@ -1,5 +1,6 @@
 ﻿@using Microsoft.AspNetCore.Mvc.Localization
 @inject Harbora.Web.Infrastructure.PanelModeProvider PanelModes
+@inject Harbora.Web.Infrastructure.FeatureView Features
 @using Harbora.Infrastructure.Navigation
 @using Harbora.Infrastructure.Learning
 @using Harbora.Web.Infrastructure
@@ -16,6 +17,14 @@
     var helpChapterSlug = HelpMap.ChapterFor(Context.Request.Path.Value ?? "/");
     var helpHref = helpChapterSlug is null ? "/learn" : $"/learn/{helpChapterSlug}";
     var helpState = helpChapterSlug is null ? "index" : "chapter";
+
+    // The assistant button obeys the entitlement exactly as a sidebar item with `Feature:` does —
+    // enabled works, locked is greyed with a lock and links to /features/assistant, hidden is not
+    // drawn — and reads it from the same FeatureView. Nobody signed out gets one at all: FeatureView
+    // answers "locked" for a request with no workspace, which would advertise it on an error page.
+    Harbora.Domain.Features.FeatureVerdict? assistant = User.Identity?.IsAuthenticated == true
+        ? await Features.GetAsync(Harbora.Domain.Features.PlatformFeatures.Assistant)
+        : null;
 
     string ItemLabel(string key) => (key, isFa) switch
     {
@@ -61,6 +70,27 @@
             <kbd class="hidden rounded-md border border-line bg-surface px-1.5 py-0.5 font-sans text-[10px] text-ink-faint md:inline">⌘ K</kbd>
         </button>
     </div>
+
+    @if (assistant is { IsEnabled: true })
+    {
+        <button type="button" data-assistant-toggle data-assistant-state="enabled" aria-controls="assistant-panel" aria-expanded="false"
+                class="rounded-lg p-2 text-ink-muted hover:bg-surface-2 hover:text-accent-text aria-expanded:bg-accent-soft aria-expanded:text-accent-text"
+                title="@(isFa ? "دستیار هوشمند (Ctrl+J)" : "AI assistant (Ctrl+J)")" aria-label="@(isFa ? "دستیار هوشمند" : "AI assistant")">
+            <i data-lucide="sparkles" class="h-4.5 w-4.5"></i>
+        </button>
+    }
+    else if (assistant is { IsLocked: true })
+    {
+        @* Still goes somewhere, like a locked sidebar entry: the page that says what this is and who
+           can switch it on. A grey button that does nothing teaches people the panel lies. *@
+        <a href="/features/@Harbora.Domain.Features.PlatformFeatures.Assistant" data-assistant-state="locked"
+           class="relative rounded-lg p-2 text-ink-faint/70 hover:bg-surface-2"
+           title="@(isFa ? "دستیار هوشمند — برای شما فعال نیست" : "AI assistant — not enabled for you")"
+           aria-label="@(isFa ? "دستیار هوشمند — برای شما فعال نیست" : "AI assistant — not enabled for you")">
+            <i data-lucide="sparkles" class="h-4.5 w-4.5 opacity-60"></i>
+            <i data-lucide="lock" class="absolute bottom-1 end-1 h-2.5 w-2.5"></i>
+        </a>
+    }
 
     <div class="relative" data-menu-root>
         <button type="button" data-menu-trigger class="btn-primary inline-flex items-center gap-2 whitespace-nowrap px-3 md:px-4" aria-expanded="false" aria-label="@(isFa ? "منبع جدید" : "New resource")">

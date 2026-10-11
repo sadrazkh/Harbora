@@ -5,6 +5,7 @@ import MetricsChart from './islands/MetricsChart.vue';
 import TerminalIsland from './islands/Terminal.vue';
 import { mountDeployProgress } from './deployProgress';
 import { initMobileSidebar } from './mobileSidebar.js';
+import { initAssistantDrawer } from './assistantDrawer.js';
 
 // "Islands" pattern: Razor renders the page; we hydrate only the interactive nodes.
 // Each island is a mount point identified by id/selector — like initialising a jQuery plugin,
@@ -38,6 +39,22 @@ const islands: Record<string, IslandMounter> = {
     }).catch(() => {
       // Leave the placeholder exactly as it is - see the comment above.
     });
+  },
+  // The assistant drawer, rendered by _Layout only when the workspace is entitled to it. The drawer,
+  // its topbar toggle and Ctrl/Cmd+J are plain DOM wired now; the chat island itself is `import()`ed
+  // the first time somebody opens it — every page carries the mount, and most page views never open
+  // it, so the same reasoning as RouteDesigner/CodeEditor applies with more force.
+  'assistant-panel': (el) => {
+    initAssistantDrawer(el, (host, { close, focus }) =>
+      import('./islands/AssistantPanel.vue').then(({ default: AssistantPanel }) => {
+        createApp(AssistantPanel, {
+          csrf: el.dataset.csrf || '',
+          lang: el.dataset.lang || 'en',
+          context: el.dataset.assistantContext || '',
+          autofocus: focus,
+          onClose: close,
+        }).mount(host);
+      }));
   },
   'app-terminal': (el) => {
     createApp(TerminalIsland, {
