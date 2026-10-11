@@ -185,3 +185,92 @@ All with `export MSBUILDDISABLENODEREUSE=1`, `-p:UseSharedCompilation=false`, `L
    and lapse. Traefik's defaults do not do that; worth knowing if a proxy timeout is ever added.
 4. **Partial text is now saved:** text from a call that broke part-way is stored as an assistant message.
    It is what the person saw, but it is truncated, and the next turn's history contains it.
+
+## 7. Review minors and the secrets vault (`a0cf82f`)
+
+Rebased onto master `9c8617c` (G's database tools and the secrets contract) first — no conflicts.
+
+### Review minors
+1. **A fully streamed answer is saved on `CancellationToken.None`** when any text was streamed, so a deadline
+   at that moment cannot lose text the person already watched. If the save itself throws, a `message` with
+   the text still closes the bubble before the error.
+2. **Comment at the auto-run call:** a claimed plan runs to its end on no token and is not bound by the turn's
+   deadline or by a shutdown.
+3. **The try that clears the mark starts right after a successful claim.** The relational reload of the
+   tracked copy moved out of `TryClaimTurnAsync` into `RefreshAfterClaimAsync`, which runs inside that try, so
+   a reload that throws after the `UPDATE` committed still ends in the `finally` that clears the mark.
+4. **Shutdown:** the turn token is linked to `IHostApplicationLifetime.ApplicationStopping` (an optional
+   constructor parameter, injected by the host). A self-deploy mid-turn now ends the turn with a bilingual
+   "The server is restarting, so this answer was stopped. What was done so far is saved — ask again in a
+   moment.", saves what was written, and clears the mark, instead of leaving 409s for 3½ minutes.
+5. **Listener logging:** a failed write is logged at Information only for `OperationCanceledException`,
+   `IOException` or `ObjectDisposedException` (a departure); anything else is a Warning, with the exception.
+
+### Secrets as black boxes — D (server)
+- `src/Harbora.Infrastructure/Agent/AgentSecretVault.cs`:
+  - `InMemoryAgentSecretVault(ISecretProtector, ISystemClock) : IAgentSecretVault, IAgentSecretValues`, a
+    singleton. Values are encrypted with the panel's protector while held, keyed by a random 16-byte id
+    (base64url, 22 characters), scoped to workspace + user, and expire after `AgentSecretHandles.Lifetime`
+    (30 minutes).
+  - Expired entries are swept on every `Put` and on `Resolve` of an expired handle.
+  - At most `MaxPerPerson` = 50 per person. Past that, that person's **oldest** handle is forgotten to make
+    room rather than refusing the lock button; a plan still pointing at it is refused at execution.
+  - Someone else's handle resolves exactly like an unknown one (null). A restart forgets everything, by
+    design.
+- New `IAgentSecretValues.LiveValues(workspaceId, userId)` — my own interface, the contract is untouched:
+  - The turn and the plan engine scrub every person's held values, by value, from what they send the model
+    (tool answers, refusals, outcome messages) and from what they store or show (tool summaries, tool
+    events, plan results and errors).
+  - So a tool that echoes a value it resolved cannot pass it on.
+  - Both services take it as an optional constructor parameter, injected by DI.
+- `AgentSecretService.HoldAsync(actor, request, ct)`:
+  - Checks the entitlement, the name (trimmed, 1–100) and the value (1–8,000, taken exactly as typed).
+  - Puts it in the vault and audits `assistant.secret_held` with `{ name, expiresAt }` only.
+  - The value is never logged, audited or returned.
+- `POST /assistant/secrets` (`[Authorize]`, `[RequireFeature]`, `[ValidateAntiForgeryToken]`) answers:
+  - 200 `AgentSecretView { handle, name, expiresAt }`;
+  - 400 `{ error: "invalid", messageEn, messageFa }`;
+  - 403 without the entitlement.
+- DI: the vault is registered once as a singleton and exposed as both `IAgentSecretVault` and
+  `IAgentSecretValues`; `AgentSecretService` is scoped. All of it sits in my existing DI block. F's tools
+  resolve handles through `IAgentSecretVault`.
+- System prompt: text of the form `{{secret:…}}` is a secret the user entered with the lock button. Pass it on
+  exactly as written as the tool argument where it belongs; never change, shorten, split or describe it.
+  Never ask for a secret in the chat — point the user at the lock button beside the message box.
+
+### Tests (21 new, all passing)
+| File | New tests |
+|---|---|
+| `tests/Harbora.Tests/Agent/AgentSecretTests.cs` (new, 13) | a held secret comes back as a handle of the right shape, held encrypted (the protector saw it once), resolvable only by its person in its workspace, whitespace tolerated, not-exactly-a-handle refused; every handle different; expiry at exactly 30 minutes, then forgotten; the cap of 50 forgets the oldest and never touches another person's; name/value bounds (5 refusal cases + the 100 / 8,000 limits); audited by name only, and refused without the entitlement; **the model sees the handle and never the value even when a read tool echoes it** (requests, tool events, stored messages); **a plan step that echoes the value in its error leaves it in no result, message or plan** (the plan stores the handle) |
+| `tests/Harbora.Tests/Agent/AgentTurnTests.cs` (+7) | a fully streamed answer is saved even when the deadline passes as it finishes; a streamed answer whose save fails still closes its bubble before the error; a server shutting down mid-turn ends it cleanly and releases the mark; the listener's log level by kind of failure (3 cases) |
+| `tests/Harbora.Tests/Http/AssistantHttpTests.cs` (+1) | `POST /assistant/secrets`: 400 without the antiforgery header, 400 for an empty value, 200 `{ handle, name, expiresAt }` with no value in the body; the audit row names it without the value; a message carrying the handle reaches the scripted model with the handle and not the value, and no stored message contains the value |
+
+Mutation check: with the turn's and the plan engine's held values forced to empty, both value-redaction tests
+in `AgentSecretTests` failed; restored and rebuilt before the run below. Not tested: minor 3's reload failure,
+which is relational-only and cannot be forced in InMemory (the change is structural — the reload now sits
+inside the try). The request-logging side of "value absent from every log" is covered only by inspection: the
+service and the controller log nothing about a secret, and the app has no request-body logging.
+
+### Commands and output
+- `dotnet build Harbora.slnx --nologo -v q -p:UseSharedCompilation=false` → `BUILD_EXIT=0`, `28 Warning(s)`,
+  `0 Error(s)`.
+- Focused (agent tests, assistant HTTP tests, `MigrationConsistencyTests`) →
+  `Passed!  - Failed:     0, Passed:   286, Skipped:     0, Total:   286 - Harbora.Tests.dll` (the count now
+  includes F's and G's agent tests from master).
+- Full: `dotnet test Harbora.slnx --nologo -v q --no-build` → `EXIT=0`:
+  ```
+  Skipped! - Failed:     0, Passed:     0, Skipped:   109, Total:   109 - Harbora.Postgres.Tests.dll (net10.0)
+  Passed!  - Failed:     0, Passed:   500, Skipped:    17, Total:   517 - Harbora.NodeAgent.Tests.dll (net10.0)
+  Passed!  - Failed:     0, Passed:    15, Skipped:     0, Total:    15 - Harbora.NodeIngress.Tests.dll (net10.0)
+  Passed!  - Failed:     0, Passed:  6989, Skipped:     0, Total:  6989 - Harbora.Tests.dll (net10.0)
+  ```
+  `grep -c "Harbora.Tests.dll"` → 2.
+
+### Further concerns
+5. **Handles do not survive a restart, on purpose:** after a deploy, a pending plan whose step carries a
+   handle is refused at execution ("enter the secret again"). F's tools must say so.
+6. **Scrubbing is by value only:** a held value shorter than 4 characters is not replaced, the same floor
+   `AssistantRedaction` applies to every known secret. The lock button accepts it, so such a secret can be
+   held but is not redacted.
+7. **Two separate panel processes would not share the vault.** One panel container runs today, so that is
+   fine; it would matter only if the panel were scaled out.
