@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
-import { formatMessage, safeHref, textDirection, blockText, firstStrongDirection } from '../islands/assistantFormat.js';
+import { formatMessage, safeHref, textDirection, blockText, firstStrongDirection, createSteadyDirection } from '../islands/assistantFormat.js';
 
 // Model text is untrusted: it can repeat back anything a user, a resource name or a log line put in
 // front of the model. The pane formats it into a tree of plain-text nodes that the template renders
@@ -155,4 +155,28 @@ test('result links are followed only to panel paths and http(s) addresses', () =
   assert.equal(safeHref('/\\evil.example'), null, 'browsers read /\\ as //');
   assert.equal(safeHref(''), null);
   assert.equal(safeHref(null), null);
+});
+
+test('a streamed paragraph settles its direction once and never flips while it grows', () => {
+  const dir = createSteadyDirection();
+  // A Persian sentence that opens with a slug, arriving a word at a time.
+  const words = ['shop-db', 'ساخته', 'شد', 'و', 'به', 'shop', 'وصل', 'شد.'];
+  const seen = words.map((_, i) => dir(words.slice(0, i + 1).join(' '), 0));
+  assert.deepEqual(seen, ['ltr', 'ltr', 'ltr', 'rtl', 'rtl', 'rtl', 'rtl', 'rtl'], 'one early correction, then held');
+  // Held even when later words would count the other way.
+  assert.equal(dir('shop-db ساخته شد و then many english words follow here now', 0), 'rtl');
+});
+
+test('a paragraph that is Persian from its first letter is right to left throughout', () => {
+  const dir = createSteadyDirection();
+  const text = 'دیتابیس shop-db آماده است';
+  const parts = text.split(' ');
+  assert.deepEqual(parts.map((_, i) => dir(parts.slice(0, i + 1).join(' '), 0)), ['rtl', 'rtl', 'rtl', 'rtl']);
+});
+
+test('each paragraph of a streamed bubble keeps its own direction', () => {
+  const dir = createSteadyDirection();
+  assert.equal(dir('این برنامه را آماده کردم', 0), 'rtl');
+  assert.equal(dir('export A=1 and then B=2', 1), 'ltr');
+  assert.equal(dir('این برنامه را آماده کردم', 0), 'rtl');
 });

@@ -27,8 +27,12 @@ export function createTimeline() {
     // A conversation is being read.
     loading: false,
     // A gentle line above the composer — "still answering", "your last message is back in the box" —
-    // that is information, not a failure.
+    // that is information, not a failure. `{ kind, messageEn, messageFa }`.
     notice: null,
+    // The remembered conversation could not be read (not "gone" — a failure): `{ conversationId,
+    // messageEn, messageFa }`. The pane offers to try again and does not pretend to be a fresh
+    // conversation meanwhile, or the next message would start a new one and orphan the old.
+    loadError: null,
   };
 }
 
@@ -89,10 +93,13 @@ export function withdrawUserMessage(state, key) {
   if (at >= 0) state.items.splice(at, 1);
 }
 
-/** A message that never reached the server: still shown, marked as not sent. */
-export function markUnsent(state, key) {
+/**
+ * A message that did not reach the server (`true`), or that may not have (`'unsure'`: the
+ * conversation could not be read back to check): still shown, marked accordingly.
+ */
+export function markUnsent(state, key, how = true) {
   const item = state.items.find((i) => i.key === key);
-  if (item) item.unsent = true;
+  if (item) item.unsent = how;
 }
 
 function liveBubble(state) {
@@ -100,6 +107,23 @@ function liveBubble(state) {
   for (let i = state.items.length - 1; i > from; i--) {
     const item = state.items[i];
     if (item.kind === 'assistant' && item.live) return item;
+  }
+  return null;
+}
+
+/** Same text, or the bubble holds the start of it (it was cut short before its message). */
+function sameText(shown, whole) {
+  const a = String(shown ?? '').trim();
+  const b = String(whole ?? '').trim();
+  return a !== '' && (a === b || b.startsWith(a));
+}
+
+/** An unconfirmed bubble of this turn, written by deltas, that holds this text. */
+function streamedBubbleFor(state, text) {
+  const from = currentTurnStart(state);
+  for (let i = from + 1; i < state.items.length; i++) {
+    const item = state.items[i];
+    if (item.kind === 'assistant' && item.streamed && !item.confirmed && sameText(item.text, text)) return item;
   }
   return null;
 }
@@ -163,7 +187,9 @@ export function applyStreamEvent(state, name, data) {
       if (typeof data.text !== 'string' || data.text === '') return;
       const last = state.items[state.items.length - 1];
       if (last && last.kind === 'assistant' && last.live) last.text += data.text;
-      else state.items.push({ key: nextKey('live'), kind: 'assistant', text: data.text, live: true });
+      // `streamed`: written by deltas, so its direction is held steady (first strong letter) and the
+      // `message` that confirms it — even one arriving after a tool line — replaces it, not doubles it.
+      else state.items.push({ key: nextKey('live'), kind: 'assistant', text: data.text, live: true, streamed: true, confirmed: false });
       return;
     }
 
@@ -192,10 +218,15 @@ export function applyStreamEvent(state, name, data) {
     case 'message': {
       if (!data.text) return;
       // The whole text, which counts: it replaces what the deltas built, rather than being drawn twice.
-      const live = data.role === 'user' ? null : liveBubble(state);
-      if (live) {
-        live.text = data.text;
-        live.live = false;
+      // That bubble may still be live, or already finalized — the model wrote "On it." and called a
+      // tool, and the server sent this `message` after the `tool` line. The bubble whose text this is
+      // (the same, or the start of it) is the one replaced; otherwise the one still being written.
+      const target = data.role === 'user' ? null : (streamedBubbleFor(state, data.text) ?? liveBubble(state));
+      if (target) {
+        target.text = data.text;
+        target.live = false;
+        target.confirmed = true;
+        delete target.cut;
         return;
       }
       state.items.push({ key: data.id ? `msg-${data.id}` : nextKey('msg'), kind: data.role === 'user' ? 'user' : 'assistant', text: data.text });

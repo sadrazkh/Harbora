@@ -58,7 +58,7 @@ function setup({ stored = {}, script = {} } = {}) {
       calls.push({
         op: 'send', conversationId: args.conversationId, text: args.text,
         storedAtSend: storage.data[STORAGE_CONVERSATION] ?? null,
-        outboxAtSend: storage.data[STORAGE_OUTBOX] ? JSON.parse(storage.data[STORAGE_OUTBOX]) : null,
+        outboxAtSend: prefs.outbox(args.conversationId),
       });
       if (script.send) return script.send(args, { storage, timeline });
       args.onEvent('started', { conversationId: args.conversationId ?? CONVO });
@@ -307,4 +307,167 @@ test('the poller retries a failed read a few times and stops when the conversati
   await timers.next(); // 404
   assert.equal(gone.status, 404);
   assert.equal(poller.running, false);
+});
+
+// ---- fixes after review ----------------------------------------------------------------------------
+
+const OTHER = '0199d0c4-6a1e-7000-8000-0000000000c9';
+
+test('opening another conversation that fails to load keeps following the one on screen', async () => {
+  const s = setup({
+    stored: { [STORAGE_CONVERSATION]: CONVO },
+    script: { views: [view({ messages: [userMessage('q')], inProgress: true }), Object.assign(new Error('offline'), { status: 0, messageEn: 'Could not reach the panel.', messageFa: 'x' })] },
+  });
+  await s.session.restore();
+  assert.equal(s.session.polling, true);
+  const result = await s.session.open(OTHER);
+  assert.equal(result.error.status, 0);
+  assert.equal(s.timeline.conversationId, CONVO, 'the conversation on screen is still the one it was');
+  assert.equal(s.timeline.resuming, true);
+  assert.equal(s.session.polling, true, 'never resuming without a poller — the dots cannot be stuck on');
+});
+
+test('a failed open of another conversation, with nothing being followed, leaves no dots behind', async () => {
+  const s = setup({ script: { views: [view({ messages: [userMessage('q')] }), Object.assign(new Error('boom'), { status: 500 })] } });
+  await s.session.open(CONVO);
+  await s.session.open(OTHER);
+  assert.equal(s.timeline.resuming, false);
+  assert.equal(s.session.polling, false);
+  assert.equal(isThinking(s.timeline), false);
+});
+
+test('a reload while the conversation is still being created loses no words', async () => {
+  let releaseCreate;
+  const first = setup();
+  first.api.createConversation = () => new Promise((resolve) => { releaseCreate = resolve; });
+  first.session.send('hello there');
+  await settle();
+  assert.equal(first.prefs.outbox(null).text, 'hello there', 'written before the create, under "new"');
+
+  const second = setup({ stored: { ...first.storage.data } });
+  const restored = await second.session.restore();
+  assert.equal(restored.restoreDraft, 'hello there');
+  releaseCreate({ id: CONVO });
+});
+
+test('once created, the waiting words move to the new conversation', async () => {
+  const s = setup({ script: { send: async () => new Promise(() => {}) } });
+  s.session.send('hello');
+  await settle();
+  assert.equal(s.prefs.outbox(null), null);
+  assert.equal(s.prefs.outbox(CONVO).text, 'hello');
+});
+
+test('a failed read on reload is shown, keeps the remembered conversation, and blocks a fresh start until retried', async () => {
+  const waiting = { [CONVO]: { conversationId: CONVO, text: 'my words', at: Date.parse('2026-10-11T09:59:00Z') } };
+  const s = setup({
+    stored: { [STORAGE_CONVERSATION]: CONVO, [STORAGE_OUTBOX]: JSON.stringify(waiting) },
+    script: { views: [Object.assign(new Error('Bad gateway'), { status: 502, messageEn: 'The panel failed to answer (HTTP 502).', messageFa: 'x' }), view({ messages: [] })] },
+  });
+  const restored = await s.session.restore();
+  assert.equal(restored.error.status, 502);
+  assert.deepEqual(s.timeline.loadError, { conversationId: CONVO, messageEn: 'The panel failed to answer (HTTP 502).', messageFa: 'x' });
+  assert.equal(s.storage.data[STORAGE_CONVERSATION], CONVO, 'the remembered id is kept');
+  assert.equal(s.prefs.outbox(CONVO).text, 'my words', 'the waiting words are kept');
+  assert.deepEqual(await s.session.send('a new message'), { sent: false }, 'not treated as a fresh conversation');
+  assert.equal(s.calls.some((c) => c.op === 'create'), false);
+
+  const retried = await s.session.retry();
+  assert.equal(s.timeline.loadError, null);
+  assert.equal(retried.restoreDraft, 'my words');
+});
+
+test('starting a new conversation from the failed state is allowed and leaves the old words waiting', async () => {
+  const waiting = { [CONVO]: { conversationId: CONVO, text: 'my words', at: Date.parse('2026-10-11T09:59:00Z') } };
+  const s = setup({ stored: { [STORAGE_CONVERSATION]: CONVO, [STORAGE_OUTBOX]: JSON.stringify(waiting) }, script: { views: [Object.assign(new Error('x'), { status: 500 })] } });
+  await s.session.restore();
+  s.session.startNew();
+  assert.equal(s.timeline.loadError, null);
+  assert.equal(s.prefs.outbox(CONVO).text, 'my words');
+});
+
+test('a message sent in one conversation does not overwrite words waiting for another', async () => {
+  const waiting = { [OTHER]: { conversationId: OTHER, text: 'for the other one', at: Date.parse('2026-10-11T09:59:00Z') } };
+  const s = setup({ stored: { [STORAGE_OUTBOX]: JSON.stringify(waiting) }, script: { send: async () => new Promise(() => {}) } });
+  s.session.send('here');
+  await settle();
+  assert.equal(s.prefs.outbox(OTHER).text, 'for the other one');
+  assert.equal(s.prefs.outbox(CONVO).text, 'here');
+});
+
+test('a create abandoned by starting a new conversation gives the words back', async () => {
+  let releaseCreate;
+  const s = setup();
+  s.api.createConversation = () => new Promise((resolve) => { releaseCreate = resolve; });
+  const sending = s.session.send('do not lose me');
+  await settle();
+  s.session.startNew();
+  releaseCreate({ id: CONVO });
+  assert.deepEqual(await sending, { sent: false, restoreDraft: 'do not lose me' });
+  assert.equal(s.prefs.outbox(null), null);
+  assert.equal(s.calls.some((c) => c.op === 'send'), false, 'nothing was sent');
+});
+
+test('no "started", but the server has the message: it is shown as sent and followed, not offered for resending', async () => {
+  const s = setup({
+    script: {
+      views: [view({ messages: [userMessage('hello')], inProgress: true })],
+      send: async (args) => { args.onEvent('error', { messageEn: 'The connection was lost.', messageFa: 'x' }); return { completed: false }; },
+    },
+  });
+  const result = await s.session.send('hello');
+  assert.deepEqual(result, { sent: true });
+  assert.equal(s.timeline.items.some((i) => i.unsent), false);
+  assert.equal(s.timeline.resuming, true, 'the server is still answering it');
+  assert.equal(s.prefs.outbox(CONVO), null);
+});
+
+test('no "started" and the conversation cannot be read back: "may not have been sent", words back in the box', async () => {
+  const s = setup({
+    script: {
+      views: [Object.assign(new Error('offline'), { status: 0 })],
+      send: async (args) => { args.onEvent('error', { messageEn: 'Could not reach the panel.', messageFa: 'x' }); return { completed: false }; },
+    },
+  });
+  const result = await s.session.send('hello');
+  assert.deepEqual(result, { sent: false, restoreDraft: 'hello' });
+  assert.equal(s.timeline.items.find((i) => i.kind === 'user').unsent, 'unsure');
+  assert.match(s.timeline.notice.messageEn, /not clear whether/);
+});
+
+test('the "still answering" notice goes once the answer it waited for is in', async () => {
+  const s = setup({
+    script: {
+      views: [view({ messages: [userMessage('first')] }), view({ messages: [userMessage('first'), assistantMessage('done')], inProgress: false })],
+      send: async () => ({ completed: false, busy: true, notice: { messageEn: 'Still answering.', messageFa: 'x' } }),
+    },
+  });
+  await s.session.open(CONVO);
+  await s.session.send('second');
+  assert.equal(s.timeline.notice.kind, 'busy');
+  await s.timers.next();
+  assert.equal(s.timeline.resuming, false);
+  assert.equal(s.timeline.notice, null);
+});
+
+test('opening a conversation clears a notice left from before', async () => {
+  const s = setup({ script: { views: [view(), view()] } });
+  s.timeline.notice = { kind: 'busy', messageEn: 'Still answering.', messageFa: 'x' };
+  await s.session.open(CONVO);
+  assert.equal(s.timeline.notice, null);
+});
+
+test('a drawer closed while the remembered conversation was being read does not start re-reading until it opens', async () => {
+  let release;
+  const s = setup({ stored: { [STORAGE_CONVERSATION]: CONVO } });
+  s.api.conversation = () => new Promise((resolve) => { release = resolve; });
+  const restoring = s.session.restore();
+  s.session.pause();
+  release(view({ messages: [userMessage('q')], inProgress: true }));
+  await restoring;
+  assert.equal(s.timeline.resuming, true, 'it is still being answered');
+  assert.equal(s.session.polling, false, 'but nothing re-reads while the drawer is closed');
+  assert.equal(s.timers.queue.length, 0);
+  s.session.wake();
+  assert.equal(s.session.polling, true);
 });

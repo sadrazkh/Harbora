@@ -375,13 +375,58 @@ test('text written before a tool call, with no message yet, is kept when the too
   ], 'later deltas start a fresh live bubble');
 });
 
-test('a late message after the bubble was finalized replaces nothing and is drawn as its own text', () => {
+test('a plan arriving while a bubble is live finalizes it with the text it has', () => {
   const state = createTimeline();
   addUserMessage(state, 'x');
   applyStreamEvent(state, 'delta', { text: 'On it.' });
   applyStreamEvent(state, 'plan', { id: 'p1', status: 'pending', expiresAt: '2026-10-11T10:15:00Z', steps: [] });
   assert.equal(state.items[1].text, 'On it.');
   assert.equal(state.items[1].live, false);
+});
+
+test('a message for text written before a tool, arriving after the tool line, replaces that bubble instead of doubling it', () => {
+  const state = createTimeline();
+  addUserMessage(state, 'restart shop');
+  applyStreamEvent(state, 'delta', { text: 'On it.' });
+  applyStreamEvent(state, 'tool', { name: 'get_app', state: 'running' });
+  applyStreamEvent(state, 'message', { id: 'm1', role: 'assistant', text: 'On it.' });
+  applyStreamEvent(state, 'tool', { name: 'get_app', state: 'done' });
+  assert.deepEqual(state.items.map((i) => [i.kind, i.text ?? i.name]), [['user', 'restart shop'], ['assistant', 'On it.'], ['tool', 'get_app']]);
+  assert.equal(state.items[1].confirmed, true);
+});
+
+test('a late message for the earlier bubble does not touch the one being written now', () => {
+  const state = createTimeline();
+  addUserMessage(state, 'x');
+  applyStreamEvent(state, 'delta', { text: 'Checking.' });
+  applyStreamEvent(state, 'tool', { name: 'get_app', state: 'done' });
+  applyStreamEvent(state, 'delta', { text: 'shop is' });
+  applyStreamEvent(state, 'message', { id: 'm1', role: 'assistant', text: 'Checking.' });
+  const bubbles = state.items.filter((i) => i.kind === 'assistant');
+  assert.deepEqual(bubbles.map((b) => [b.text, b.live]), [['Checking.', false], ['shop is', true]]);
+  applyStreamEvent(state, 'message', { id: 'm2', role: 'assistant', text: 'shop is running.' });
+  assert.deepEqual(state.items.filter((i) => i.kind === 'assistant').map((b) => [b.text, b.live]), [['Checking.', false], ['shop is running.', false]]);
+});
+
+test('a cut-off bubble is completed by its late message and loses the cut note', () => {
+  const state = createTimeline();
+  addUserMessage(state, 'x');
+  applyStreamEvent(state, 'delta', { text: 'shop is' });
+  applyStreamEvent(state, 'error', { messageEn: 'blip', messageFa: 'x' });
+  assert.equal(state.items[1].cut, true);
+  applyStreamEvent(state, 'message', { id: 'm', role: 'assistant', text: 'shop is running.' });
+  assert.equal(state.items[1].text, 'shop is running.');
+  assert.equal(state.items[1].cut, undefined);
+  assert.equal(state.items.filter((i) => i.kind === 'assistant').length, 1);
+});
+
+test('a message whose text matches no streamed bubble is drawn as its own', () => {
+  const state = createTimeline();
+  addUserMessage(state, 'x');
+  applyStreamEvent(state, 'delta', { text: 'On it.' });
+  applyStreamEvent(state, 'tool', { name: 'get_app', state: 'done' });
+  applyStreamEvent(state, 'message', { id: 'm9', role: 'assistant', text: 'Something else entirely.' });
+  assert.deepEqual(state.items.filter((i) => i.kind === 'assistant').map((b) => b.text), ['On it.', 'Something else entirely.']);
 });
 
 test('a turn that ends with a live bubble and no message keeps the text, not marked cut', () => {

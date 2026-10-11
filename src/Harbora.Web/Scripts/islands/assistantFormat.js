@@ -132,6 +132,25 @@ export function firstStrongDirection(text, fallback = 'auto') {
   return fallback;
 }
 
+/**
+ * Directions for text that is still being written (a streamed bubble), one per paragraph index, that
+ * do not flip as words arrive. Until a paragraph has `latchWords` words with letters it follows its
+ * first letter; then it is decided once by textDirection (which script has more words) and held.
+ * First letter alone would lay out "shop-db ساخته شد…" left to right for good; counting words on
+ * every delta would flip the bubble back and forth while it is read.
+ */
+export function createSteadyDirection(latchWords = 4) {
+  const held = new Map();
+  return (text, index) => {
+    if (held.has(index)) return held.get(index);
+    const words = String(text ?? '').split(/\s+/).filter((w) => RTL_LETTER.test(w) || LTR_LETTER.test(w)).length;
+    if (words < latchWords) return firstStrongDirection(text);
+    const decided = textDirection(text);
+    held.set(index, decided);
+    return decided;
+  };
+}
+
 /** @param {Block} block */
 export function blockText(block) {
   if (block.type === 'pre') return block.text;

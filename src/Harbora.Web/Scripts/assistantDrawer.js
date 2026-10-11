@@ -23,6 +23,15 @@ export function createAssistantPrefs(storage) {
   const attempt = (fn, fallback) => {
     try { return fn(); } catch { return fallback; }
   };
+  const outboxKey = (conversationId) => conversationId || 'new';
+  // Every entry worth keeping, by key. A malformed value, or the single entry an earlier version of
+  // the pane stored, is read the forgiving way rather than losing the words in it.
+  const readOutbox = () => {
+    const value = JSON.parse(storage?.getItem(STORAGE_OUTBOX) ?? 'null');
+    if (!value || typeof value !== 'object') return {};
+    if (typeof value.text === 'string') return { [outboxKey(value.conversationId)]: value };
+    return Object.fromEntries(Object.entries(value).filter(([, e]) => e && typeof e.text === 'string' && e.text));
+  };
   return {
     isOpen: () => attempt(() => storage?.getItem(STORAGE_OPEN) === '1', false),
     setOpen: (open) => attempt(() => storage?.setItem(STORAGE_OPEN, open ? '1' : '0')),
@@ -31,16 +40,33 @@ export function createAssistantPrefs(storage) {
       ? storage?.setItem(STORAGE_CONVERSATION, id)
       : storage?.removeItem(STORAGE_CONVERSATION))),
     /**
-     * The message on its way: `{ conversationId, text, at }`, kept from the moment it is sent until
-     * the server says it has it (`started`). A reload in between finds it here, so the words are not
-     * lost even when the request never got as far as being saved.
+     * Messages on their way, one per conversation: `{ conversationId, text, at }`, kept from the
+     * moment one is sent until the server says it has it (`started`). A reload in between finds it
+     * here, so the words are not lost even when the request never got as far as being saved. Keyed by
+     * conversation (`new` for one not created yet), so a message waiting for one conversation is
+     * never overwritten by a message sent in another.
      */
-    outbox: () => attempt(() => {
-      const value = JSON.parse(storage?.getItem(STORAGE_OUTBOX) ?? 'null');
-      return value && typeof value.text === 'string' && value.text ? value : null;
-    }, null),
-    setOutbox: (entry) => attempt(() => storage?.setItem(STORAGE_OUTBOX, JSON.stringify(entry))),
-    clearOutbox: () => attempt(() => storage?.removeItem(STORAGE_OUTBOX)),
+    outbox: (conversationId) => attempt(() => readOutbox()[outboxKey(conversationId)] ?? null, null),
+    setOutbox: (entry) => attempt(() => {
+      const all = readOutbox();
+      all[outboxKey(entry.conversationId)] = entry;
+      storage?.setItem(STORAGE_OUTBOX, JSON.stringify(all));
+    }),
+    /** Moves the entry waiting under `new` to the conversation that was just created for it. */
+    moveOutbox: (conversationId) => attempt(() => {
+      const all = readOutbox();
+      const entry = all[outboxKey(null)];
+      if (!entry) return;
+      delete all[outboxKey(null)];
+      all[outboxKey(conversationId)] = { ...entry, conversationId };
+      storage?.setItem(STORAGE_OUTBOX, JSON.stringify(all));
+    }),
+    clearOutbox: (conversationId) => attempt(() => {
+      const all = readOutbox();
+      delete all[outboxKey(conversationId)];
+      if (Object.keys(all).length) storage?.setItem(STORAGE_OUTBOX, JSON.stringify(all));
+      else storage?.removeItem(STORAGE_OUTBOX);
+    }),
   };
 }
 

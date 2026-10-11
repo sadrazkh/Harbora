@@ -74,7 +74,7 @@ const remaining = computed<number | null | undefined>(() =>
   timeline.remainingToday !== undefined ? timeline.remainingToday : status.value?.remainingToday);
 const unavailable = computed(() => status.value?.available === false);
 const outOfRequests = computed(() => remaining.value === 0);
-const canSend = computed(() => !answering.value && !timeline.loading && !unavailable.value
+const canSend = computed(() => !answering.value && !timeline.loading && !timeline.loadError && !unavailable.value
   && !outOfRequests.value && draft.value.trim().length > 0);
 
 const unavailableReason = computed(() => {
@@ -270,10 +270,16 @@ onMounted(async () => {
   document.addEventListener('harbora:assistant-closed', onClosed);
   if (props.autofocus) focusComposer();
   // The remembered conversation (the person's own message shows at once, and a turn still being
-  // answered is followed to its end), and any words that were on their way when the page went.
+  // answered is followed to its end), and any words that were on their way when the page went. A
+  // read that fails is shown with "try again" (timeline.loadError), never as a blank new conversation.
   const restored = await session.restore();
   restoreDraft(restored.restoreDraft);
 });
+
+async function retryLoad() {
+  const outcome = await session.retry();
+  restoreDraft(outcome.restoreDraft);
+}
 
 onUnmounted(() => {
   document.removeEventListener('harbora:assistant-opened', onOpened);
@@ -361,11 +367,22 @@ const Back = fa ? ChevronRight : ChevronLeft;
         {{ t("Today's assistant requests for this workspace are used up.", 'سهمیهٔ درخواست‌های امروز دستیار برای این ورک‌اسپیس تمام شده است.') }}
       </div>
 
+      <div v-if="timeline.loadError && !timeline.loading" class="space-y-2 rounded-xl border border-danger/20 bg-danger-soft px-3 py-2.5 text-sm leading-5 text-danger" role="alert" data-assistant-load-error>
+        <p class="flex items-start gap-2">
+          <AssistantIcon :icon="TriangleAlert" :size="14" class="mt-0.5 shrink-0" />
+          <span :dir="textDirection(say(timeline.loadError))">{{ t('Your conversation could not be loaded.', 'گفت‌وگوی شما بارگذاری نشد.') }} {{ say(timeline.loadError) }}</span>
+        </p>
+        <div class="flex gap-2 ps-6">
+          <button type="button" class="btn-secondary py-1.5" data-assistant-retry @click="retryLoad">{{ t('Try again', 'دوباره تلاش کنید') }}</button>
+          <button type="button" class="btn-secondary py-1.5" @click="newConversation">{{ t('Start a new conversation', 'گفت‌وگوی تازه') }}</button>
+        </div>
+      </div>
+
       <p v-if="timeline.loading" class="flex items-center gap-2 text-sm text-ink-muted">
         <AssistantIcon :icon="LoaderCircle" spin />{{ t('Loading the conversation…', 'در حال بارگذاری گفت‌وگو…') }}
       </p>
 
-      <div v-else-if="timeline.items.length === 0 && !unavailable" class="space-y-3 pt-6 text-center">
+      <div v-else-if="timeline.items.length === 0 && !unavailable && !timeline.loadError" class="space-y-3 pt-6 text-center">
         <p class="text-sm text-ink-muted">{{ t('Ask in Persian or English. Changes are shown to you as a plan first — nothing runs until you approve it.', 'به فارسی یا انگلیسی بپرسید. هر تغییری اول به‌صورت برنامه نشانتان داده می‌شود — تا تأیید نکنید، چیزی اجرا نمی‌شود.') }}</p>
         <div class="flex flex-col items-stretch gap-1.5">
           <button v-for="s in suggestions" :key="s" type="button" class="rounded-lg border border-line bg-surface-2 px-3 py-2 text-start text-sm text-ink-muted hover:border-accent/30 hover:text-ink" :dir="textDirection(s)" @click="useSuggestion(s)">{{ s }}</button>
@@ -377,12 +394,13 @@ const Back = fa ? ChevronRight : ChevronLeft;
           <div class="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-ee-md px-3 py-2 text-sm leading-6"
                :class="item.unsent ? 'border border-dashed border-line-strong bg-surface-2 text-ink' : 'bg-accent text-white'"
                :dir="textDirection(item.text)">{{ item.text }}</div>
-          <span v-if="item.unsent" class="text-[11px] text-ink-muted">{{ t('Not sent', 'فرستاده نشد') }}</span>
+          <span v-if="item.unsent === 'unsure'" class="text-[11px] text-ink-muted">{{ t('May not have been sent', 'شاید فرستاده نشده باشد') }}</span>
+          <span v-else-if="item.unsent" class="text-[11px] text-ink-muted">{{ t('Not sent', 'فرستاده نشد') }}</span>
         </div>
 
         <!-- The model's text — the bubble being written while deltas arrive, then the whole answer. -->
         <div v-else-if="item.kind === 'assistant'" class="text-sm text-ink" data-assistant-message="assistant" :data-live="item.live ? 'true' : undefined">
-          <AssistantText :text="item.text" />
+          <AssistantText :text="item.text" :steady="item.streamed === true" />
           <p v-if="item.cut" class="mt-1 text-[11px] text-ink-muted" data-assistant-cut>{{ t('The rest of this answer did not arrive.', 'بقیهٔ این پاسخ نرسید.') }}</p>
         </div>
 
@@ -411,15 +429,20 @@ const Back = fa ? ChevronRight : ChevronLeft;
       </template>
 
       <!-- Thinking: three dots, as a bubble of its own, from the send until the first text or tool line,
-           after a tool until the next output, and for a conversation opened mid-answer. The words are
-           for screen readers; the dots stand still for anyone who asked for less motion. -->
-      <div v-if="thinking" class="flex" role="status" data-assistant-thinking>
+           after a tool until the next output, and for a conversation opened mid-answer. The dots stand
+           still for anyone who asked for less motion; the words for screen readers are in the live
+           region below the log, which is not aria-busy. -->
+      <div v-if="thinking" class="flex" data-assistant-thinking>
         <span class="assistant-dots inline-flex items-center gap-1 rounded-2xl rounded-es-md bg-surface-2 px-3 py-3" aria-hidden="true">
           <span></span><span></span><span></span>
         </span>
-        <span class="sr-only">{{ t('Thinking…', 'در حال فکر کردن…') }}</span>
       </div>
     </div>
+
+    <!-- Always in the page, outside the log (which is aria-busy while a turn runs, and screen readers
+         hold back changes inside a busy region): only its text changes, so "Thinking…" is announced
+         when the dots appear. -->
+    <p class="sr-only" role="status" aria-live="polite" data-assistant-thinking-status>{{ thinking ? t('Thinking…', 'در حال فکر کردن…') : '' }}</p>
 
     <!-- Composer -->
     <form class="border-t border-line p-3" @submit.prevent="send">
