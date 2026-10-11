@@ -263,3 +263,146 @@ Two fixes came out of that pass and are in `12b7796`:
 7. **The wrapper around `#content-scroll` changes the layout's DOM**, adding one positioned box with
    `overflow-hidden`. The full suite is green with it. Content that overflowed `#content-scroll` was
    already clipped by its own `overflow-y-auto`, so nothing should have relied on the old structure.
+
+## Polish after review
+
+The review approved the pane and it landed on master (`a6c4b48`). This pass was done on `r6/chat-pane`
+in `../Harbora-r6-e`, starting from master. It touches only the pane, its client modules and their
+tests. Commit `2883708` "Assistant pane: polish after review", plus this report section.
+
+### What changed, item by item
+
+1. **Phone restore** (`assistantDrawer.js`). Below 640 px the drawer is full screen.
+   - `restore()` no longer reopens it there. The remembered "open" is kept, so a wide screen still
+     restores it.
+   - A plain left click on a link inside the drawer calls `followedLink()`. On a phone that closes the
+     drawer and saves "closed". On a wide screen it does nothing. Ctrl, Shift, Alt or Meta clicks,
+     middle clicks and `target=_blank` links are left alone.
+   - The check uses `matchMedia('(max-width: 639px)')`, the same breakpoint as the CSS.
+   - `initAssistantDrawer` now takes `{ document, storage, matchMedia }` so the wiring can be tested.
+2. **Spinner that never stops** (`assistantTimeline.js`, `AssistantPanel.vue`).
+   - The `done` event now settles the turn: a tool line still `running` becomes `interrupted`, drawn
+     neutral as "no result arrived" and never as a check.
+   - `send()` also calls `settleTurn` in a `finally`, whatever ended the turn.
+3. **Expiry is the server's word only** (`assistantPlan.js`).
+   - `planIsExpired` is true only for `status === "expired"`, and `planIsActionable` only for
+     `"pending"`. The 15-second client clock is gone.
+   - The card shows the server's `expiresAt` as a time of day ("valid until 16:05"), as information
+     only; nothing enforces it.
+   - A refused approve or reject goes through `applyApproveRefusal`. The card shows the server's
+     `messageEn`/`messageFa`, marks the step whose `stepIndex` it names (danger ring,
+     `data-step-refused`, `aria-describedby` pointing at the message), and takes the `status` it
+     reports, so `"expired"` ends the card.
+   - `AssistantRequestError` now carries `stepIndex`, only if it is an integer, and `planStatus`, only
+     if it is a string the contract names. A numeric ProblemDetails `status` is ignored.
+   - A bare machine code in `error` ("plan_expired") is never shown to a person; the fallback wording
+     is shown instead.
+4. **Pane faults, cancel, abort** (`assistantApi.js`, `assistantStream.js`).
+   - An exception thrown in the pane's own event handler is wrapped as `PaneFault`. Reading stops, the
+     pane reports "the pane failed while showing the answer — a fault in the panel, not in the
+     assistant or your connection", and the cause goes to `console.error`. The result is
+     `{ completed: false, paneFault: true }`.
+   - `readEventStream` now **cancels** the reader on any error, then releases it.
+   - The abort signal is wired through a new `createTurnTracker()`. Starting a new conversation,
+     opening another one from the list, or unmounting the island aborts the turn in flight.
+   - Events that still arrive for an abandoned turn are dropped by `turn.isCurrent()`, so they cannot
+     land in the conversation now on screen.
+   - The "New" button and the conversation list are therefore no longer disabled while a turn runs.
+   - **Closing the drawer deliberately does not abort.** The island stays mounted and the answer is
+     there on reopen; throwing the turn away would waste a model call the workspace already paid for.
+     The coordinator offered "pane closes" as one trigger; this is the one place I did not follow it.
+5. **Composer direction** (`assistantFormat.js`). The new `firstStrongDirection(text, fallback)` sets
+   the direction from the first letter typed. Before any letter it uses the panel's own direction. It
+   no longer recomputes on each keystroke.
+6. **A waiting card when a new message is sent** (`assistantTimeline.js`). When the `started` event
+   arrives, meaning the server has received the new message, every card from before that turn that
+   is still `pending` becomes `expired` with `superseded: true`.
+   - Heading: "Not run — you sent a new message" / «اجرا نشد — پیام تازه‌ای فرستادید».
+   - Footer: "Nothing ran. The assistant was told this plan was not carried out."
+   - Done on `started` rather than on click, so a send that never reached the server leaves the card
+     pending, which is the truth.
+   - Run and Cancel are disabled while a turn is streaming, so they cannot race that expiry.
+7. **Design and accessibility.**
+   - Plan and result card headings are now tinted bands with their own icon and an `<h3>`. Pending is
+     brand-tinted; pending with a delete is danger-tinted; done is ok; failed is danger; expired and
+     rejected are neutral.
+   - Step titles dropped from medium to normal weight, so the heading differs by band, icon and two
+     weight steps.
+   - Every status and safety line moved from `ink-faint` (3.49:1 light) to `ink-muted`: 5.36:1 on
+     surface and 5.14:1 on surface-2 in light, 7.5:1 in dark. That covers the remaining-requests and
+     model line, list dates, loading text, the "working…" line, tool results, the composer hint and
+     the auto-approved note.
+   - "Nothing has run yet." is now 14 px medium ink-muted.
+   - The "valid until" time inside a band uses the band's own colour (5.3–5.8:1), because ink-muted on
+     danger-soft is 4.39:1.
+   - Icons and the placeholder stay `ink-faint`; they are not key text.
+8. **Tests.**
+   - Drawer wiring, against a fake document: mounts once and focuses only when the person asked;
+     restoring open on page load does not take focus; Escape with focus inside closes and returns
+     focus to the toggle; Escape with focus outside does nothing; Ctrl+J closing from inside returns
+     focus; a failed chunk shows the failure, then a retry shows "loading" again and mounts; the phone
+     cases above.
+   - HTTP: `A_signed_out_page_draws_neither_the_toggle_nor_the_drawer` loads anonymous `/error/404`,
+     asserts the topbar rendered, and asserts there is no `data-assistant-state`, no toggle and no
+     drawer.
+   - Logic tests for items 1–6: settle-on-done, settle is idempotent and leaves earlier turns alone,
+     superseding (and what it leaves alone), the refusal body (stepIndex, status, ProblemDetails,
+     machine codes), applying the refusal to the card, pane fault versus lost connection with the
+     reader cancelled, the turn tracker, a quiet abort mid-stream, first-strong direction, and
+     status-only expiry.
+   - I mutation-checked four of the new tests by breaking the code and watching them fail, then put
+     the code back:
+     - removing `reader.cancel` fails the cancel test;
+     - removing the phone checks fails the two phone tests;
+     - removing the topbar's sign-in check fails the signed-out HTTP test (1 failed, after a rebuild).
+
+The preview harness has two new scenarios, `?scenario=expired` (a 409 refusal carrying
+`status: "expired"`) and `?scenario=refuse` (a 400 refusal with `stepIndex: 3`), in place of the old
+clock-based one. I checked in the browser pane, against the harness with Vite on port 5183, stopped
+afterwards:
+- the refused step 4 is highlighted with the server's message under it and Run is still offered;
+- the expired refusal ends the card with the server's message;
+- the composer stays `rtl` through «وصل shop-db to shop-app please now»;
+- a pending card becomes "Not run — you sent a new message" once the reply starts;
+- at 375 px a drawer stored open is not restored, and clicking a result link closes it and stores `0`;
+- "New" during a stream leaves no stale tool lines or messages and stops the working line.
+
+### Commands and output
+
+```
+node --test src/Harbora.Web/Scripts/tests/*.test.mjs
+# tests 132   # pass 132   # fail 0
+  (assistant-api 29, assistant-drawer 19, assistant-format 20, assistant-plan 15,
+   assistant-stream 15, assistant-timeline 22 — 120 of mine, up from 92; plus the 12 existing)
+
+dotnet test tests/Harbora.Tests --no-build --filter "FullyQualifiedName~AssistantPaneHttpTests"
+Passed!  - Failed: 0, Passed: 10, Skipped: 0, Total: 10 - Harbora.Tests.dll
+
+cd src/Harbora.Web && npm run build          (alone; no dotnet command running in this worktree)
+NPM_EXIT=0
+wwwroot/build/assets/AssistantPanel-BGHumOCQ.js   46.66 kB │ gzip: 15.68 kB
+wwwroot/build/assets/main-CmDqKNDM.js            476.83 kB │ gzip: 129.56 kB
+✓ built in 7.16s        manifest names "Scripts/main.ts"
+
+Full suite (MSBUILDDISABLENODEREUSE=1, -p:UseSharedCompilation=false, log /tmp/test-r6-chat-pane.log):
+BUILD_EXIT=0   28 Warning(s) (48× NU1900 + 8× NU1903 lines, the feed warnings only)   0 Error(s)
+EXIT=0
+Passed!  - Failed: 0, Passed:   500, Skipped: 17, Total:  517 - Harbora.NodeAgent.Tests.dll
+Passed!  - Failed: 0, Passed:    15, Skipped:  0, Total:   15 - Harbora.NodeIngress.Tests.dll
+Passed!  - Failed: 0, Passed:  6700, Skipped:  0, Total: 6700 - Harbora.Tests.dll
+dll=2 msb3030=0
+```
+
+This pass added one test to Harbora.Tests (the signed-out case). I did not run master on its own to
+confirm its count, but 6700 minus that one test matches master's 6690 plus my original 9.
+
+### Still unverified, and why
+
+- **The real server.** AssistantController is still not on master. The refusal shape
+  `{error, messageEn, messageFa, status?, stepIndex?}` is coded from the coordinator's description and
+  checked only against the harness.
+- **Whether D's server expires a waiting plan when a new message arrives.** The pane marks the card on
+  `started`, which assumes the server has done the expiry by the time it sends that event. If it
+  expires the plan later in the turn, the card says so a moment early; Run is disabled during the turn
+  in any case.
+- **Ctrl+J in desktop Chrome and Firefox** is still unverified, as before.
