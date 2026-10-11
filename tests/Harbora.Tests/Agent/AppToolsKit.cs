@@ -50,6 +50,12 @@ internal sealed class AppToolsHarness : IDisposable
     public RecordingOperations Operations { get; }
     public AppServiceHarness.StubScheduler Scheduler { get; } = new();
     public RecordingManagedServices ManagedServices { get; } = new();
+
+    /// <summary>The lock button's vault, in memory: what the person entered privately, by handle.</summary>
+    public FakeSecretVault Vault { get; } = new();
+
+    /// <summary>Set to false for a host that holds no vault at all (the tools get null).</summary>
+    public bool HasVault { get; set; } = true;
     public BillingOptions Billing { get; } = new() { Enabled = false };
 
     /// <summary>Replaces the real billing gate for restart_app, when a test needs a refusal.</summary>
@@ -112,8 +118,9 @@ internal sealed class AppToolsHarness : IDisposable
     // ---- the tools ----
 
     public CreateAppTool CreateApp() => new(Db, Agent.Resolver, Agent.Access, Provisioning(), Options.Create(Billing));
-    public DeployTemplateTool DeployTemplate() => new(Db, Agent.Resolver, Agent.Access, Templates(), Deployments, Quota(), Agent.Audit, Options.Create(Billing));
-    public SetEnvVarsTool SetEnvVars() => new(Db, Agent.Resolver, Agent.Access, Configuration());
+    public DeployTemplateTool DeployTemplate() => new(Db, Agent.Resolver, Agent.Access, Templates(), Deployments, Quota(), Agent.Audit, Options.Create(Billing),
+        Configuration(), NullLogger<DeployTemplateTool>.Instance, HasVault ? Vault : null);
+    public SetEnvVarsTool SetEnvVars() => new(Db, Agent.Resolver, Agent.Access, Configuration(), HasVault ? Vault : null);
     public DeleteEnvVarTool DeleteEnvVar() => new(Db, Agent.Resolver, Agent.Access, Configuration());
     public AddDomainTool AddDomain() => new(Db, Agent.Resolver, Agent.Access, Configuration(), Quota());
     public RemoveDomainTool RemoveDomain() => new(Db, Agent.Resolver, Agent.Access, Configuration());
@@ -136,6 +143,9 @@ internal sealed class AppToolsHarness : IDisposable
     // ---- calling a tool directly ----
 
     public AgentToolContext Context => new(WorkspaceId, UserId, Agent.Principal, Guid.NewGuid(), null);
+
+    /// <summary>What the pane's lock button does: the value goes to the vault, the handle comes back.</summary>
+    public string Lock(string name, string value) => Vault.Put(WorkspaceId, UserId, name, value).Handle;
 
     public static JsonElement Args(object value) => JsonSerializer.SerializeToElement(value);
 
@@ -287,9 +297,13 @@ public sealed class RowDeployments(HarboraDbContext db) : IDeploymentEngine
     public List<DeploymentRequest> Queued { get; } = [];
     public Exception? Refuse { get; set; }
 
+    /// <summary>Thrown from outside the engine — what an EF error inside it would look like to a caller.</summary>
+    public Action? FailsFromElsewhere { get; set; }
+
     public async Task<Guid> QueueDeploymentAsync(DeploymentRequest request, CancellationToken ct)
     {
         if (Refuse is not null) throw Refuse;
+        FailsFromElsewhere?.Invoke();
         var app = await db.Apps.IgnoreQueryFilters().AsNoTracking().FirstAsync(a => a.Id == request.AppId, ct);
 
         var unsettled = DeploymentStateMachine.Unsettled.ToArray();
@@ -377,10 +391,12 @@ public sealed class RecordingOperations(IAppOperationsService inner) : IAppOpera
 public sealed class RecordingManagedServices : IManagedServiceEngine
 {
     public List<Guid> Provisioned { get; } = [];
+    public Exception? ProvisionThrows { get; set; }
     public IReadOnlyList<ServiceCatalogEntry> Catalog { get; } = [];
 
     public Task QueueProvisionAsync(Guid serviceId, CancellationToken ct)
     {
+        if (ProvisionThrows is not null) throw ProvisionThrows;
         Provisioned.Add(serviceId);
         return Task.CompletedTask;
     }
@@ -403,4 +419,36 @@ public sealed class RefusingGate : IBillingGate
 {
     public Task<QuotaCheck> CanStartAsync(Guid workspaceId, CancellationToken ct) =>
         Task.FromResult(new QuotaCheck(false, "The wallet is empty.", "کیف پول خالی است."));
+}
+
+/// <summary>
+/// The lock button's vault as the tools see it: a handle per value, scoped to one person in one workspace,
+/// and forgettable — <see cref="Forget"/> stands in for expiry or a restart between the card and the run.
+/// Records every resolve, so a test can tell that a card was drawn without the value being handed out
+/// beyond the existence check.
+/// </summary>
+public sealed class FakeSecretVault : IAgentSecretVault
+{
+    private readonly Dictionary<string, (Guid Workspace, Guid User, string Value)> _held = new(StringComparer.Ordinal);
+    private int _next;
+
+    public int Resolves { get; private set; }
+
+    public AgentSecretView Put(Guid workspaceId, Guid userId, string name, string value)
+    {
+        var id = (++_next).ToString("D22");
+        var handle = AgentSecretHandles.Format(id);
+        _held[handle] = (workspaceId, userId, value);
+        return new AgentSecretView(handle, name, DateTimeOffset.UtcNow + AgentSecretHandles.Lifetime);
+    }
+
+    public string? Resolve(Guid workspaceId, Guid userId, string handle)
+    {
+        Resolves++;
+        return _held.TryGetValue(handle.Trim(), out var held) && held.Workspace == workspaceId && held.User == userId
+            ? held.Value
+            : null;
+    }
+
+    public void Forget(string handle) => _held.Remove(handle);
 }

@@ -35,9 +35,10 @@ public sealed class RollbackAppTool(
 
     public override string Description =>
         "Rolls an app back to an earlier successful deployment by re-releasing that deployment's stored image (nothing " +
-        "is rebuilt). Without a number, the previous successful deployment before the live one. Only the app's code goes " +
-        "back: environment variables, attached databases and data stay as they are now. Always shown to the user for " +
-        "approval; returns the queued deployment, it does not wait for it.";
+        "is rebuilt). A step is accepted only with the deployment number, so the plan names exactly what is restored: " +
+        "called without one, it answers with the previous successful deployment's number to propose again with. Only " +
+        "the app's code goes back: environment variables, attached databases and data stay as they are now. Always " +
+        "shown to the user for approval; returns the queued deployment, it does not wait for it.";
 
     public override string ParametersSchema =>
         """
@@ -45,7 +46,7 @@ public sealed class RollbackAppTool(
           "type": "object",
           "properties": {
             "app": { "type": "string", "description": "The app's slug." },
-            "number": { "type": "integer", "description": "The deployment number to roll back to. Omit for the previous successful one." }
+            "number": { "type": "integer", "description": "The deployment number to roll back to. Without it the call is refused with the previous successful deployment's number." }
           },
           "required": ["app"],
           "additionalProperties": false
@@ -156,8 +157,8 @@ public sealed class RollbackAppTool(
         // not necessarily the one this card names.
         if (await UnsettledDeploymentAsync(db, app.Id, ct) is { } inFlight)
             return (0, null, (
-                $"Deployment #{inFlight.Number} of '{app.Slug}' is still {AgentResourceResolver.Lower(inFlight.Status)}. Wait for it to finish (or cancel it), then roll back.",
-                $"استقرار شمارهٔ {inFlight.Number} از «{app.Slug}» هنوز تمام نشده است ({AgentResourceResolver.Lower(inFlight.Status)}). صبر کنید تمام شود (یا لغوش کنید)، بعد بازگردانی کنید."));
+                $"Deployment #{inFlight.Number} of '{app.Slug}' is still {StatusEn(inFlight.Status)}. Wait for it to finish (or cancel it), then roll back.",
+                $"استقرار شمارهٔ {inFlight.Number} از «{app.Slug}» هنوز تمام نشده است ({StatusFa(inFlight.Status)}). صبر کنید تمام شود (یا لغوش کنید)، بعد بازگردانی کنید."));
 
         var history = db.Deployments.AsNoTracking().Where(d => d.AppId == app.Id && d.WorkspaceId == app.WorkspaceId);
 
@@ -180,13 +181,19 @@ public sealed class RollbackAppTool(
                             && d.Id != app.ActiveDeploymentId
                             && (liveNumber == null || d.Number < liveNumber))
                 .OrderByDescending(d => d.Number)
-                .Select(d => new { d.Id, d.Number })
+                .Select(d => new { d.Id, d.Number, d.CommitSha })
                 .FirstOrDefaultAsync(ct);
             if (previous is null)
                 return (0, null, ($"App '{app.Slug}' has no earlier successful deployment to roll back to.",
                     $"اپ «{app.Slug}» استقرار موفق قبلی‌ای برای بازگشت به آن ندارد."));
-            targetId = previous.Id;
-            targetNumber = previous.Number;
+
+            // Named, not chosen: "the previous one" is decided again at approval and again when the step
+            // runs, and a deploy that succeeds in between would move it. So the call is refused with the
+            // number, and the step the person approves carries it in its own arguments.
+            var commit = previous.CommitSha is { Length: > 0 } sha ? $" (commit {sha[..Math.Min(8, sha.Length)]})" : "";
+            return (previous.Number, null, (
+                $"The previous successful deployment of '{app.Slug}' is #{previous.Number}{commit}. Propose rollback_app again with number: {previous.Number}, so the plan names exactly what is restored.",
+                $"استقرار موفق قبلی «{app.Slug}» شمارهٔ {previous.Number}{commit} است. rollback_app را دوباره با number: {previous.Number} پیشنهاد دهید تا برنامه دقیقاً بگوید چه چیزی برمی‌گردد."));
         }
 
         var plan = await planner.PrepareAsync(app.Id, targetId.Value, ct);

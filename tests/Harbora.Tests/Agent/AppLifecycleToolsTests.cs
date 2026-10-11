@@ -77,6 +77,7 @@ public class AppLifecycleToolsTests
         verdict.WarningsEn.Should().Contain(w => w.Contains("Deployment #3 is still in progress"));
         result.Ok.Should().BeTrue(result.Error);
         result.SummaryEn.Should().Contain("already in progress, so nothing new was queued").And.Contain("deployment #3 is building");
+        result.SummaryFa.Should().Contain("استقرار شمارهٔ 3 در حال ساخت است", "the state is said in Persian, not as an English word");
         result.ResultJson.Should().Contain("\"joinedExisting\":true");
         (await h.Db.Deployments.CountAsync(d => d.AppId == app.Id)).Should().Be(3);
     }
@@ -125,6 +126,21 @@ public class AppLifecycleToolsTests
         result.Ok.Should().BeFalse();
         result.Error.Should().Be("No room on the node.");
         result.ErrorFa.Should().Be("روی سرور جا نیست.");
+        h.Agent.Audit.Entries.Should().NotContain(e => e.Action == "app.deploy");
+    }
+
+    [Fact]
+    public async Task An_error_that_is_not_the_engines_refusal_is_not_passed_off_as_one()
+    {
+        using var h = new AppToolsHarness();
+        h.SeedApp("web");
+        // An InvalidOperationException from outside the engine — EF's, say — is not a refusal to show the
+        // person in its own words; it goes to the plan engine, which logs it and reports a failed step.
+        h.Deployments.FailsFromElsewhere = () => throw new InvalidOperationException("A second operation was started on this context.");
+
+        var act = () => h.ExecuteAsync(h.DeployApp(), new { app = "web" });
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
         h.Agent.Audit.Entries.Should().NotContain(e => e.Action == "app.deploy");
     }
 
@@ -243,14 +259,23 @@ public class AppLifecycleToolsTests
     // ---- rollback_app ---------------------------------------------------------------------------
 
     [Fact]
-    public async Task By_default_it_rolls_back_to_the_previous_successful_deployment_and_says_exactly_what()
+    public async Task Without_a_number_it_names_the_previous_successful_deployment_and_with_it_rolls_back_exactly_there()
     {
         using var h = new AppToolsHarness();
         var app = h.SeedApp("web");
         var first = await h.Db.Deployments.AsNoTracking().SingleAsync(d => d.AppId == app.Id && d.Number == 1);
 
-        var verdict = await h.ValidateAsync(h.RollbackApp(), new { app = "web" });
-        var result = await h.ExecuteAsync(h.RollbackApp(), new { app = "web" });
+        // Without a number nothing is carded: the stored arguments must name the target, or a deploy that
+        // succeeds between the card and the approval would change what "the previous one" means.
+        var unnamed = await h.ValidateAsync(h.RollbackApp(), new { app = "web" });
+        var unnamedRun = await h.ExecuteAsync(h.RollbackApp(), new { app = "web" });
+        var verdict = await h.ValidateAsync(h.RollbackApp(), new { app = "web", number = 1 });
+        var result = await h.ExecuteAsync(h.RollbackApp(), new { app = "web", number = 1 });
+
+        unnamed.Ok.Should().BeFalse();
+        unnamed.Error.Should().Be("The previous successful deployment of 'web' is #1 (commit aaaaaaaa). Propose rollback_app again with number: 1, so the plan names exactly what is restored.");
+        unnamed.ErrorFa.Should().Contain("number: 1").And.Contain("شمارهٔ 1");
+        unnamedRun.Ok.Should().BeFalse("execution without a number does not choose one either");
 
         verdict.Ok.Should().BeTrue(verdict.Error);
         verdict.TitleEn.Should().Be("Roll back web to deployment #1");
@@ -289,7 +314,7 @@ public class AppLifecycleToolsTests
         h.SeedApp("web");
         h.Docker.ForgetImage("harbora/web:1");
 
-        var verdict = await h.ValidateAsync(h.RollbackApp(), new { app = "web" });
+        var verdict = await h.ValidateAsync(h.RollbackApp(), new { app = "web", number = 1 });
 
         verdict.Ok.Should().BeFalse();
         verdict.Error.Should().Contain("no longer on the server");
@@ -336,11 +361,11 @@ public class AppLifecycleToolsTests
     {
         using var h = new AppToolsHarness();
         h.SeedApp("web");
-        (await h.ValidateAsync(h.RollbackApp(), new { app = "web" })).Ok.Should().BeTrue();
+        (await h.ValidateAsync(h.RollbackApp(), new { app = "web", number = 1 })).Ok.Should().BeTrue();
         h.Docker.ForgetImage("harbora/web:1");
         var before = h.Snapshot();
 
-        var result = await h.ExecuteAsync(h.RollbackApp(), new { app = "web" });
+        var result = await h.ExecuteAsync(h.RollbackApp(), new { app = "web", number = 1 });
 
         result.Ok.Should().BeFalse();
         result.Error.Should().Contain("no longer on the server");
@@ -354,7 +379,7 @@ public class AppLifecycleToolsTests
         h.SeedApp("web");
         h.Deployments.Refuse = new InvalidOperationException("Deployment #3 is still building; a rollback will not be merged into it.");
 
-        var result = await h.ExecuteAsync(h.RollbackApp(), new { app = "web" });
+        var result = await h.ExecuteAsync(h.RollbackApp(), new { app = "web", number = 1 });
 
         result.Ok.Should().BeFalse();
         result.Error.Should().Be("Deployment #3 is still building; a rollback will not be merged into it.");

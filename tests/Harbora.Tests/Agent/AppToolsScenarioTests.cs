@@ -56,7 +56,7 @@ public class AppToolsScenarioTests
     }
 
     [Fact]
-    public async Task A_remembered_set_env_vars_runs_without_a_card_and_its_secret_value_is_reported_nowhere()
+    public async Task A_remembered_set_env_vars_runs_without_a_card_and_a_secret_given_as_a_handle_reaches_nothing_but_the_app()
     {
         using var h = new AppToolsHarness();
         h.SeedApp("web");
@@ -72,40 +72,39 @@ public class AppToolsScenarioTests
             .Ok.Should().BeTrue();
         (await h.Agent.Plans.RememberedToolsAsync(h.Agent.Actor, default)).Should().Contain("set_env_vars");
 
-        // Turn 2: the same tool, now remembered — it runs at once, no card. The person never typed the
-        // value into the chat; the model passes it in the call.
+        // Turn 2: the person enters the key with the lock button; the pane puts only its handle into the
+        // message, and the model passes the handle on. The remembered tool runs at once, no card.
+        var handle = h.Lock("STRIPE_KEY", Secret);
         var conversationId = first.Single<AgentStartedData>("started").ConversationId;
-        chat.ThenCall("set_env_vars", $$"""{"app":"web","variables":[{"key":"STRIPE_KEY","value":"{{Secret}}","secret":true}]}""")
+        chat.ThenCall("set_env_vars", $$"""{"app":"web","variables":[{"key":"STRIPE_KEY","value":"{{handle}}"}]}""")
             .ThenText("STRIPE_KEY will be stored as a secret.");
-        var (_, second) = await h.Agent.SendAsync("store the stripe key from the vault as a secret", conversationId);
+        var (_, second) = await h.Agent.SendAsync($"store my stripe key {handle} as STRIPE_KEY on web", conversationId);
 
         second.Names().Should().Equal("started", "message", "executed", "done");
         var executed = second.Single<AgentPlanResultView>("executed");
         executed.Status.Should().Be("executed");
         executed.Steps.Single().State.Should().Be("done");
-        (await h.Db.EnvironmentVariables.AsNoTracking().SingleAsync(v => v.Key == "STRIPE_KEY")).Value.Should().Be("enc:" + Secret);
+        var stored = await h.Db.EnvironmentVariables.AsNoTracking().SingleAsync(v => v.Key == "STRIPE_KEY");
+        stored.Value.Should().Be("enc:" + Secret, "the value reached the app, encrypted");
+        stored.IsSecret.Should().BeTrue("a handle is always a secret");
 
-        // Turn 3: the conversation goes on, with the executed step in its history.
+        // Turn 3: the conversation goes on, with the executed step — and its arguments — in its history.
         chat.ThenText("Anything else?");
         await h.Agent.SendAsync("thanks", conversationId);
 
-        // The value is in no tool result, no system prompt, no user or assistant text the model was sent.
-        // The only place it travels is the model's own set_env_vars arguments, which the agent core replays
-        // as part of the conversation (and keeps in the plan to run the step) — reported as a concern.
-        foreach (var message in chat.Requests.SelectMany(r => r.Messages))
-        {
-            (message.Content ?? "").Should().NotContain(Secret, $"a {message.Role} message's text must not carry it");
-            foreach (var call in message.ToolCalls ?? [])
-                if (call.ArgumentsJson.Contains(Secret)) call.Name.Should().Be("set_env_vars");
-        }
+        // The value itself is in no model request at all: not in any message's text, not in any tool call's
+        // arguments — those carry the handle, which is all the model ever had.
+        var sent = chat.EverythingSent();
+        sent.Should().NotContain(Secret);
+        sent.Should().Contain(handle, "the model passed the handle on, as it was told to");
 
-        // Nor anything the person is shown or the agent stores as words.
-        var shown = string.Join("\n", second.Select(e => System.Text.Json.JsonSerializer.Serialize(e.Data)));
-        shown.Should().NotContain(Secret);
-        var stored = await h.Db.AgentMessages.AsNoTracking().ToListAsync();
-        stored.Should().AllSatisfy(m => string.Join("|", m.Text, m.SummaryEn, m.SummaryFa).Should().NotContain(Secret));
-        (await h.Db.AgentPlans.AsNoTracking().Select(p => p.ResultsJson).ToListAsync())
-            .Should().AllSatisfy(json => (json ?? "").Should().NotContain(Secret));
+        // Nor anything the person is shown, nor anything the agent stores — messages, the plan's steps and
+        // results — nor the audit log.
+        string.Join("\n", first.Concat(second).Select(e => System.Text.Json.JsonSerializer.Serialize(e.Data))).Should().NotContain(Secret);
+        var messages = await h.Db.AgentMessages.AsNoTracking().ToListAsync();
+        messages.Should().AllSatisfy(m => string.Join("|", m.Text, m.ToolCallsJson, m.SummaryEn, m.SummaryFa).Should().NotContain(Secret));
+        var plans = await h.Db.AgentPlans.AsNoTracking().ToListAsync();
+        plans.Should().AllSatisfy(p => (p.StepsJson + p.ResultsJson).Should().NotContain(Secret));
         h.Agent.Audit.Entries.Should().AllSatisfy(e => (e.MetadataJson ?? "").Should().NotContain(Secret));
     }
 
@@ -150,7 +149,7 @@ public class AppToolsScenarioTests
         foreach (var safe in h.AllTools().Where(t => t.Kind == AgentToolKind.SafeWrite)) h.Agent.Remember(safe.Name);
         h.Agent.Chat.ThenCalls(
                 h.Agent.Chat.Call("set_env_vars", """{"app":"web","variables":[{"key":"LOG_LEVEL","value":"warn"}]}"""),
-                h.Agent.Chat.Call("rollback_app", """{"app":"web"}"""))
+                h.Agent.Chat.Call("rollback_app", """{"app":"web","number":1}"""))
             .ThenText("Waiting for your approval.");
 
         var (_, events) = await h.Agent.SendAsync("quieter logs on web, and roll it back to the previous version");

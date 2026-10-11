@@ -9,6 +9,7 @@ using Harbora.Infrastructure.Projects;
 using Harbora.Infrastructure.Security;
 using Harbora.Infrastructure.Templates;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Harbora.Infrastructure.Agent.Tools;
@@ -36,6 +37,14 @@ namespace Harbora.Infrastructure.Agent.Tools;
 /// project had already been committed. Here it is recorded as the assistant's, and such a refusal is
 /// reported as what it is — the project exists, its first deploy did not start.
 /// </para>
+///
+/// <para>
+/// A variable the template marks secret takes no plain value: it arrives as a lock-button handle
+/// (<c>{{secret:…}}</c>), checked to exist when carded and resolved only here at execution, so its value
+/// never reaches the model, the conversation or the plan. A handle given for a variable the template left
+/// plain is honoured too — the value is stored, then made a secret through the configuration service
+/// before anything deploys it.
+/// </para>
 /// </summary>
 public sealed class DeployTemplateTool(
     HarboraDbContext db,
@@ -45,7 +54,11 @@ public sealed class DeployTemplateTool(
     IDeploymentEngine deployments,
     IQuotaService quota,
     IAuditLogger audit,
-    IOptions<BillingOptions> billing) : AgentAppTool(resolver, access)
+    IOptions<BillingOptions> billing,
+    Apps.IAppConfigurationService configuration,
+    ILogger<DeployTemplateTool> logger,
+    // Optional so the tool resolves, and fails closed on every handle, on a host that holds no vault yet.
+    IAgentSecretVault? vault = null) : AgentAppTool(resolver, access)
 {
     private const int ShownValueLength = 60;
 
@@ -55,8 +68,9 @@ public sealed class DeployTemplateTool(
         "Deploys a catalog template (by its key or name from get_catalog) as a NEW project with a Production " +
         "environment: the app plus any databases the template requires, wired together, and by default its first " +
         "deployment. It cannot add to an existing project. Pass every variable the template needs a value for in " +
-        "'variables'; templates that build from Git need a public repository URL. Nothing is created until the user " +
-        "approves.";
+        "'variables'; a secret one (an API key, a password) must be the " + HandleShape + " handle the user entered " +
+        "with the lock button beside the message box — never ask for a secret in the chat. Templates that build from " +
+        "Git need a public repository URL. Nothing is created until the user approves.";
 
     public override string ParametersSchema =>
         """
@@ -68,7 +82,7 @@ public sealed class DeployTemplateTool(
             "project": { "type": "string", "description": "Name for the new project. Default: the template's name." },
             "repository": { "type": "string", "description": "Public https Git clone URL, only for templates that build from Git." },
             "gitRef": { "type": "string", "description": "Branch or tag, for templates that build from Git. Default main." },
-            "variables": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Values for the variables the template needs, by key." },
+            "variables": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Values for the variables the template needs, by key. A secret variable's value is the {{secret:…}} handle from the lock button." },
             "size": { "type": "string", "description": "An instance size key from get_catalog, applied to everything it creates. Optional." },
             "deployNow": { "type": "boolean", "description": "Queue the app's first deployment. Default true." }
           },
@@ -84,7 +98,7 @@ public sealed class DeployTemplateTool(
     public override async Task<AgentValidation> ValidateAsync(
         JsonElement args, AgentToolContext context, AgentPlanScope scope, CancellationToken ct)
     {
-        var call = await ReadAsync(args, context, ct);
+        var call = await ReadAsync(args, context, executing: false, ct);
         if (call.Error is { } error) return AgentValidation.Refused(error.En, error.Fa);
 
         var template = call.Template!;
@@ -110,9 +124,14 @@ public sealed class DeployTemplateTool(
         if (call.Size is { } size) { detailEn.Add($"size {size} for everything it creates"); detailFa.Add($"اندازهٔ {size} برای همه"); }
         foreach (var (key, value) in call.Variables)
         {
-            var secret = call.Secrets.Contains(key);
-            detailEn.Add(secret ? $"{key} (secret — value hidden)" : $"{key} = {Shown(value)}");
-            detailFa.Add(secret ? $"{key} (محرمانه — مقدار نمایش داده نمی‌شود)" : $"{key} = {Shown(value)}");
+            // Only a handle can stand for a secret here (a plain value for one was refused), and a handle is
+            // shown masked — never resolved for a card.
+            detailEn.Add(call.Handles.Contains(key)
+                ? $"{key} (secret — {AgentSecretHandles.Masked}, entered with the lock button)"
+                : $"{key} = {Shown(value)}");
+            detailFa.Add(call.Handles.Contains(key)
+                ? $"{key} (محرمانه — {AgentSecretHandles.Masked}، واردشده با دکمهٔ قفل)"
+                : $"{key} = {Shown(value)}");
         }
         if (manifest.Service is null)
         {
@@ -142,9 +161,19 @@ public sealed class DeployTemplateTool(
 
     public override async Task<AgentToolResult> ExecuteAsync(JsonElement args, AgentToolContext context, CancellationToken ct)
     {
-        var call = await ReadAsync(args, context, ct);
+        var call = await ReadAsync(args, context, executing: true, ct);
         if (call.Error is { } error) return NotPossible(error.En, error.Fa);
         var template = call.Template!;
+
+        // Handles become values only now, in memory, on their way into the service.
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (key, value) in call.Variables)
+        {
+            if (!call.Handles.Contains(key)) { values[key] = value; continue; }
+            if (vault?.Resolve(context.WorkspaceId, context.UserId, value.Trim()) is not { } resolved)
+                return NotPossible(Expired(key).En, Expired(key).Fa);
+            values[key] = resolved;
+        }
 
         // The service stages the project, its environment and the databases before some of its refusals;
         // whatever it left behind when it throws is this step's to drop, not the agent's next save's to write.
@@ -154,10 +183,13 @@ public sealed class DeployTemplateTool(
         {
             deployed = await templates.DeployAsync(new TemplateDeployRequest(
                 context.WorkspaceId, context.UserId, template.Id, call.ProjectName, call.ResourceName,
-                call.Repository, call.GitRef, call.Variables, DeployNow: false, InstanceSizeKey: call.Size), ct);
+                call.Repository, call.GitRef, values, DeployNow: false, InstanceSizeKey: call.Size), ct);
         }
-        catch (InvalidOperationException ex)
+        catch (InvalidOperationException ex) when (ex is QuotaRefusedException or CreationPaymentRequiredException
+                                                   || ThrownBy(ex, typeof(TemplateDeploymentService)))
         {
+            // The service's own refusals — it says no by throwing. Only these are told to the person in the
+            // service's words: an EF error is an InvalidOperationException too, and is not one of them.
             DropStaged(db, before);
             var fa = ex switch
             {
@@ -165,19 +197,36 @@ public sealed class DeployTemplateTool(
                 CreationPaymentRequiredException payment => payment.ReasonFa,
                 _ => $"قالب مستقر نشد: {ex.Message}"
             };
-            return NotPossible(ex.Message, fa);
+            return await NotFinishedAsync(context, call, ex.Message, fa, ct);
         }
-        catch
+        catch (Exception ex)
         {
-            // Not a refusal (a save that lost a race on a unique name, say): the plan engine reports it, but
-            // the graph it staged goes first, in an order that cannot sever a required relationship.
+            // Anything else — a save that lost a race on a unique name, a provisioning queue that threw — is a
+            // failure in neutral words with the detail in the log. The graph it staged goes first, leaves before
+            // the rows they hang off, so nothing is left for the agent's next save.
             DropStaged(db, before);
-            throw;
+            logger.LogError(ex, "deploy_template could not deploy template {Template} in workspace {Workspace}.", template.Key, context.WorkspaceId);
+            return await NotFinishedAsync(context, call,
+                "The template could not be deployed because of an error on the server; it has been logged.",
+                "قالب به‌خاطر خطایی در سرور مستقر نشد؛ خطا ثبت شد.", ct);
         }
 
         await audit.LogAsync("template.deploy", "template", template.Id.ToString(),
             metadataJson: JsonSerializer.Serialize(new { projectId = deployed.ProjectId, dependencies = deployed.DependencyCount }),
             workspaceId: context.WorkspaceId, ct: ct);
+
+        // A handle given for a variable the template left plain: the value is stored, and made a secret now —
+        // through the configuration service, before anything deploys it.
+        var madeSecret = call.Handles.Where(key => !call.Secrets.Contains(key)).ToList();
+        if (deployed.AppId is { } securedApp && madeSecret.Count > 0)
+        {
+            var secured = await configuration.SetEnvAsync(ActorOf(context), securedApp,
+                madeSecret.Select(key => new Apps.AppEnvVarInput(key, values[key], IsSecret: true)).ToList(), ct);
+            if (!secured.Ok)
+                return await NotFinishedAsync(context, call,
+                    $"{string.Join(", ", madeSecret)} could not be made secret ({string.Join(" ", secured.Refusals.Select(r => r.Message))}); it is stored as plain text and nothing was deployed. Change it in the panel.",
+                    $"{string.Join("، ", madeSecret)} محرمانه نشد ({string.Join(" ", secured.Refusals.Select(r => r.MessageFa))})؛ به‌صورت متن معمولی ذخیره شده و چیزی مستقر نشد. آن را در پنل تغییر دهید.", ct);
+        }
 
         var project = await db.Projects.AsNoTracking().FirstAsync(p => p.Id == deployed.ProjectId, ct);
         var databases = await db.ManagedServices.AsNoTracking()
@@ -206,6 +255,14 @@ public sealed class DeployTemplateTool(
             {
                 deployRefused = refusal;
             }
+            catch (Exception ex)
+            {
+                // The project is committed whatever happened here, so the step is reported done with the
+                // deploy said not to have started — in neutral words, the detail in the log.
+                logger.LogError(ex, "deploy_template could not queue the first deployment of app {App}.", app.Slug);
+                deployRefused = ("it could not be queued because of an error on the server (logged); deploy it with deploy_app or from the panel.",
+                    "به‌خاطر خطایی در سرور در صف قرار نگرفت (خطا ثبت شد)؛ آن را با deploy_app یا از پنل مستقر کنید.");
+            }
         }
         var state = deployment is null ? ((string En, string Fa, string Code)?)null : Describe(deployment);
 
@@ -221,6 +278,11 @@ public sealed class DeployTemplateTool(
         }
         summaryEn += ".";
         summaryFa += ".";
+        if (madeSecret.Count > 0)
+        {
+            summaryEn += $" {string.Join(", ", madeSecret)} stored as a secret.";
+            summaryFa += $" {string.Join("، ", madeSecret)} به‌صورت محرمانه ذخیره شد.";
+        }
         if (state is { } s) { summaryEn += $" Its first {s.En}."; summaryFa += $" اولین {s.Fa}."; }
         else if (deployRefused is { } refused) { summaryEn += $" Its first deployment did not start: {refused.En}"; summaryFa += $" استقرار اول شروع نشد: {refused.Fa}"; }
         else if (app is not null) { summaryEn += " The app is not deployed yet."; summaryFa += " اپ هنوز مستقر نشده است."; }
@@ -244,12 +306,13 @@ public sealed class DeployTemplateTool(
     private sealed record Call(
         AppTemplate? Template, TemplateManifest? Manifest, string ProjectName, string ProjectSlug, string ResourceName, string? AppSlug,
         string? Repository, string? GitRef, IReadOnlyDictionary<string, string> Variables, IReadOnlySet<string> Secrets,
+        IReadOnlySet<string> Handles,
         IReadOnlyList<string> Databases, string? Size, bool DeployNow, (string En, string Fa)? Error);
 
     private static Call No(string en, string fa) =>
-        new(null, null, "", "", "", null, null, null, new Dictionary<string, string>(), new HashSet<string>(), [], null, false, (en, fa));
+        new(null, null, "", "", "", null, null, null, new Dictionary<string, string>(), new HashSet<string>(), new HashSet<string>(), [], null, false, (en, fa));
 
-    private async Task<Call> ReadAsync(JsonElement args, AgentToolContext context, CancellationToken ct)
+    private async Task<Call> ReadAsync(JsonElement args, AgentToolContext context, bool executing, CancellationToken ct)
     {
         var wanted = AgentArgs.String(args, "template");
         if (wanted is null) return No("Say which template (its key from get_catalog).", "بگویید کدام قالب (کلید آن از get_catalog).");
@@ -319,10 +382,39 @@ public sealed class DeployTemplateTool(
                 return No($"{key} is set by the template itself (a default or a generated secret); change it after deploying with set_env_vars.",
                     $"{key} را خود قالب تنظیم می‌کند (مقدار پیش‌فرض یا رمز ساخته‌شده)؛ پس از استقرار با set_env_vars آن را تغییر دهید.");
         }
-        var missing = needed.Where(v => !given.TryGetValue(v.Key, out var value) || string.IsNullOrWhiteSpace(value)).Select(v => v.Key).ToList();
+        var missing = needed.Where(v => !given.TryGetValue(v.Key, out var value) || string.IsNullOrWhiteSpace(value)).ToList();
         if (missing.Count > 0)
-            return No($"Template '{template.Name}' needs values for: {string.Join(", ", missing)}. Ask the user for them.",
-                $"قالب «{template.Name}» برای این متغیرها مقدار لازم دارد: {string.Join("، ", missing)}. آن‌ها را از کاربر بپرسید.");
+        {
+            var locked = missing.Where(v => v.Secret).Select(v => v.Key).ToList();
+            return No($"Template '{template.Name}' needs values for: {string.Join(", ", missing.Select(v => v.Key))}. Ask the user for them" +
+                      (locked.Count > 0 ? $" — the secret ones ({string.Join(", ", locked)}) with the lock button beside the message box, never in the chat." : "."),
+                $"قالب «{template.Name}» برای این متغیرها مقدار لازم دارد: {string.Join("، ", missing.Select(v => v.Key))}. آن‌ها را از کاربر بپرسید" +
+                (locked.Count > 0 ? $" — محرمانه‌ها ({string.Join("، ", locked)}) را با دکمهٔ قفل کنار کادر پیام، نه در گفتگو." : "."));
+        }
+
+        // Secrets: a handle is checked to exist (never resolved into the card); a plain value for a variable
+        // the template marks secret is refused, so it never sits in the plan or goes back to the model.
+        var handles = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (key, value) in given)
+        {
+            if (AgentSecretHandles.IsHandle(value))
+            {
+                if (vault?.Resolve(context.WorkspaceId, context.UserId, value.Trim()) is null)
+                {
+                    var unknown = executing ? Expired(key) : UnknownHandle(key);
+                    return No(unknown.En, unknown.Fa);
+                }
+                handles.Add(key);
+            }
+            else if (AgentSecretHandles.Pattern.IsMatch(value))
+                return No($"A {HandleShape} handle has to be {key}'s whole value; it cannot be part of a longer text.",
+                    $"دستهٔ {HandleShape} باید کل مقدار {key} باشد و نمی‌تواند بخشی از متنی بلندتر باشد.");
+            else if (plan.Variables.First(v => v.Key == key).Secret)
+            {
+                var plain = PlainSecret(key, offerGenerate: false);
+                return No(plain.En, plain.Fa);
+            }
+        }
 
         // A value may refer to the databases the template brings (${{mysql.host}}); one naming anything
         // else is refused by the service after it has staged the project, so it is refused here first.
@@ -331,7 +423,7 @@ public sealed class DeployTemplateTool(
             .SelectMany(alias => TemplateReferences.For(alias, new Services.ServiceCreds("host", 1, "user", "password", "database")))
             .GroupBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.First().Value, StringComparer.OrdinalIgnoreCase);
-        foreach (var (key, value) in given)
+        foreach (var (key, value) in given.Where(pair => !handles.Contains(pair.Key)))
         {
             TemplateReferences.Resolve(value, known, out var unknown);
             if (unknown.Count > 0)
@@ -387,7 +479,7 @@ public sealed class DeployTemplateTool(
 
         return new Call(template, manifest, projectName, projectSlug, resourceName, appSlug,
             repository, AgentArgs.String(args, "gitRef"), given,
-            plan.Variables.Where(v => v.Secret).Select(v => v.Key).ToHashSet(StringComparer.Ordinal),
+            plan.Variables.Where(v => v.Secret).Select(v => v.Key).ToHashSet(StringComparer.Ordinal), handles,
             databases, size, AgentArgs.Bool(args, "deployNow") ?? true, null);
     }
 
@@ -399,4 +491,27 @@ public sealed class DeployTemplateTool(
 
     private static string Shown(string value) =>
         value.Length > ShownValueLength ? value[..ShownValueLength] + "…" : value;
+
+    /// <summary>
+    /// A failed step, said truthfully about what exists. The service commits the project before some of what
+    /// it does afterwards (queueing provisioning) can still throw, and this tool makes variables secret after
+    /// the commit — so "not created" is said only when no project with the promised slug exists. The slug
+    /// was free when the step was checked, so one that exists now is this run's.
+    /// </summary>
+    private async Task<AgentToolResult> NotFinishedAsync(
+        AgentToolContext context, Call call, string reason, string reasonFa, CancellationToken ct)
+    {
+        var committed = await db.Projects.AsNoTracking()
+            .Where(p => p.WorkspaceId == context.WorkspaceId && p.Slug == call.ProjectSlug)
+            .Select(p => new { p.Id, p.Slug })
+            .FirstOrDefaultAsync(ct);
+        if (committed is null) return NotPossible(reason, reasonFa);
+
+        return new AgentToolResult(false,
+            AgentJson.Serialize(new { error = reason, project = committed.Slug, projectCreated = true }),
+            null, null,
+            $"Project '{committed.Slug}' was created, but the template did not finish: {reason} Check it in the panel.",
+            $"پروژهٔ «{committed.Slug}» ساخته شد، اما قالب کامل نشد: {reasonFa} آن را در پنل بررسی کنید.",
+            [ProjectLink(committed.Id, committed.Slug)]);
+    }
 }

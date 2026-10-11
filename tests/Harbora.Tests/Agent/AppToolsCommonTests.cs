@@ -41,6 +41,7 @@ public class AppToolsCommonTests
         "remove_domain" => new { app, host = $"{app}.example.org" },
         "add_volume" => new { app, mountPath = "/data" },
         "remove_volume" => new { app, mountPath = "/files" },
+        "rollback_app" => new { app, number = 1 },
         _ => new { app }
     };
 

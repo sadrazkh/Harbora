@@ -95,6 +95,9 @@ public class AppCreateToolsTests
     [Theory]
     [InlineData("""{"name":"web","image":"nginx","gitToken":"ghp_secret"}""", "does not take Git tokens")]
     [InlineData("""{"name":"web","repository":"https://bob:ghp_secret@github.com/acme/api.git"}""", "user name or token")]
+    [InlineData("""{"name":"web","repository":"https://github.com/acme/api.git?access_token=ghp_secret"}""", "user name or token")]
+    [InlineData("""{"name":"web","repository":"https://gitlab.example.com/acme/api.git?private_token=ghp_secret"}""", "user name or token")]
+    [InlineData("""{"name":"web","repository":"https://github.com/acme/api.git?ref=main&Token=ghp_secret"}""", "user name or token")]
     [InlineData("""{"name":"web","repository":"git@github.com:acme/api.git"}""", "public https clone URL")]
     [InlineData("""{"name":"web","image":"nginx","repository":"https://github.com/acme/api.git"}""", "not both")]
     [InlineData("""{"name":"web"}""", "Give an image")]
@@ -412,13 +415,121 @@ public class AppCreateToolsTests
         return template;
     }
 
-    private static object GhostArgs(string? url = "https://blog.example.com", string? smtp = "hunter2-secret") => new
+    /// <summary>Ghost with its two needed variables: a plain url, and the SMTP password as a lock-button handle.</summary>
+    private static object GhostArgs(AppToolsHarness h) => new
     {
         template = "ghost",
         name = "blog",
-        variables = new Dictionary<string, string?> { ["url"] = url, ["SMTP_PASSWORD"] = smtp }
-            .Where(p => p.Value is not null).ToDictionary(p => p.Key, p => p.Value)
+        variables = new Dictionary<string, string>
+        {
+            ["url"] = "https://blog.example.com", ["SMTP_PASSWORD"] = h.Lock("SMTP_PASSWORD", "hunter2-secret")
+        }
     };
+
+    [Fact]
+    public async Task A_plain_value_for_a_variable_the_template_marks_secret_is_refused_with_the_lock_button_guidance()
+    {
+        using var h = new AppToolsHarness();
+        SeedTemplate(h);
+
+        var verdict = await h.ValidateAsync(h.DeployTemplate(), new
+        {
+            template = "ghost",
+            variables = new Dictionary<string, string> { ["url"] = "https://blog.example.com", ["SMTP_PASSWORD"] = "hunter2-secret" }
+        });
+
+        verdict.Ok.Should().BeFalse();
+        verdict.Error.Should().Contain("SMTP_PASSWORD is a secret").And.Contain("lock button").And.NotContain("hunter2-secret");
+        verdict.ErrorFa.Should().Contain("دکمهٔ قفل");
+    }
+
+    [Fact]
+    public async Task A_missing_secret_variable_is_asked_for_through_the_lock_button()
+    {
+        using var h = new AppToolsHarness();
+        SeedTemplate(h);
+
+        var verdict = await h.ValidateAsync(h.DeployTemplate(), new
+        {
+            template = "ghost", variables = new Dictionary<string, string> { ["url"] = "https://blog.example.com" }
+        });
+
+        verdict.Error.Should().Contain("needs values for: SMTP_PASSWORD").And.Contain("the secret ones (SMTP_PASSWORD) with the lock button");
+    }
+
+    [Fact]
+    public async Task A_handle_for_a_variable_the_template_left_plain_is_stored_as_a_secret_before_anything_deploys()
+    {
+        using var h = new AppToolsHarness();
+        SeedTemplate(h);
+        var url = h.Lock("url", "https://blog.example.com/private");
+
+        var result = await h.ExecuteAsync(h.DeployTemplate(), new
+        {
+            template = "ghost", name = "blog",
+            variables = new Dictionary<string, string> { ["url"] = url, ["SMTP_PASSWORD"] = h.Lock("SMTP_PASSWORD", "x") }
+        });
+
+        result.Ok.Should().BeTrue(result.Error);
+        var row = await h.Db.EnvironmentVariables.AsNoTracking().SingleAsync(v => v.App!.Slug == "blog" && v.Key == "url");
+        row.IsSecret.Should().BeTrue();
+        row.Value.Should().Be("enc:https://blog.example.com/private");
+        result.SummaryEn.Should().Contain("url stored as a secret");
+        (result.ResultJson + result.SummaryEn + result.SummaryFa).Should().NotContain("blog.example.com/private");
+    }
+
+    [Fact]
+    public async Task A_template_handle_that_expired_before_the_run_creates_nothing()
+    {
+        using var h = new AppToolsHarness();
+        SeedTemplate(h);
+        var smtp = h.Lock("SMTP_PASSWORD", "hunter2-secret");
+        var args = new
+        {
+            template = "ghost", name = "blog",
+            variables = new Dictionary<string, string> { ["url"] = "https://blog.example.com", ["SMTP_PASSWORD"] = smtp }
+        };
+        (await h.ValidateAsync(h.DeployTemplate(), args)).Ok.Should().BeTrue();
+        h.Vault.Forget(smtp);
+        var before = h.Snapshot();
+
+        var result = await h.ExecuteAsync(h.DeployTemplate(), args);
+
+        result.Ok.Should().BeFalse();
+        result.Error.Should().Contain("The secret for SMTP_PASSWORD expired");
+        h.Snapshot().Should().Be(before);
+    }
+
+    [Fact]
+    public async Task A_template_that_throws_after_committing_the_project_says_the_project_exists()
+    {
+        using var h = new AppToolsHarness();
+        SeedTemplate(h);
+        h.ManagedServices.ProvisionThrows = new InvalidOperationException("The job queue is unavailable.");
+
+        var result = await h.ExecuteAsync(h.DeployTemplate(), GhostArgs(h));
+
+        result.Ok.Should().BeFalse();
+        var project = await h.Db.Projects.AsNoTracking().SingleAsync(p => p.Slug == "ghost");
+        result.Error.Should().StartWith("Project 'ghost' was created, but the template did not finish:")
+            .And.Contain("error on the server").And.NotContain("job queue", "an unexpected failure is told in neutral words");
+        result.ErrorFa.Should().Contain("«ghost» ساخته شد");
+        result.Links.Should().ContainSingle().Which.Url.Should().Be($"/projects/{project.Id}");
+    }
+
+    [Fact]
+    public async Task A_first_deploy_that_fails_unexpectedly_after_the_template_still_reports_the_project_as_created()
+    {
+        using var h = new AppToolsHarness();
+        SeedTemplate(h);
+        h.Deployments.FailsFromElsewhere = () => throw new InvalidOperationException("A second operation was started on this context.");
+
+        var result = await h.ExecuteAsync(h.DeployTemplate(), GhostArgs(h));
+
+        result.Ok.Should().BeTrue("the project, its app and database exist");
+        result.SummaryEn.Should().Contain("Its first deployment did not start: it could not be queued because of an error on the server")
+            .And.NotContain("second operation");
+    }
 
     [Fact]
     public async Task A_template_validates_as_a_new_project_with_its_database_and_hides_secret_values()
@@ -427,13 +538,13 @@ public class AppCreateToolsTests
         SeedTemplate(h);
         var before = h.Snapshot();
 
-        var verdict = await h.ValidateAsync(h.DeployTemplate(), GhostArgs());
+        var verdict = await h.ValidateAsync(h.DeployTemplate(), GhostArgs(h));
 
         verdict.Ok.Should().BeTrue(verdict.Error);
         verdict.TitleEn.Should().Be("Deploy template Ghost as blog");
         verdict.TitleFa.Should().Be("استقرار قالب گوست با نام blog");
         verdict.DetailEn.Should().Contain("New project 'Ghost' (ghost/production)").And.Contain("app blog from image ghost:5")
-            .And.Contain("mysql").And.Contain("url = https://blog.example.com").And.Contain("SMTP_PASSWORD (secret — value hidden)");
+            .And.Contain("mysql").And.Contain("url = https://blog.example.com").And.Contain($"SMTP_PASSWORD (secret — {AgentSecretHandles.Masked}, entered with the lock button)");
         (verdict.DetailEn + verdict.DetailFa + verdict.TitleEn + verdict.TitleFa).Should().NotContain("hunter2-secret");
         verdict.WarningsEn.Should().Contain(w => w.Contains("always creates a new project"));
         verdict.Creates.Should().Be(new AgentPlannedResource(AgentResourceKinds.App, "blog", "ghost", "production"));
@@ -446,7 +557,7 @@ public class AppCreateToolsTests
         using var h = new AppToolsHarness();
         var template = SeedTemplate(h);
 
-        var result = await h.ExecuteAsync(h.DeployTemplate(), GhostArgs());
+        var result = await h.ExecuteAsync(h.DeployTemplate(), GhostArgs(h));
 
         result.Ok.Should().BeTrue(result.Error);
         var project = await h.Db.Projects.AsNoTracking().SingleAsync(p => p.Slug == "ghost");
@@ -477,7 +588,7 @@ public class AppCreateToolsTests
     {
         using var h = new AppToolsHarness();
         SeedTemplate(h);
-        var variables = new Dictionary<string, string> { ["url"] = "https://blog.example.com", ["SMTP_PASSWORD"] = "x" };
+        var variables = new Dictionary<string, string> { ["url"] = "https://blog.example.com", ["SMTP_PASSWORD"] = h.Lock("SMTP_PASSWORD", "x") };
         object args = what switch
         {
             "missing" => new { template = "ghost", variables = new Dictionary<string, string>() },
@@ -505,16 +616,16 @@ public class AppCreateToolsTests
         h.SeedProject("ghost");
         h.SeedForeignApp("blog");
 
-        var projectTaken = await h.ValidateAsync(h.DeployTemplate(), GhostArgs());
+        var projectTaken = await h.ValidateAsync(h.DeployTemplate(), GhostArgs(h));
         var appTaken = await h.ValidateAsync(h.DeployTemplate(), new
         {
             template = "ghost", name = "blog", project = "Ghost Blog",
-            variables = new Dictionary<string, string> { ["url"] = "https://blog.example.com", ["SMTP_PASSWORD"] = "x" }
+            variables = new Dictionary<string, string> { ["url"] = "https://blog.example.com", ["SMTP_PASSWORD"] = h.Lock("SMTP_PASSWORD", "x") }
         });
         var free = await h.ValidateAsync(h.DeployTemplate(), new
         {
             template = "ghost", name = "journal", project = "Ghost Blog",
-            variables = new Dictionary<string, string> { ["url"] = "https://blog.example.com", ["SMTP_PASSWORD"] = "x" }
+            variables = new Dictionary<string, string> { ["url"] = "https://blog.example.com", ["SMTP_PASSWORD"] = h.Lock("SMTP_PASSWORD", "x") }
         });
 
         projectTaken.Error.Should().Be("A project 'ghost' already exists. A template always creates a new project: pass another project name.");
@@ -561,7 +672,7 @@ public class AppCreateToolsTests
         if (granted) h.Grant(SystemRole.Member);
         SeedTemplate(h);
 
-        var verdict = await h.ValidateAsync(h.DeployTemplate(), GhostArgs());
+        var verdict = await h.ValidateAsync(h.DeployTemplate(), GhostArgs(h));
 
         verdict.Ok.Should().BeFalse("a template always makes a new project, which no project grant covers");
         verdict.Error.Should().Contain("does not allow");
@@ -572,7 +683,7 @@ public class AppCreateToolsTests
     {
         using var h = new AppToolsHarness();
         SeedTemplate(h);
-        (await h.ValidateAsync(h.DeployTemplate(), GhostArgs())).Ok.Should().BeTrue();
+        (await h.ValidateAsync(h.DeployTemplate(), GhostArgs(h))).Ok.Should().BeTrue();
 
         // The plan's domain ceiling is checked by the service only after it has staged the project, its
         // environment and the database; the app's own address is one domain too many.
@@ -583,7 +694,7 @@ public class AppCreateToolsTests
         h.Db.ChangeTracker.Clear();
         var before = h.Snapshot();
 
-        var result = await h.ExecuteAsync(h.DeployTemplate(), GhostArgs());
+        var result = await h.ExecuteAsync(h.DeployTemplate(), GhostArgs(h));
 
         result.Ok.Should().BeFalse();
         result.Error.Should().Contain("The plan allows 1 domain(s)");

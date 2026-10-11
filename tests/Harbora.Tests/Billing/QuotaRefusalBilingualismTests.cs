@@ -488,7 +488,7 @@ public class QuotaRefusalReachabilityTests
     /// A file that reads a denied <see cref="QuotaCheck"/> and hands <i>both</i> halves on itself — there
     /// is no request-scoped catch between it and the reader to pick a language from an exception, so it
     /// throws none, and is named here with where the Persian half goes. It must still read
-    /// <c>ReasonFa</c>; a file listed here that stops doing so fails like an unfiled one.
+    /// the gate answer's <c>ReasonFa</c> (<c>mayStart.ReasonFa</c>); a file listed here that stops doing so fails like an unfiled one.
     /// </summary>
     private static readonly Dictionary<string, string> HandsBothLanguagesOn = new()
     {
@@ -515,7 +515,7 @@ public class QuotaRefusalReachabilityTests
             // independently, on the exception's runtime type).
             var carriesBothLanguagesForward = text.Contains("throw new QuotaRefusedException(");
             var filedAsEnglishOnPurpose = PersistedEnglishByDesign.ContainsKey(path);
-            var handsBothOnItself = HandsBothLanguagesOn.ContainsKey(path) && text.Contains("ReasonFa");
+            var handsBothOnItself = HandsBothLanguagesOn.ContainsKey(path) && text.Contains("mayStart.ReasonFa");
 
             (carriesBothLanguagesForward || filedAsEnglishOnPurpose || handsBothOnItself).Should().BeTrue(
                 $"{path} reads IBillingGate's answer and does neither: it does not throw " +

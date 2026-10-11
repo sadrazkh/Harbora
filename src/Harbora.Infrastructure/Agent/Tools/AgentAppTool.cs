@@ -147,26 +147,65 @@ public abstract class AgentAppTool(AgentResourceResolver resolver, ProjectAccess
             $"استقرار شمارهٔ {deployment.Number} در صف است",
             "queued"),
         var status => (
-            $"deployment #{deployment.Number} is {AgentResourceResolver.Lower(status)}",
-            $"استقرار شمارهٔ {deployment.Number} در وضعیت {AgentResourceResolver.Lower(status)} است",
+            $"deployment #{deployment.Number} is {StatusEn(status)}",
+            $"استقرار شمارهٔ {deployment.Number} {StatusFa(status)} است",
             AgentResourceResolver.Lower(status))
     };
 
+    /// <summary>A deployment's state as an English phrase that fits "deployment #3 is …".</summary>
+    protected static string StatusEn(DeploymentStatus status) => status switch
+    {
+        DeploymentStatus.HealthChecking => "health-checking",
+        DeploymentStatus.PendingApproval => "waiting for approval",
+        DeploymentStatus.RolledBack => "rolled back",
+        _ => AgentResourceResolver.Lower(status)
+    };
+
+    /// <summary>The same state in Persian, for "استقرار شمارهٔ ۳ … است".</summary>
+    protected static string StatusFa(DeploymentStatus status) => status switch
+    {
+        DeploymentStatus.Queued => "در صف",
+        DeploymentStatus.Building => "در حال ساخت",
+        DeploymentStatus.Pushing => "در حال ارسال ایمیج",
+        DeploymentStatus.Deploying => "در حال استقرار",
+        DeploymentStatus.HealthChecking => "در حال بررسی سلامت",
+        DeploymentStatus.PendingApproval => "منتظر تأیید",
+        DeploymentStatus.Succeeded => "موفق",
+        DeploymentStatus.Failed => "ناموفق",
+        DeploymentStatus.Cancelled => "لغوشده",
+        DeploymentStatus.RolledBack => "بازگردانده‌شده",
+        _ => AgentResourceResolver.Lower(status)
+    };
+
     /// <summary>
-    /// A deploy request the engine refused, in both languages: the three preflight refusals carry their
-    /// own Persian; anything else the engine says with an <see cref="InvalidOperationException"/> (a
-    /// rollback that cannot be coalesced onto a deploy in flight) is English only, so the Persian says
-    /// what happened and carries the English detail — the shape the app services use for such texts.
-    /// Null for anything else, which is not a refusal and is left to the plan engine's own handling.
+    /// A deploy request the engine refused, in both languages. The three preflight refusals carry their own
+    /// Persian. An <see cref="InvalidOperationException"/> counts only when the engine itself threw it (a
+    /// rollback that will not be merged into a deploy in flight, an app that is gone) — it is English only,
+    /// so the Persian says what happened and carries the English detail, the shape the app services use for
+    /// such texts. Anything else — an EF error is an <see cref="InvalidOperationException"/> too — is not a
+    /// refusal: null, so it reaches the plan engine, which logs it and reports a failed step in neutral words.
     /// </summary>
     protected static (string En, string Fa)? DeployRefusal(Exception ex) => ex switch
     {
         QuotaRefusedException quota => (quota.Message, quota.ReasonFa ?? quota.Message),
         CapacityRefusedException capacity => (capacity.Message, capacity.ReasonFa ?? capacity.Message),
         LowDiskRefusedException disk => (disk.Message, disk.ReasonFa ?? disk.Message),
-        InvalidOperationException other => (other.Message, $"استقرار در صف قرار نگرفت: {other.Message}"),
+        InvalidOperationException own when ThrownBy(own, typeof(IDeploymentEngine)) =>
+            (own.Message, $"استقرار در صف قرار نگرفت: {own.Message}"),
         _ => null
     };
+
+    /// <summary>
+    /// Whether <paramref name="ex"/> was thrown by code of <paramref name="owner"/> (or a type implementing
+    /// it) itself, rather than by something it called. An async method throws from its state machine,
+    /// which is nested in the type that declares the method, so the declaring types are walked outwards.
+    /// </summary>
+    internal static bool ThrownBy(Exception ex, Type owner)
+    {
+        for (var type = ex.TargetSite?.DeclaringType; type is not null; type = type.DeclaringType)
+            if (owner.IsAssignableFrom(type)) return true;
+        return false;
+    }
 
     /// <summary>
     /// The same line the deploy card carries for a protected environment: whether a deploy will wait for
@@ -176,6 +215,28 @@ public abstract class AgentAppTool(AgentResourceResolver resolver, ProjectAccess
     protected static (string En, string Fa) ProtectedEnvironmentWarning(string environment) => (
         $"Environment '{environment}' is protected: the deployment waits for approval by another member who may deploy, unless there is nobody else who could approve it.",
         $"محیط «{environment}» محافظت‌شده است: استقرار منتظر تأیید عضو دیگری با اجازهٔ استقرار می‌ماند، مگر این‌که کسی دیگری برای تأیید نباشد.");
+
+    // ---- secrets entered with the lock button (AgentSecretContracts) ----
+
+    /// <summary>How a handle looks, for the sentences that tell the model what to pass on.</summary>
+    protected const string HandleShape = "{{secret:…}}";
+
+    /// <summary>A plain value given for a secret: refused, with the way a secret is meant to arrive.</summary>
+    protected static (string En, string Fa) PlainSecret(string key, bool offerGenerate) => (
+        $"{key} is a secret, and a secret's value must not travel through the chat. Ask the user to enter it with the lock button beside the message box — it reaches you as {HandleShape}; pass that on unchanged as the value" +
+        (offerGenerate ? " — or use generate: true for a random value nobody needs to type." : "."),
+        $"{key} محرمانه است و مقدار آن نباید از گفتگو بگذرد. از کاربر بخواهید آن را با دکمهٔ قفل کنار کادر پیام وارد کند — به شکل {HandleShape} به شما می‌رسد و همان را بی‌تغییر به‌عنوان مقدار بفرستید" +
+        (offerGenerate ? " — یا برای مقداری تصادفی که کسی لازم نیست تایپ کند generate: true را بدهید." : "."));
+
+    /// <summary>A handle the vault does not know for this person: never made, someone else's, or expired.</summary>
+    protected static (string En, string Fa) UnknownHandle(string key) => (
+        $"The secret given for {key} is unknown or has expired (one entered with the lock button lasts {AgentSecretHandles.Lifetime.TotalMinutes:0} minutes). Ask the user to enter it again with the lock button.",
+        $"رمزی که برای {key} داده شده شناخته‌شده نیست یا منقضی شده است (رمزی که با دکمهٔ قفل وارد می‌شود {AgentSecretHandles.Lifetime.TotalMinutes:0} دقیقه می‌ماند). از کاربر بخواهید آن را دوباره با دکمهٔ قفل وارد کند.");
+
+    /// <summary>A handle that expired between the card and the run: nothing is applied with anything else.</summary>
+    protected static (string En, string Fa) Expired(string key) => (
+        $"The secret for {key} expired before this step ran, so nothing was changed. Ask the user to enter it again with the lock button.",
+        $"رمز {key} پیش از اجرای این مرحله منقضی شد، پس چیزی تغییر نکرد. از کاربر بخواهید آن را دوباره با دکمهٔ قفل وارد کند.");
 
     // ---- staged rows a refused service left behind ----
 
@@ -271,10 +332,18 @@ public abstract class AgentAppTool(AgentResourceResolver resolver, ProjectAccess
 
         // A token pasted into the URL is a token handed to the model, stored in the plan and shown on the
         // card. Private repositories are out of the assistant's reach in v1; the panel's form takes them.
-        if (!string.IsNullOrEmpty(uri.UserInfo))
+        // Both places a Git host accepts one: before the host, and as a query parameter.
+        if (!string.IsNullOrEmpty(uri.UserInfo) || CarriesTokenInQuery(uri.Query))
             return ("A repository URL with a user name or token in it is not accepted: the assistant works only with public repositories. Create an app from a private repository in the panel's app form.",
                 "آدرس مخزنی که نام کاربری یا توکن در آن باشد پذیرفته نمی‌شود: دستیار فقط با مخزن‌های عمومی کار می‌کند. اپِ مخزن خصوصی را از فرم ساخت اپ در پنل بسازید.");
 
         return null;
     }
+
+    private static readonly string[] TokenQueryNames = ["access_token", "token", "private_token", "oauth_token", "password", "auth"];
+
+    private static bool CarriesTokenInQuery(string query) =>
+        query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries)
+            .Select(pair => Uri.UnescapeDataString(pair.Split('=', 2)[0]))
+            .Any(name => TokenQueryNames.Contains(name, StringComparer.OrdinalIgnoreCase));
 }

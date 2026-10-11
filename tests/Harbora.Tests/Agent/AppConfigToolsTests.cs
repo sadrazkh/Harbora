@@ -23,61 +23,192 @@ public class AppConfigToolsTests
         string.Join("\n", r.ResultJson, r.SummaryEn, r.SummaryFa, r.Error, r.ErrorFa,
             string.Join(",", (r.Links ?? []).Select(l => l.Label + l.Url)));
 
+
     // ---- set_env_vars ---------------------------------------------------------------------------
 
-    private static object TwoVariables(string app = "web") => new
+    /// <summary>A plain variable, and a secret that arrives as a lock-button handle — never as its value.</summary>
+    private static object TwoVariables(string handle, string app = "web") => new
     {
         app,
         variables = new object[]
         {
             new { key = "DATABASE_URL", value = "postgres://db/shop" },
-            new { key = "STRIPE_KEY", value = Secret, secret = true }
+            new { key = "STRIPE_KEY", value = handle }
         }
     };
 
+    private static object One(object variable, string app = "web") => new { app, variables = new[] { variable } };
+
     [Fact]
-    public async Task Setting_variables_shows_plain_values_hides_the_secret_and_stores_it_encrypted()
+    public async Task A_secret_given_as_a_handle_is_applied_encrypted_and_its_value_is_on_no_card_result_or_audit()
     {
         using var h = new AppToolsHarness();
         h.SeedApp("web");
+        var handle = h.Lock("STRIPE_KEY", Secret);
 
-        var verdict = await h.ValidateAsync(h.SetEnvVars(), TwoVariables());
-        var result = await h.ExecuteAsync(h.SetEnvVars(), TwoVariables());
+        var verdict = await h.ValidateAsync(h.SetEnvVars(), TwoVariables(handle));
+        var result = await h.ExecuteAsync(h.SetEnvVars(), TwoVariables(handle));
 
         verdict.Ok.Should().BeTrue(verdict.Error);
         verdict.TitleEn.Should().Be("Set 2 environment variables on web");
         verdict.TitleFa.Should().Be("تنظیم 2 متغیر محیطی روی web");
-        verdict.DetailEn.Should().Contain("DATABASE_URL = postgres://db/shop").And.Contain("STRIPE_KEY (secret — value hidden)");
-        verdict.DetailFa.Should().Contain("STRIPE_KEY (محرمانه — مقدار نمایش داده نمی‌شود)");
+        verdict.DetailEn.Should().Contain("DATABASE_URL = postgres://db/shop")
+            .And.Contain($"STRIPE_KEY (secret — {AgentSecretHandles.Masked}, entered with the lock button)");
+        verdict.DetailFa.Should().Contain($"STRIPE_KEY (محرمانه — {AgentSecretHandles.Masked}");
         verdict.WarningsEn.Should().Contain("Takes effect on the app's next deploy.");
-        Everything(verdict).Should().NotContain(Secret);
+        Everything(verdict).Should().NotContain(Secret).And.NotContain(handle, "the card shows the mask, not even the handle");
 
         result.Ok.Should().BeTrue(result.Error);
         var stored = await h.Db.EnvironmentVariables.AsNoTracking().Where(v => v.App!.Slug == "web").ToListAsync();
-        stored.Single(v => v.Key == "STRIPE_KEY").Value.Should().Be("enc:" + Secret);
+        stored.Single(v => v.Key == "STRIPE_KEY").Value.Should().Be("enc:" + Secret, "the handle forced a secret, stored encrypted");
         stored.Single(v => v.Key == "STRIPE_KEY").IsSecret.Should().BeTrue();
         stored.Single(v => v.Key == "DATABASE_URL").Value.Should().Be("postgres://db/shop");
         result.SummaryEn.Should().Contain("STRIPE_KEY (secret, new)").And.Contain("next deploy");
         result.SummaryFa.Should().Contain("STRIPE_KEY (محرمانه، جدید)");
+        result.ResultJson.Should().Contain($"\"value\":\"{AgentSecretHandles.Masked}\"");
         Everything(result).Should().NotContain(Secret, "a secret's value reaches neither the model nor the person");
         h.Agent.Audit.Entries.Where(e => e.Action == "app.env_set").Should().HaveCount(2)
             .And.OnlyContain(e => !e.MetadataJson!.Contains(Secret));
         result.Links.Should().ContainSingle().Which.Kind.Should().Be("app");
     }
 
+    [Theory]
+    [InlineData("""{"key":"STRIPE_KEY","value":"sk_live_TOPSECRET_42","secret":true}""", "is a secret, and a secret's value must not travel through the chat")]
+    [InlineData("""{"key":"API_KEY","value":"sk_live_TOPSECRET_42"}""", "is a secret, and a secret's value must not travel through the chat")]
+    [InlineData("""{"key":"API_KEY","value":"now-plain","secret":false}""", "does not turn a secret into plain text")]
+    public async Task A_secret_value_in_the_chat_or_a_secret_turned_plain_is_refused_with_the_lock_button_guidance(string variable, string expected)
+    {
+        using var h = new AppToolsHarness();
+        h.SeedApp("web"); // API_KEY is a secret on it already
+        var before = h.Snapshot();
+        var args = JsonDocument.Parse("""{"app":"web","variables":[""" + variable + "]}").RootElement;
+
+        var verdict = await h.SetEnvVars().ValidateAsync(args, h.Context, new AgentPlanScope(), default);
+        var result = await h.SetEnvVars().ExecuteAsync(args, h.Context, default);
+
+        verdict.Ok.Should().BeFalse();
+        verdict.Error.Should().Contain(expected);
+        verdict.Error.Should().NotContain("sk_live_TOPSECRET_42", "a refusal does not repeat the value back");
+        verdict.ErrorFa.Should().MatchRegex("[؀-ۿ]");
+        if (expected.StartsWith("is a secret"))
+        {
+            verdict.Error.Should().Contain("lock button").And.Contain("{{secret:…}}").And.Contain("generate: true");
+            verdict.ErrorFa.Should().Contain("دکمهٔ قفل");
+        }
+        result.Ok.Should().BeFalse("execution asks again");
+        h.Snapshot().Should().Be(before);
+    }
+
     [Fact]
-    public async Task Overwriting_says_which_value_it_replaces_and_warns_when_a_secret_would_become_plain()
+    public async Task Generate_true_stores_a_strong_random_secret_that_was_never_in_the_arguments()
     {
         using var h = new AppToolsHarness();
         h.SeedApp("web");
+        var args = One(new { key = "JWT_SECRET", generate = true });
 
-        var verdict = await h.ValidateAsync(h.SetEnvVars(), new { app = "web", variables = new[] { new { key = "API_KEY", value = "now-plain" } } });
+        var verdict = await h.ValidateAsync(h.SetEnvVars(), args);
+        var result = await h.ExecuteAsync(h.SetEnvVars(), args);
 
         verdict.Ok.Should().BeTrue(verdict.Error);
-        verdict.TitleEn.Should().Be("Set environment variable API_KEY on web");
-        verdict.DetailEn.Should().Contain("API_KEY = now-plain, replaces the current value");
-        verdict.WarningsEn.Should().Contain(w => w.Contains("API_KEY is secret now"));
-        verdict.WarningsFa.Should().HaveCount(verdict.WarningsEn!.Count);
+        verdict.DetailEn.Should().Contain("JWT_SECRET (secret — a random value is generated on the server)");
+        result.Ok.Should().BeTrue(result.Error);
+        var stored = await h.Db.EnvironmentVariables.AsNoTracking().SingleAsync(v => v.Key == "JWT_SECRET");
+        stored.IsSecret.Should().BeTrue();
+        stored.Value.Should().StartWith("enc:");
+        var value = stored.Value["enc:".Length..];
+        value.Length.Should().Be(Harbora.Infrastructure.Agent.Tools.SetEnvVarsTool.GeneratedLength);
+        Everything(result).Should().NotContain(value);
+        result.SummaryEn.Should().Contain("JWT_SECRET (generated secret, new)");
+        result.ResultJson.Should().Contain("\"generated\":true");
+
+        await h.ExecuteAsync(h.SetEnvVars(), args);
+        (await h.Db.EnvironmentVariables.AsNoTracking().SingleAsync(v => v.Key == "JWT_SECRET")).Value
+            .Should().NotBe(stored.Value, "every run generates afresh");
+    }
+
+    [Fact]
+    public async Task Flags_left_out_keep_the_rows_current_ones_instead_of_resetting_them()
+    {
+        using var h = new AppToolsHarness();
+        var app = h.SeedApp("web");
+        var port = await h.Db.EnvironmentVariables.SingleAsync(v => v.AppId == app.Id && v.Key == "PORT");
+        port.AvailableAtBuild = true;
+        await h.Db.SaveChangesAsync();
+        h.Db.ChangeTracker.Clear();
+        var rotated = h.Lock("API_KEY", "sk-live-rotated");
+
+        // A plain value with no flags, and a secret's new value as a handle with no flags.
+        var result = await h.ExecuteAsync(h.SetEnvVars(), new
+        {
+            app = "web",
+            variables = new object[] { new { key = "PORT", value = "9090" }, new { key = "API_KEY", value = rotated } }
+        });
+
+        result.Ok.Should().BeTrue(result.Error);
+        var rows = await h.Db.EnvironmentVariables.AsNoTracking().Where(v => v.AppId == app.Id).ToListAsync();
+        rows.Single(v => v.Key == "PORT").Should().BeEquivalentTo(new { Value = "9090", IsSecret = false, AvailableAtBuild = true },
+            "availableAtBuild was left out, so the row kept it");
+        rows.Single(v => v.Key == "API_KEY").Should().BeEquivalentTo(new { Value = "enc:sk-live-rotated", IsSecret = true });
+    }
+
+    [Fact]
+    public async Task A_handle_forces_a_secret_even_against_secret_false()
+    {
+        using var h = new AppToolsHarness();
+        h.SeedApp("web");
+        var handle = h.Lock("SENTRY_DSN", "https://key@sentry.example/1");
+
+        var result = await h.ExecuteAsync(h.SetEnvVars(), One(new { key = "SENTRY_DSN", value = handle, secret = false }));
+
+        result.Ok.Should().BeTrue(result.Error);
+        (await h.Db.EnvironmentVariables.AsNoTracking().SingleAsync(v => v.Key == "SENTRY_DSN")).IsSecret.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task An_unknown_or_someone_elses_handle_is_refused_at_validation()
+    {
+        using var h = new AppToolsHarness();
+        h.SeedApp("web");
+        var theirs = h.Vault.Put(h.WorkspaceId, Guid.NewGuid(), "STRIPE_KEY", Secret).Handle;
+        var madeUp = AgentSecretHandles.Format("AAAAAAAAAAAAAAAAAAAAAA");
+
+        var foreign = await h.ValidateAsync(h.SetEnvVars(), One(new { key = "STRIPE_KEY", value = theirs }));
+        var unknown = await h.ValidateAsync(h.SetEnvVars(), One(new { key = "STRIPE_KEY", value = madeUp }));
+
+        foreign.Ok.Should().BeFalse("only the person who entered a secret can use its handle");
+        unknown.Ok.Should().BeFalse();
+        unknown.Error.Should().Contain("unknown or has expired").And.Contain("lock button");
+        unknown.ErrorFa.Should().Contain("دکمهٔ قفل");
+    }
+
+    [Fact]
+    public async Task A_handle_that_expires_between_the_card_and_the_run_fails_the_step_and_changes_nothing()
+    {
+        using var h = new AppToolsHarness();
+        h.SeedApp("web");
+        var handle = h.Lock("STRIPE_KEY", Secret);
+        (await h.ValidateAsync(h.SetEnvVars(), TwoVariables(handle))).Ok.Should().BeTrue();
+        h.Vault.Forget(handle);
+        var before = h.Snapshot();
+
+        var result = await h.ExecuteAsync(h.SetEnvVars(), TwoVariables(handle));
+
+        result.Ok.Should().BeFalse();
+        result.Error.Should().Contain("expired").And.Contain("lock button");
+        result.ErrorFa.Should().Contain("منقضی");
+        h.Snapshot().Should().Be(before, "not even the plain variable beside it was set");
+    }
+
+    [Fact]
+    public async Task Without_a_vault_on_the_host_every_handle_is_refused()
+    {
+        using var h = new AppToolsHarness { HasVault = false };
+        h.SeedApp("web");
+        var handle = h.Lock("STRIPE_KEY", Secret);
+
+        var verdict = await h.ValidateAsync(h.SetEnvVars(), One(new { key = "STRIPE_KEY", value = handle }));
+
+        verdict.Ok.Should().BeFalse("fails closed rather than storing the handle text as the value");
     }
 
     [Theory]
@@ -87,6 +218,8 @@ public class AppConfigToolsTests
     [InlineData("""{"app":"web","variables":[{"key":"A=B","value":"x"}]}""", "'A=B' cannot be a variable name")]
     [InlineData("""{"app":"web","variables":[{"key":"MY KEY","value":"x"}]}""", "'MY KEY' cannot be a variable name")]
     [InlineData("""{"app":"web","variables":[{"key":"A"}]}""", "Give a value for A")]
+    [InlineData("""{"app":"web","variables":[{"key":"A","value":"x","generate":true}]}""", "either a value or generate: true")]
+    [InlineData("""{"app":"web","variables":[{"key":"A","value":"Bearer {{secret:AAAAAAAAAAAAAAAAAAAAAA}}"}]}""", "has to be A's whole value")]
     [InlineData("""{"app":"nope","variables":[{"key":"A","value":"1"}]}""", "No app named 'nope' that you can see.")]
     public async Task A_malformed_set_is_refused_in_both_languages(string json, string expected)
     {
@@ -109,7 +242,7 @@ public class AppConfigToolsTests
         var scope = new AgentPlanScope();
         scope.Add(new AgentPlannedResource(AgentResourceKinds.App, "shop", h.ProjectSlug, "production"));
 
-        var verdict = await h.ValidateAsync(h.SetEnvVars(), TwoVariables("shop"), scope);
+        var verdict = await h.ValidateAsync(h.SetEnvVars(), TwoVariables(h.Lock("STRIPE_KEY", Secret), "shop"), scope);
 
         verdict.Ok.Should().BeTrue(verdict.Error);
         verdict.TitleEn.Should().Be("Set 2 environment variables on shop");
@@ -122,13 +255,14 @@ public class AppConfigToolsTests
     {
         using var h = new AppToolsHarness();
         var app = h.SeedApp("web");
-        (await h.ValidateAsync(h.SetEnvVars(), TwoVariables())).Ok.Should().BeTrue();
+        var handle = h.Lock("STRIPE_KEY", Secret);
+        (await h.ValidateAsync(h.SetEnvVars(), TwoVariables(handle))).Ok.Should().BeTrue();
         h.Db.Apps.Remove(await h.Db.Apps.SingleAsync(a => a.Id == app.Id));
         await h.Db.SaveChangesAsync();
         h.Db.ChangeTracker.Clear();
         var before = h.Snapshot();
 
-        var result = await h.ExecuteAsync(h.SetEnvVars(), TwoVariables());
+        var result = await h.ExecuteAsync(h.SetEnvVars(), TwoVariables(handle));
 
         result.Ok.Should().BeFalse();
         result.Error.Should().Be("No app named 'web' that you can see.");
