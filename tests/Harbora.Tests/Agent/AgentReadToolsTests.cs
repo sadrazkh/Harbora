@@ -411,6 +411,31 @@ public class AgentReadToolsTests
     }
 
     [Fact]
+    public async Task A_private_key_whose_begin_line_is_older_than_the_forty_row_window_reaches_the_model_in_no_fragment()
+    {
+        using var h = new AgentHarness();
+        var app = AddApp(h, "shop-web", status: AppStatus.Failed);
+        var deployment = new Deployment { AppId = app.Id, WorkspaceId = h.WorkspaceId, Number = 1, Status = DeploymentStatus.Failed };
+        h.Db.Deployments.Add(deployment);
+
+        // A 4096-bit key is about fifty lines. Printed near the end of a failed log, its BEGIN line is
+        // older than the last forty rows the tool reads, so the window holds only body lines and the END.
+        var rows = new List<string> { "building", "-----BEGIN RSA PRIVATE KEY-----" };
+        rows.AddRange(Enumerable.Range(1, 50).Select(i => $"KEYBODY{i:D2}" + new string('B', 60)));
+        rows.Add("-----END RSA PRIVATE KEY-----");
+        rows.Add("FATAL: could not authenticate");
+        for (var i = 0; i < rows.Count; i++)
+            h.Db.DeploymentLogs.Add(new DeploymentLog { DeploymentId = deployment.Id, Sequence = i + 1, Message = rows[i] });
+        h.Db.SaveChanges();
+
+        var result = await new GetDeploymentTool(h.Db, h.Resolver, h.Protector).ExecuteAsync(Args("""{"app":"shop-web"}"""), Context(h), default);
+        var sent = AgentJson.ForModel(result.ResultJson);
+
+        sent.Should().NotContain("KEYBODY").And.NotContain("BBBBBBBB");
+        sent.Should().Contain("FATAL: could not authenticate");
+    }
+
+    [Fact]
     public async Task Secrets_reaching_the_app_through_config_groups_and_attached_integrations_are_redacted_by_value()
     {
         using var h = new AgentHarness();

@@ -499,11 +499,15 @@ public sealed class AgentPlanService(
         var status = ledger.Results.All(r => r!.State == "done") ? AgentPlanStatus.Executed : AgentPlanStatus.Failed;
         try
         {
+            // The plan is finished first and the broken step audited after. AuditLogger swallows a failed
+            // save and leaves its row Added, so auditing first would make FinishAsync's save retry that row
+            // — and an audit table that fails every time would then keep the plan executing for good.
+            var results = await FinishAsync(plan, status, ledger,
+                executedAt: ledger.AnyRan ? clock.UtcNow : null, CancellationToken.None);
+
             if (ledger.Running is { } running && !ledger.RunningAudited)
                 await AuditStepAsync(actor, plan, steps[running], ok: false);
 
-            var results = await FinishAsync(plan, status, ledger,
-                executedAt: ledger.AnyRan ? clock.UtcNow : null, CancellationToken.None);
             return new ClaimedRun(new AgentPlanResultView(plan.Id, StatusName(status), results), ledger.Refusal);
         }
         catch (Exception again)

@@ -84,6 +84,39 @@ public class AssistantRedactionTests
     }
 
     [Fact]
+    public void A_private_key_whose_begin_line_was_cut_off_still_loses_its_body()
+    {
+        // The window of a log that starts inside a key: body and END, no BEGIN.
+        var log = "MIIEowIBAAKCAQEAx7Vm\nQmVhcmVy\n-----END RSA PRIVATE KEY-----\nbuild failed";
+
+        var result = AssistantRedaction.Redact(log);
+
+        result.Text.Should().NotContain("MIIEowIBAAKCAQEAx7Vm").And.NotContain("QmVhcmVy");
+        result.Text.Should().EndWith("build failed", "only the key's side of the orphan END goes");
+    }
+
+    [Fact]
+    public void A_private_key_whose_end_line_never_arrived_still_loses_its_body()
+    {
+        var log = "starting\n-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEA\nAAAABG5vbmU=";
+
+        var result = AssistantRedaction.Redact(log);
+
+        result.Text.Should().NotContain("b3BlbnNzaC1rZXktdjEA").And.NotContain("AAAABG5vbmU=");
+        result.Text.Should().StartWith("starting");
+    }
+
+    [Fact]
+    public void A_whole_private_key_is_masked_once_and_the_lines_around_it_survive()
+    {
+        var log = "before\n-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----\nafter";
+
+        var result = AssistantRedaction.Redact(log);
+
+        result.Text.Should().Be("before\n[redacted]\nafter");
+    }
+
+    [Fact]
     public void A_quoted_secret_does_not_escape_by_having_spaces_in_it()
     {
         var result = AssistantRedaction.Redact("""DB_PASSWORD="correct horse battery staple" loaded""");

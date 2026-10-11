@@ -88,7 +88,8 @@ public sealed class GetDeploymentTool(HarboraDbContext db, AgentResourceResolver
         List<string> lines = redacted.Length == 0
             ? []
             : redacted.Split('\n').Select(line => Clip(line, MaxLineLength) ?? "").ToList();
-        var olderRows = totalRows - tail.Count;
+        // Two reads: on a running deployment rows can arrive between the count and the tail.
+        var olderRows = Math.Max(0, totalRows - tail.Count);
 
         object Payload(int dropped) => new
         {

@@ -48,6 +48,21 @@ public static class AssistantRedaction
             @"-{5}BEGIN[^-]{0,40}PRIVATE KEY-{5}.*?-{5}END[^-]{0,40}PRIVATE KEY-{5}",
             RegexOptions.Singleline | RegexOptions.Compiled)),
 
+        // The same block cut off at either end. What reaches this text is often a window of a longer
+        // log — the agent's deployment tool sends the last forty rows — and a 4096-bit key is about
+        // fifty lines, so the BEGIN line can fall outside the window while the body and the END line
+        // are inside it; a print still streaming, or cut off, has a BEGIN and no END. Whole blocks are
+        // already masked by the rule above, so any marker left is an orphan, and everything on its key
+        // side goes: from an orphan BEGIN to the end of the text, from the start of the text to an
+        // orphan END. Losing the log lines before a cut-off key costs some explanation; keeping its
+        // body would cost the key.
+        ("private key, cut off before its end", new Regex(
+            @"-{5}BEGIN[^-]{0,40}PRIVATE KEY-{5}.*",
+            RegexOptions.Singleline | RegexOptions.Compiled)),
+        ("private key, cut off before its start", new Regex(
+            @"\A.*?-{5}END[^-]{0,40}PRIVATE KEY-{5}",
+            RegexOptions.Singleline | RegexOptions.Compiled)),
+
         // user:password@host — how a connection string carries its credentials.
         ("credentials in a url", new Regex(
             @"(?<scheme>[a-z][a-z0-9+.\-]*://)(?<user>[^\s:/@]+):(?<secret>[^\s/@]+)@",
