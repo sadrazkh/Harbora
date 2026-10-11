@@ -100,3 +100,15 @@ floored at 0. Master = 9a99c4a, 6828 Harbora.Tests + 133 node, bundle builds.
 | F — app tools | `f-brief.md` + `wave-b-common.md` | `r6/app-tools` · `../Harbora-r6-f` |
 | G — project/database tools | `g-brief.md` + `wave-b-common.md` | `r6/db-tools` · `../Harbora-r6-g` |
 | H — learning-center docs | `h-brief.md` | `r6/assistant-docs` · `../Harbora-r6-h` |
+
+## First production deploy (read-only assistant) — 2026-10-11
+
+- CI green on 9a99c4a, every job incl. the Postgres lane (AgentCore migration and race tests on real Postgres).
+- Pre-flight: checkout clean at 9a27445, disk 35%, panel healthy, 17 containers.
+- Rollback image: `harbora/panel:before-9a99c4a`.
+- `install.sh update` → HEAD 9a99c4a; SSH dropped mid-build but the process kept running on the server;
+  log ends "Harbora updated", every verify check passed; panel healthy, restarts 0.
+- Migration `20261011104149_AgentCore` applied (120 total). Provider plan has the `assistant` grant Enabled.
+- 17 containers before and after (same names). `/assistant/status` anonymous → 302 to login.
+- Next for the owner: Settings → assistant (OpenRouter base `https://openrouter.ai/api`, key, agent model),
+  run the agent-model test, then open the drawer. Write tools arrive with wave B.
