@@ -55,6 +55,112 @@ public class AgentTurnTests
         events.Single<AgentMessageView>("message").Text.Should().Be("Hello there.");
     }
 
+    [Fact]
+    public async Task Text_written_before_a_tool_call_is_finalized_by_a_message_before_the_tool_runs()
+    {
+        using var h = new AgentHarness([Reader()]);
+        h.Chat.ThenStreamedCalls(["Let me ", "check."], h.Chat.Call("peek"))
+            .ThenStreamedText("It is ", "42.");
+
+        var (_, events) = await h.SendAsync("what is it?");
+
+        events.Names().Should().Equal("started", "delta", "delta", "message", "tool", "tool", "delta", "delta", "message", "done");
+        events.Where(e => e.Name == "message").Select(e => ((AgentMessageView)e.Data).Text).Should().Equal("Let me check.", "It is 42.");
+    }
+
+    [Fact]
+    public async Task A_streamed_answer_of_nothing_but_whitespace_is_still_finalized()
+    {
+        using var h = new AgentHarness();
+        h.Chat.ThenStreamedText("\n", "  ");
+
+        var (_, events) = await h.SendAsync("say nothing");
+
+        events.Names().Should().Equal("started", "delta", "delta", "message", "done");
+        events.Single<AgentMessageView>("message").Text.Should().BeNull("there was no text, and the bubble is closed with that");
+    }
+
+    [Fact]
+    public async Task A_call_that_fails_after_writing_part_of_its_answer_finalizes_and_keeps_what_was_shown()
+    {
+        using var h = new AgentHarness();
+        h.Chat.ThenStreamed(AgentChatResponse.Failed("The stream was cut off.", "جریان قطع شد."), ["The first half "]);
+
+        var (_, events) = await h.SendAsync("tell me");
+
+        events.Names().Should().Equal("started", "delta", "message", "error", "done");
+        events.Single<AgentMessageView>("message").Text.Should().Be("The first half ");
+        (await h.Db.AgentMessages.CountAsync(m => m.Role == AgentMessageRole.Assistant && m.Text == "The first half "))
+            .Should().Be(1, "a reload shows what was shown");
+    }
+
+    [Fact]
+    public async Task A_turn_that_runs_out_of_time_mid_sentence_finalizes_the_sentence_it_was_writing()
+    {
+        using var h = new AgentHarness();
+        h.Chat.ThenStreamed(new AgentChatResponse(true, new AgentChatMessage(AgentRole.Assistant, "never"), "m", null, "stop", null, null),
+            ["Working on "], after: ct => Task.Delay(Timeout.Infinite, ct));
+
+        var (_, events) = await Send(h.ServiceOver(turnDeadline: TimeSpan.FromSeconds(2)), h, "slow");
+
+        events.Names().Should().Equal("started", "delta", "message", "error", "done");
+        events.Single<AgentMessageView>("message").Text.Should().Be("Working on ");
+        using var other = h.NewContext();
+        (await other.AgentConversations.SingleAsync()).TurnStartedAt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task The_delta_callback_never_throws_when_the_browser_has_gone()
+    {
+        using var h = new AgentHarness();
+        var client = new DeltaProbeClient(["Hel", "lo"]);
+
+        // A sink like a closed connection: every write after the first fails.
+        var writes = 0;
+        Task Sink(AgentStreamEvent e, CancellationToken _) =>
+            ++writes == 1 ? Task.CompletedTask : throw new IOException("The client disconnected.");
+
+        var (outcome, _) = await Send(h.ServiceOver(chat: client), h, "hi", sink: Sink);
+
+        outcome.Status.Should().Be(AgentSendStatus.Streamed);
+        client.CallbackThrew.Should().BeFalse("the client must never see the browser's departure as its own failure");
+        client.DeltasDelivered.Should().Be(2);
+        (await h.Db.AgentMessages.CountAsync(m => m.Role == AgentMessageRole.Assistant && m.Text == "Hello")).Should().Be(1);
+    }
+
+    /// <summary>A streaming client that records whether the delta callback ever threw at it.</summary>
+    private sealed class DeltaProbeClient(string[] pieces) : IAgentChatClient
+    {
+        public bool CallbackThrew { get; private set; }
+        public int DeltasDelivered { get; private set; }
+
+        public Task<Harbora.Infrastructure.Assistant.AssistantUnavailable?> GetAvailabilityAsync(CancellationToken ct) =>
+            Task.FromResult<Harbora.Infrastructure.Assistant.AssistantUnavailable?>(null);
+
+        public Task<string?> GetModelAsync(CancellationToken ct) => Task.FromResult<string?>("probe/model");
+
+        public Task<AgentChatResponse> CompleteAsync(AgentChatRequest request, CancellationToken ct) =>
+            CompleteAsync(request, null, ct);
+
+        public async Task<AgentChatResponse> CompleteAsync(AgentChatRequest request, Func<string, Task>? onTextDelta, CancellationToken ct)
+        {
+            foreach (var piece in pieces)
+            {
+                try
+                {
+                    if (onTextDelta is not null) await onTextDelta(piece);
+                    DeltasDelivered++;
+                }
+                catch
+                {
+                    CallbackThrew = true;
+                }
+            }
+            return new AgentChatResponse(true, new AgentChatMessage(AgentRole.Assistant, string.Concat(pieces)), "probe/model",
+                new AgentChatUsage(1, 1), "stop", null, null);
+        }
+    }
+
     // ---- the turn outlives its listener --------------------------------------------------------
 
     [Fact]

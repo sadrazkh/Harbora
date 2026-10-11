@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
@@ -437,13 +438,34 @@ public sealed class AgentConversationService(
             // each piece of the model's text goes to the pane as a delta while it is written — display
             // only; the message event below carries the whole text and is the one that counts. The client
             // passes text only, never tool-call fragments.
-            var response = await chat.CompleteAsync(new AgentChatRequest(messages.ToList(), specs),
-                piece => string.IsNullOrEmpty(piece)
-                    ? Task.CompletedTask
-                    : emit(new AgentStreamEvent(AgentStreamEvents.Delta, new AgentDeltaData(piece)), ct),
-                ct);
+            //
+            // Every run of deltas is finalized by a message event — after a call that ends in text, in
+            // tool calls with text before them, or in nothing but whitespace, and also after a call that
+            // failed or ran out of time half-way, whose partial text is saved and sent as the message.
+            // The pane's live bubble is never left without its final word. The callback cannot throw for
+            // a browser that went away: emit is the listener, which swallows that.
+            var streamed = new StringBuilder();
+            AgentChatResponse response;
+            try
+            {
+                response = await chat.CompleteAsync(new AgentChatRequest(messages.ToList(), specs),
+                    piece =>
+                    {
+                        if (string.IsNullOrEmpty(piece)) return Task.CompletedTask;
+                        streamed.Append(piece);
+                        return emit(new AgentStreamEvent(AgentStreamEvents.Delta, new AgentDeltaData(piece)), ct);
+                    },
+                    ct);
+            }
+            catch (Exception) when (streamed.Length > 0)
+            {
+                await FinalizePartialAsync(conversation, streamed.ToString(), emit);
+                throw;
+            }
+
             if (!response.Ok || response.Message is null)
             {
+                if (streamed.Length > 0) await FinalizePartialAsync(conversation, streamed.ToString(), emit);
                 await emit(new AgentStreamEvent(AgentStreamEvents.Error, await ProviderFailureAsync(actor, response, ct)), ct);
                 stoppedEarly = true;
                 break;
@@ -463,7 +485,7 @@ public sealed class AgentConversationService(
             }, ct);
             messages.Add(new AgentChatMessage(AgentRole.Assistant, reply.Content, toolCalls.Count > 0 ? toolCalls : null));
 
-            if (assistant.Text is not null)
+            if (assistant.Text is not null || streamed.Length > 0)
                 await emit(new AgentStreamEvent(AgentStreamEvents.Message,
                     new AgentMessageView(assistant.Id, "assistant", assistant.Text, null, assistant.CreatedAt)), ct);
 
@@ -510,6 +532,23 @@ public sealed class AgentConversationService(
         {
             await emit(new AgentStreamEvent(AgentStreamEvents.Plan, plans.ViewOf(plan)), ct);
         }
+    }
+
+    /// <summary>
+    /// What a person already watched being written, when the call that was writing it never finished:
+    /// saved as the model's message, so a reload shows what was shown, and sent as the message event
+    /// that finalizes the bubble. Runs on no token — the turn's own may be the one that just ran out.
+    /// </summary>
+    private async Task FinalizePartialAsync(
+        AgentConversation conversation, string text, Func<AgentStreamEvent, CancellationToken, Task> emit)
+    {
+        var partial = await AppendAsync(conversation, new AgentMessage
+        {
+            Role = AgentMessageRole.Assistant,
+            Text = string.IsNullOrWhiteSpace(text) ? null : text
+        }, CancellationToken.None);
+        await emit(new AgentStreamEvent(AgentStreamEvents.Message,
+            new AgentMessageView(partial.Id, "assistant", partial.Text, null, partial.CreatedAt)), CancellationToken.None);
     }
 
     /// <summary>Why this message cannot be answered at all right now, or null: no reachable model, or

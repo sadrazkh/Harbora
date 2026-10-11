@@ -25,7 +25,9 @@ namespace Harbora.Tests.Agent;
 /// </summary>
 public sealed class ScriptedAgentChatClient : IAgentChatClient
 {
-    private sealed record Step(AgentChatResponse Response, IReadOnlyList<string>? Pieces, Func<CancellationToken, Task>? Before);
+    private sealed record Step(
+        AgentChatResponse Response, IReadOnlyList<string>? Pieces, Func<CancellationToken, Task>? Before,
+        Func<CancellationToken, Task>? After = null);
 
     private readonly Queue<Step> _script = new();
     private readonly List<AgentChatRequest> _requests = [];
@@ -69,6 +71,7 @@ public sealed class ScriptedAgentChatClient : IAgentChatClient
         if (onTextDelta is not null && step.Pieces is not null)
             foreach (var piece in step.Pieces)
                 await onTextDelta(piece);
+        if (step.After is not null) await step.After(ct);
         return step.Response;
     }
 
@@ -87,6 +90,18 @@ public sealed class ScriptedAgentChatClient : IAgentChatClient
         lock (_requests) _script.Enqueue(new Step(TextResponse(string.Concat(pieces)), pieces, null));
         return this;
     }
+
+    /// <summary>Any answer — a failure too — preceded by the pieces it streams, then <paramref name="after"/>.</summary>
+    public ScriptedAgentChatClient ThenStreamed(AgentChatResponse response, IReadOnlyList<string> pieces, Func<CancellationToken, Task>? after = null)
+    {
+        lock (_requests) _script.Enqueue(new Step(response, pieces, null, after));
+        return this;
+    }
+
+    /// <summary>Text written before tool calls, streamed, in one answer.</summary>
+    public ScriptedAgentChatClient ThenStreamedCalls(string[] pieces, params AgentToolCall[] calls) =>
+        ThenStreamed(new AgentChatResponse(true, new AgentChatMessage(AgentRole.Assistant, string.Concat(pieces), calls), Model,
+            new AgentChatUsage(100, 10), "tool_calls", null, null), pieces);
 
     public ScriptedAgentChatClient ThenCalls(params AgentToolCall[] calls) => ThenCallsAfter(null, calls);
 
