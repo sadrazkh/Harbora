@@ -384,3 +384,89 @@ which has grown with the other agents' landed work since `d20cd0c` (6828).
    or format passes unnoticed.
 5. **The handle is the only check on secret use.** Anything sent as a handle is resolved by the server's
    tools (F); the pane does not check that the tool is the right one for that secret.
+
+## Fixes after the re-review
+
+The re-review confirmed that every earlier finding was fixed and that the value stays out of the
+draft, outbox, storage, logs and chips. It raised one Important issue and several minors. All are in
+`97e687d`.
+
+### Important — the lock form looked like a login form
+
+The lock form was a `<form>` with a plain name field followed by a `type="password"` field with
+`autocomplete="new-password"`. Chrome and Edge read that as a credential form: when it disappeared
+after a successful post they offered to save "DB_PASSWORD" + the secret for the Harbora site, and
+later filled them into the sign-in page.
+
+It is now:
+- **not a form:** a `<div role="group">`, with Enter on either field and Escape handled by the island.
+  Escape stops propagating, so it closes the form without closing the drawer; the browser check
+  caught that it used to close both;
+- **no password field:** the value is a `type="text"` field masked with CSS (`-webkit-text-security:
+  disc` and `text-security: disc`). Where those are unsupported (`@supports not`), the text is blurred
+  beyond reading instead. The show/hide toggle flips the mask class;
+- **opted out of every password manager:** `autocomplete="off"` on both fields, plus
+  `data-1p-ignore`, `data-lpignore="true"`, `data-bwignore` and `data-form-type="other"`.
+
+A source test in `assistant-secrets.test.mjs` reads `AssistantPanel.vue` and asserts that the lock
+form has no `type="password"`, no `<form`, no `new-password`/`current-password`, exactly two text
+inputs each with every opt-out, and the mask class. In the browser harness the fields were inside no
+`<form>`, `type` was `text`, the computed `-webkit-text-security` was `disc`, Enter added the secret,
+and Escape closed only the form.
+
+**Unverified:** whether a real Chrome or Edge still offers to save. The browser pane cannot show a
+password-manager prompt.
+
+### Minors
+
+- **The warning on the safe form.** Handles and placeholders are now replaced by a lone `"`, a
+  character no "value" in the patterns may take. `password for shop-db: [🔒 DB_PASSWORD] please` (and
+  three other phrasings, including Persian) stays quiet. A real value elsewhere in the same draft
+  still counts.
+- **A late message can no longer double text.** Matching is newest first (the live bubble is the
+  newest), and an exact match is tried before a prefix. In the review's probe — "Let me check" → tool
+  → "Let me check the logs: shop is running." → message — the second bubble is completed and the
+  first is left alone. Both new tests fail on the previous matcher.
+- **The lock form closes and forgets its value** when the drawer closes and when another or a new
+  conversation is opened. Checked in the browser.
+- **Cancel during an in-flight post** is guarded by a generation counter. The stale post inserts no
+  placeholder and does not wipe a form that was opened again.
+- **Names containing `[` or `]` are refused.** `expand` also replaces longest placeholders first.
+- **An abandoned create clears the `new` outbox entry only if it is still its own**, that is, the
+  text and `at` match. A later message waiting there is left alone (the test fails without the check).
+- **A stale `open()` is dropped.** Each open takes a number, and a read that returns after a later
+  open began is ignored, so it cannot draw or start polling. `resumeIfAnswering` with `inProgress`
+  false also stops any poller. The test fails without the guard.
+- **RTL details:**
+  - The composer ignores placeholders and handles when choosing its direction, so a draft that opens
+    with `[🔒 DB_PASSWORD]` reads right to left in Persian.
+  - Handles no longer count as Latin words in `textDirection`, `firstStrongDirection` or the steady
+    latch.
+  - A streamed bubble passes `live` and `streamed`. Once its message arrives, a short paragraph that
+    never reached 4 words is settled by its whole text; a paragraph already decided keeps its side.
+
+**New tests:** secrets 7, session 3, timeline 2, format 3.
+
+## Commands and output — after the re-review fixes
+
+The final run was on `97e687d`, with `MSBUILDDISABLENODEREUSE=1`, `-p:UseSharedCompilation=false` and
+log `/tmp/test-r6-chat-pane.log`.
+
+- **Node:** `node --test src/Harbora.Web/Scripts/tests/*.test.mjs` → `# tests 217  # pass 217  # fail 0`.
+  By file: api 33, drawer 20, format 26, plan 15, secrets 22, session 32, stream 15, timeline 42, plus 12
+  that were already there.
+- **Bundle:** `npm run build`, run alone → `NPM_EXIT=0`,
+  `AssistantPanel-*.js 66.82 kB │ gzip: 22.24 kB`, `✓ built in 12.78s`. The manifest names
+  `"Scripts/main.ts"`, and the built CSS contains both mask rules.
+
+```
+BUILD_EXIT=0   28 Warning(s) (48x NU1900 + 8x NU1903 lines, the package-feed warnings only)   0 Error(s)
+dotnet test tests/Harbora.Tests --no-build --filter "FullyQualifiedName~AssistantPaneHttpTests"
+Passed!  - Failed: 0, Passed:    10, Skipped:  0, Total:   10 - Harbora.Tests.dll
+dotnet test Harbora.slnx --no-build
+EXIT=0
+Passed!  - Failed: 0, Passed:   500, Skipped: 17, Total:  517 - Harbora.NodeAgent.Tests.dll
+Passed!  - Failed: 0, Passed:    15, Skipped:  0, Total:   15 - Harbora.NodeIngress.Tests.dll
+Passed!  - Failed: 0, Passed:  6951, Skipped:  0, Total: 6951 - Harbora.Tests.dll
+dll=2 msb3030=0
+```
