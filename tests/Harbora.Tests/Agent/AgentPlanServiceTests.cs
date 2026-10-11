@@ -372,4 +372,143 @@ public class AgentPlanServiceTests
         view.Steps.Select(s => (s.Kind, s.Rememberable, s.ConfirmationPhrase)).Should().Equal(
             ("safe", true, null), ("dangerous", false, null), ("destructive", false, "shop-db"));
     }
+
+    // ---- every claimed plan ends executed or failed ---------------------------------------------
+
+    private static async Task AssertFinishedAsFailed(AgentHarness h, AgentPlan plan, params string[] states)
+    {
+        var stored = await h.Db.AgentPlans.AsNoTracking().SingleAsync(p => p.Id == plan.Id);
+        stored.Status.Should().Be(AgentPlanStatus.Failed, "a claimed plan never stays executing");
+        AgentJson.Deserialize<List<AgentPlanStepResultView>>(stored.ResultsJson)!.Select(s => s.State).Should().Equal(states);
+
+        var answers = await h.Db.AgentMessages.AsNoTracking()
+            .Where(m => m.PlanId == plan.Id && m.Role == AgentMessageRole.Tool).OrderBy(m => m.Sequence).ToListAsync();
+        answers.Select(m => JsonDocument.Parse(m.Text!).RootElement.GetProperty("state").GetString())
+            .Should().Equal(states, "the next turn must hear what really happened");
+        h.Db.ChangeTracker.Entries().Should().OnlyContain(e => e.State == EntityState.Unchanged, "nothing half-written is left to be saved");
+    }
+
+    [Fact]
+    public async Task A_step_whose_tool_times_out_fails_the_plan_with_every_result_recorded()
+    {
+        var first = new FakeTool("first", AgentToolKind.SafeWrite);
+        var second = new FakeTool("second", AgentToolKind.SafeWrite)
+        {
+            // What HttpClient.Timeout throws — a cancellation that is not the caller's.
+            OnExecute = (_, _) => throw new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout.")
+        };
+        var third = new FakeTool("third", AgentToolKind.SafeWrite);
+        var (h, plan) = await PlanWith(first, second, third);
+        using var _ = h;
+
+        var outcome = await h.Plans.ApproveAsync(h.Actor, plan.Id, Approve(), default);
+
+        outcome.Result!.Status.Should().Be("failed");
+        outcome.Result.Steps.Select(s => s.State).Should().Equal("done", "failed", "skipped");
+        outcome.Result.Steps[1].ErrorEn.Should().Be("The step failed unexpectedly; see the server log.");
+        third.Executions.Should().Be(0);
+        h.Audit.Entries.Where(e => e.Action == AgentPlanService.StepExecutedAction)
+            .Select(e => JsonDocument.Parse(e.MetadataJson!).RootElement.GetProperty("ok").GetBoolean())
+            .Should().Equal(true, false);
+        await AssertFinishedAsFailed(h, plan, "done", "failed", "skipped");
+    }
+
+    [Fact]
+    public async Task A_step_whose_save_throws_leaves_nothing_half_written_and_the_plan_still_finishes()
+    {
+        Exception? thrown = null;
+        AgentHarness? harness = null;
+        var create = new FakeTool("create_project", AgentToolKind.SafeWrite)
+        {
+            // The shape of a unique-slug race: the tool's own save throws, and its entity stays Added in
+            // the context it shares with the agent.
+            OnExecuteAsync = async (_, context) =>
+            {
+                harness!.Db.Projects.Add(new Harbora.Domain.Projects.Project { WorkspaceId = context.WorkspaceId, Name = null!, Slug = "half-made" });
+                try { await harness!.Db.SaveChangesAsync(); }
+                catch (Exception e) { thrown = e; throw; }
+                return new AgentToolResult(true, "{}");
+            }
+        };
+        var after = new FakeTool("after", AgentToolKind.SafeWrite);
+        var (h, plan) = await PlanWith(create, after);
+        harness = h;
+        using var _ = h;
+
+        var outcome = await h.Plans.ApproveAsync(h.Actor, plan.Id, Approve(), default);
+
+        thrown.Should().BeOfType<DbUpdateException>("this is the failure the guard exists for");
+        outcome.Result!.Steps.Select(s => s.State).Should().Equal("failed", "skipped");
+        h.Audit.Entries.Should().ContainSingle(e => e.Action == AgentPlanService.StepExecutedAction);
+        await AssertFinishedAsFailed(h, plan, "failed", "skipped");
+        (await h.Db.Projects.IgnoreQueryFilters().AnyAsync(p => p.Slug == "half-made")).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task An_auto_run_whose_tool_times_out_reports_the_failure_instead_of_saying_nothing_ran()
+    {
+        var create = new FakeTool("create_database", AgentToolKind.SafeWrite)
+        {
+            OnExecute = (_, _) => throw new OperationCanceledException("the tool's own deadline")
+        };
+        using var h = new AgentHarness([create]);
+        h.Remember("create_database");
+        h.Chat.ThenCall("create_database").ThenText("Creating it.");
+
+        var (_, events) = await h.SendAsync("create a database");
+
+        events.Names().Should().Equal("started", "message", "executed", "done");
+        var result = events.Single<AgentPlanResultView>("executed");
+        result.Status.Should().Be("failed");
+        result.Steps.Single().State.Should().Be("failed");
+        (await h.Db.AgentPlans.AsNoTracking().SingleAsync()).Status.Should().Be(AgentPlanStatus.Failed);
+    }
+
+    [Fact]
+    public async Task A_validation_that_changes_data_is_refused_at_the_recheck_and_its_change_is_never_saved()
+    {
+        var tool = new FakeTool("create_project", AgentToolKind.SafeWrite);
+        var (h, plan) = await PlanWith(tool);
+        using var _ = h;
+        tool.OnValidate = (_, context, _) =>
+        {
+            h.Db.Projects.Add(new Harbora.Domain.Projects.Project { WorkspaceId = context.WorkspaceId, Name = "Leak", Slug = "leaked" });
+            return new AgentValidation(true);
+        };
+
+        var outcome = await h.Plans.ApproveAsync(h.Actor, plan.Id, Approve(), default);
+
+        outcome.Refusal!.Code.Should().Be(AgentPlanRefusal.RevalidationRefusedCode);
+        outcome.Refusal.MessageEn.Should().Contain("checking it tried to change data");
+        tool.Executions.Should().Be(0);
+        (await h.Db.Projects.IgnoreQueryFilters().AnyAsync(p => p.Slug == "leaked")).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_plan_found_expired_at_approval_is_told_to_the_conversation()
+    {
+        var tool = new FakeTool("create", AgentToolKind.SafeWrite);
+        var (h, plan) = await PlanWith(tool);
+        using var _ = h;
+        h.Clock.UtcNow = AgentHarness.Start + AgentPlan.Lifetime + TimeSpan.FromMinutes(1);
+
+        (await h.Plans.ApproveAsync(h.Actor, plan.Id, Approve(), default)).Refusal!.Code.Should().Be(AgentPlanRefusal.ExpiredCode);
+
+        (await h.Db.AgentMessages.Where(m => m.PlanId == plan.Id && m.Role == AgentMessageRole.Tool).SingleAsync())
+            .Text.Should().Contain("\"state\":\"expired\"");
+    }
+
+    [Fact]
+    public async Task A_plan_refused_at_the_recheck_remembers_nothing_because_the_approval_did_not_go_ahead()
+    {
+        var safe = new FakeTool("set_env", AgentToolKind.SafeWrite);
+        var (h, plan) = await PlanWith(safe);
+        using var _ = h;
+        safe.OnValidate = (_, _, _) => AgentValidation.Refused("Gone.", "رفته.");
+
+        var outcome = await h.Plans.ApproveAsync(h.Actor, plan.Id, Approve(null, "set_env"), default);
+
+        outcome.Refusal!.Code.Should().Be(AgentPlanRefusal.RevalidationRefusedCode);
+        (await h.Plans.ApprovalsAsync(h.Actor, default)).Should().BeEmpty();
+    }
 }

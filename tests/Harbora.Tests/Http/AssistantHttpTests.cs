@@ -222,6 +222,26 @@ public class AssistantHttpTests(AssistantPanelFixture fixture) : IClassFixture<A
     }
 
     [Fact]
+    public async Task Approve_reject_and_revoke_refuse_a_post_without_the_antiforgery_header()
+    {
+        fixture.GivenUser(fixture.WorkspaceId, "csrf-plan-owner@example.com");
+        var (client, csrf) = await fixture.SignedInAs("203.0.113.190", "csrf-plan-owner@example.com");
+        Chat.Clear();
+        Chat.ThenCall("test_safe_write", """{"name":"shop-db"}""").ThenText("Approve it?");
+        var before = fixture.SafeTool.Executions;
+        var frames = await SendAsync(client, csrf, "new", "create shop-db");
+        var planId = frames.Single(f => f.Event == "plan").Data.GetProperty("id").GetGuid();
+
+        (await PostAsync(client, $"/assistant/plans/{planId}/approve", csrf: null, new { })).StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await PostAsync(client, $"/assistant/plans/{planId}/reject", csrf: null)).StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await PostAsync(client, "/assistant/approvals/test_safe_write/revoke", csrf: null)).StatusCode.Should().Be(HttpStatusCode.BadRequest);
+
+        fixture.SafeTool.Executions.Should().Be(before);
+        fixture.Read(db => db.AgentPlans.Single(p => p.Id == planId).Status).Should().Be(Harbora.Domain.Agent.AgentPlanStatus.Pending,
+            "neither the approval nor the rejection got past the antiforgery check");
+    }
+
+    [Fact]
     public async Task A_message_streams_started_first_and_done_last_and_the_conversation_can_be_reopened()
     {
         fixture.GivenUser(fixture.WorkspaceId, "stream-owner@example.com");

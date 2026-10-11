@@ -69,16 +69,15 @@ public sealed class AgentResourceResolver(HarboraDbContext db, ProjectAccessServ
             .Where(a => a.WorkspaceId == context.WorkspaceId && (a.Slug == lowered || a.Name.ToLower() == lowered))
             .ToListAsync(ct);
 
-        // A slug match wins outright: it is the identifier the snapshot shows.
-        var bySlug = candidates.FirstOrDefault(a => a.Slug == lowered);
-        if (bySlug is not null)
-            return await access.CanSeeAppAsync(bySlug.Id, ct)
-                ? AgentLookup<App>.Of(bySlug)
-                : NoApp(wanted);
-
+        // Only what this person can see takes part at all — an invisible slug match must neither win nor
+        // hide a visible app that carries the name as its display name.
         var visible = new List<App>();
         foreach (var app in candidates)
             if (await access.CanSeeAppAsync(app.Id, ct)) visible.Add(app);
+
+        // A slug match wins outright: it is the identifier the snapshot shows.
+        if (visible.FirstOrDefault(a => a.Slug == lowered) is { } bySlug)
+            return AgentLookup<App>.Of(bySlug);
 
         return visible.Count switch
         {

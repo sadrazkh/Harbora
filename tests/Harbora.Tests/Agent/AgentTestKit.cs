@@ -98,6 +98,7 @@ public sealed class FakeTool(string name, AgentToolKind kind, string? capability
 
     public Func<JsonElement, AgentToolContext, AgentPlanScope, AgentValidation>? OnValidate { get; set; }
     public Func<JsonElement, AgentToolContext, AgentToolResult>? OnExecute { get; set; }
+    public Func<JsonElement, AgentToolContext, Task<AgentToolResult>>? OnExecuteAsync { get; set; }
 
     public int Validations => _validations;
     public int Executions => _executions;
@@ -115,6 +116,7 @@ public sealed class FakeTool(string name, AgentToolKind kind, string? capability
     {
         Interlocked.Increment(ref _executions);
         lock (_executedArgs) _executedArgs.Add(args.GetRawText());
+        if (OnExecuteAsync is not null) return OnExecuteAsync(args, context);
         return Task.FromResult(OnExecute?.Invoke(args, context)
                                ?? new AgentToolResult(true, $$"""{"ran":"{{name}}"}""", $"{name} done", $"{name} انجام شد"));
     }

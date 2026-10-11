@@ -106,9 +106,9 @@ public sealed class AgentPlanService(
 
         // Past this line this call is provably the only one that could have reached here for this plan
         // — the conditional update is what proves it. From here on the work is not abandoned because the
-        // browser went away: a plan cancelled halfway through would be the worst of both outcomes.
-        await RememberAsync(actor, steps, request?.RememberTools, now, CancellationToken.None);
-        var run = await RunClaimedAsync(actor, plan, steps, CancellationToken.None);
+        // browser went away (RunClaimedAsync takes no token): a plan cancelled halfway through would be
+        // the worst of both outcomes.
+        var run = await RunClaimedAsync(actor, plan, steps, request?.RememberTools);
         return run.Refusal is { } refused ? new(null, refused) : new(run.Result, null);
     }
 
@@ -127,7 +127,7 @@ public sealed class AgentPlanService(
 
         // A refusal at re-validation is reported in the result itself here — the refused step failed,
         // the rest skipped — because there is no response status to carry it; the executed event shows it.
-        return (await RunClaimedAsync(actor, plan, StepsOf(plan), CancellationToken.None)).Result;
+        return (await RunClaimedAsync(actor, plan, StepsOf(plan), rememberTools: null)).Result;
     }
 
     /// <summary>
@@ -180,14 +180,22 @@ public sealed class AgentPlanService(
 
         var now = clock.UtcNow;
         foreach (var plan in pending)
-        {
-            if (await TryMoveAsync(actor, plan.Id, AgentPlanStatus.Expired, now, requireUnexpired: false, ct) == 0)
-                continue;
+            await ExpireAsync(actor, plan, now, ct);
+    }
 
-            await RecordOutcomeAsync(plan, StepsOf(plan).Select(s => Outcome(s, "expired",
-                "Not approved — the plan expired and nothing ran.", "تأیید نشد — برنامه منقضی شد و هیچ‌چیز اجرا نشد.")).ToList(),
-                now, ct);
-        }
+    /// <summary>
+    /// Moves a pending plan to expired and, if this call is the one that moved it, tells the
+    /// conversation it did not run — whether the plan was superseded by a new message or found past its
+    /// time at approval, so the next turn never still believes a step is waiting.
+    /// </summary>
+    private async Task ExpireAsync(AgentActor actor, AgentPlan plan, DateTimeOffset now, CancellationToken ct)
+    {
+        if (await TryMoveAsync(actor, plan.Id, AgentPlanStatus.Expired, now, requireUnexpired: false, ct) == 0)
+            return;
+
+        await RecordOutcomeAsync(plan, StepsOf(plan).Select(s => Outcome(s, "expired",
+            "Not approved — the plan expired and nothing ran.", "تأیید نشد — برنامه منقضی شد و هیچ‌چیز اجرا نشد.")).ToList(),
+            now, ct);
     }
 
     // ---- remembered tools ----------------------------------------------------------------------
@@ -265,52 +273,95 @@ public sealed class AgentPlanService(
     /// step and nothing ran.</summary>
     private sealed record ClaimedRun(AgentPlanResultView Result, AgentPlanRefusal? Refusal = null);
 
-    private async Task<ClaimedRun> RunClaimedAsync(
-        AgentActor actor, AgentPlan plan, IReadOnlyList<AgentPlanStep> steps, CancellationToken ct)
+    /// <summary>
+    /// What has been decided about each step so far, by position — kept outside the work itself so
+    /// that whatever escapes it, the plan can still be finished with what really happened.
+    /// </summary>
+    private sealed class RunLedger(int steps)
     {
+        public AgentPlanStepResultView?[] Results { get; } = new AgentPlanStepResultView?[steps];
+        public StepOutcome?[] Outcomes { get; } = new StepOutcome?[steps];
+
+        /// <summary>The position of the step whose tool is running right now.</summary>
+        public int? Running { get; set; }
+
+        /// <summary>Whether any step's tool was entered at all.</summary>
+        public bool AnyRan { get; set; }
+    }
+
+    /// <summary>
+    /// Runs a claimed plan to an end — <see cref="AgentPlanStatus.Executed"/> or
+    /// <see cref="AgentPlanStatus.Failed"/>, with results in the plan, the conversation and the audit
+    /// log — whatever a tool does. A claimed plan left at <c>executing</c> would be a plan whose earlier
+    /// steps ran and were audited while the plan, the person and the next turn were all told nothing.
+    ///
+    /// <para>
+    /// It takes no cancellation token: claimed work runs to its end even if the browser goes away, so
+    /// an <see cref="OperationCanceledException"/> seen here is never the caller's — it is a tool's own
+    /// timeout (an <c>HttpClient.Timeout</c> throws one), and it fails that step like any other error.
+    /// </para>
+    /// </summary>
+    private async Task<ClaimedRun> RunClaimedAsync(
+        AgentActor actor, AgentPlan plan, IReadOnlyList<AgentPlanStep> steps, IReadOnlyList<string>? rememberTools)
+    {
+        var ledger = new RunLedger(steps.Count);
+        try
+        {
+            return await RunClaimedCoreAsync(actor, plan, steps, rememberTools, ledger);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Plan {Plan} broke after it was claimed; it is marked failed with what had run.", plan.Id);
+            return await FinishBrokenRunAsync(plan, steps, ledger);
+        }
+    }
+
+    private async Task<ClaimedRun> RunClaimedCoreAsync(
+        AgentActor actor, AgentPlan plan, IReadOnlyList<AgentPlanStep> steps, IReadOnlyList<string>? rememberTools,
+        RunLedger ledger)
+    {
+        var ct = CancellationToken.None;
         var context = new AgentToolContext(actor.WorkspaceId, actor.UserId, actor.User, plan.ConversationId, Page: null);
-        var results = new List<AgentPlanStepResultView>();
-        var outcomes = new List<StepOutcome>();
 
         // 1. Every step is validated again, in order, with a fresh scope, before any of them runs.
         var scope = new AgentPlanScope();
-        var ready = new List<(AgentPlanStep Step, IAgentTool Tool, JsonElement Args)>();
-        (AgentPlanStep Step, string Error, string ErrorFa)? refused = null;
+        var ready = new List<(int Position, AgentPlanStep Step, IAgentTool Tool, JsonElement Args)>();
+        (int Position, AgentPlanStep Step, string Error, string ErrorFa)? refused = null;
 
-        foreach (var step in steps)
+        for (var position = 0; position < steps.Count; position++)
         {
-            var check = await RevalidateAsync(step, actor, context, scope, ct);
+            var check = await RevalidateAsync(steps[position], actor, context, scope, ct);
             if (check.Error is not null)
             {
-                refused = (step, check.Error, check.ErrorFa!);
+                refused = (position, steps[position], check.Error, check.ErrorFa!);
                 break;
             }
-            ready.Add((step, check.Tool!, check.Args));
+            ready.Add((position, steps[position], check.Tool!, check.Args));
         }
 
-        var now = clock.UtcNow;
         if (refused is { } r)
         {
             // Nothing runs. The refused step says why; every other step — before it too — was skipped.
-            foreach (var step in steps)
+            for (var position = 0; position < steps.Count; position++)
             {
-                if (step.Index == r.Step.Index)
+                var step = steps[position];
+                if (position == r.Position)
                 {
-                    results.Add(new(step.Index, "failed", null, null, r.Error, r.ErrorFa, []));
-                    outcomes.Add(Outcome(step, "refused", r.Error, r.ErrorFa,
-                        error: $"Refused when re-checked at approval; nothing in the plan ran. {r.Error}"));
+                    ledger.Results[position] = new(step.Index, "failed", null, null, r.Error, r.ErrorFa, []);
+                    ledger.Outcomes[position] = Outcome(step, "refused", r.Error, r.ErrorFa,
+                        error: $"Refused when re-checked at approval; nothing in the plan ran. {r.Error}");
                 }
                 else
                 {
-                    results.Add(Skipped(step.Index, "Not run: another step was refused when the plan was re-checked.",
-                        "اجرا نشد: مرحلهٔ دیگری هنگام بررسی دوباره رد شد."));
-                    outcomes.Add(Outcome(step, "skipped", "Not run: another step was refused when the plan was re-checked.",
-                        "اجرا نشد: مرحلهٔ دیگری هنگام بررسی دوباره رد شد."));
+                    ledger.Results[position] = Skipped(step.Index, NotRunEn, NotRunFa);
+                    ledger.Outcomes[position] = Outcome(step, "skipped", NotRunEn, NotRunFa);
                 }
             }
 
-            await FinishAsync(plan, AgentPlanStatus.Failed, results, executedAt: null, ct);
-            await RecordOutcomeAsync(plan, outcomes, now, ct);
+            var results = await FinishAsync(plan, AgentPlanStatus.Failed, ledger, executedAt: null, ct);
+
+            // A refused approval remembers nothing: like every other refusal it changes nothing but the
+            // plan's own state, and "don't ask again" was consent to an approval that did not go ahead.
             return new ClaimedRun(
                 new AgentPlanResultView(plan.Id, StatusName(plan.Status), results),
                 new AgentPlanRefusal(AgentPlanRefusal.RevalidationRefusedCode,
@@ -319,29 +370,46 @@ public sealed class AgentPlanService(
                     StatusName(plan.Status), r.Step.Index));
         }
 
+        // The approval is going ahead, so its "don't ask again" ticks are recorded now.
+        await RememberAsync(actor, steps, rememberTools, clock.UtcNow, ct);
+
         // 2. Run in order; the first failure stops the rest.
         var stopped = false;
-        foreach (var (step, tool, args) in ready)
+        foreach (var (position, step, tool, args) in ready)
         {
             if (stopped)
             {
-                results.Add(Skipped(step.Index, "Skipped: an earlier step failed.", "رد شد: مرحلهٔ قبلی ناموفق بود."));
-                outcomes.Add(Outcome(step, "skipped", "Skipped: an earlier step failed, so this did not run.",
-                    "رد شد: مرحلهٔ قبلی ناموفق بود و این مرحله اجرا نشد."));
+                ledger.Results[position] = Skipped(step.Index, "Skipped: an earlier step failed.", "رد شد: مرحلهٔ قبلی ناموفق بود.");
+                ledger.Outcomes[position] = Outcome(step, "skipped", "Skipped: an earlier step failed, so this did not run.",
+                    "رد شد: مرحلهٔ قبلی ناموفق بود و این مرحله اجرا نشد.");
                 continue;
             }
+
+            ledger.Running = position;
+            ledger.AnyRan = true;
 
             AgentToolResult result;
             try
             {
                 result = await tool.ExecuteAsync(args, context, ct);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex)
             {
+                // Every exception, cancellation included — see RunClaimedAsync for why none is the caller's.
                 logger.LogError(ex, "Agent tool {Tool} threw while executing step {Step} of plan {Plan}.",
-                    step.Tool, step.Index, plan.Id);
-                result = AgentToolResult.Failed("The step failed unexpectedly; see the server log.",
-                    "این مرحله به‌طور غیرمنتظره ناموفق بود؛ لاگ سرور را ببینید.");
+                    step.Tool, step.Index + 1, plan.Id);
+                result = AgentToolResult.Failed(StepBrokeEn, StepBrokeFa);
+            }
+
+            if (!result.Ok)
+            {
+                // A failed step may have left half-made rows in the shared context — an entity still Added
+                // after its save threw on a unique-slug race. The audit entry's save below would write
+                // them again and fail the same way, so they are dropped first.
+                var dropped = AgentTracker.DetachForeignChanges(db);
+                if (dropped.Count > 0)
+                    logger.LogWarning("Step {Step} of plan {Plan} ({Tool}) failed leaving unsaved changes; dropped: {Types}.",
+                        step.Index + 1, plan.Id, step.Tool, string.Join(", ", dropped));
             }
 
             await audit.LogAsync(StepExecutedAction, targetType: "agent_plan", targetId: plan.Id.ToString(),
@@ -359,33 +427,85 @@ public sealed class AgentPlanService(
 
             if (result.Ok)
             {
-                results.Add(new(step.Index, "done", result.SummaryEn, result.SummaryFa, null, null, result.Links ?? []));
-                outcomes.Add(Outcome(step, "done", result.SummaryEn ?? "Done.", result.SummaryFa ?? "انجام شد.",
-                    resultJson: result.ResultJson));
+                ledger.Results[position] = new(step.Index, "done", result.SummaryEn, result.SummaryFa, null, null, result.Links ?? []);
+                ledger.Outcomes[position] = Outcome(step, "done", result.SummaryEn ?? "Done.", result.SummaryFa ?? "انجام شد.",
+                    resultJson: result.ResultJson);
             }
             else
             {
                 var error = result.Error ?? "The step failed.";
                 var errorFa = result.ErrorFa ?? "این مرحله ناموفق بود.";
-                results.Add(new(step.Index, "failed", null, null, error, errorFa, result.Links ?? []));
-                outcomes.Add(Outcome(step, "failed", error, errorFa, error: error, resultJson: result.ResultJson));
+                ledger.Results[position] = new(step.Index, "failed", null, null, error, errorFa, result.Links ?? []);
+                ledger.Outcomes[position] = Outcome(step, "failed", error, errorFa, error: error, resultJson: result.ResultJson);
                 stopped = true;
+            }
+
+            ledger.Running = null;
+        }
+
+        var finished = await FinishAsync(plan, stopped ? AgentPlanStatus.Failed : AgentPlanStatus.Executed, ledger,
+            executedAt: clock.UtcNow, ct);
+        return new ClaimedRun(new AgentPlanResultView(plan.Id, StatusName(plan.Status), finished));
+    }
+
+    /// <summary>
+    /// The way out for a run that something escaped — a save that threw, a failure in the record
+    /// itself. The tracker is cleared of everything unsaved, so nothing half-written is retried along
+    /// with the record; the step that was running fails, every step without a result is skipped, and
+    /// the plan is finished as failed. If even that cannot be written, it is logged and the plan stays
+    /// executing — the one state that never claims anything happened.
+    /// </summary>
+    private async Task<ClaimedRun> FinishBrokenRunAsync(AgentPlan plan, IReadOnlyList<AgentPlanStep> steps, RunLedger ledger)
+    {
+        AgentTracker.DetachAllChanges(db);
+
+        for (var position = 0; position < steps.Count; position++)
+        {
+            if (ledger.Results[position] is not null) continue;
+            var step = steps[position];
+            if (position == ledger.Running)
+            {
+                ledger.Results[position] = new(step.Index, "failed", null, null, StepBrokeEn, StepBrokeFa, []);
+                ledger.Outcomes[position] = Outcome(step, "failed", StepBrokeEn, StepBrokeFa, error: StepBrokeEn);
+            }
+            else
+            {
+                ledger.Results[position] = Skipped(step.Index, StoppedEn, StoppedFa);
+                ledger.Outcomes[position] = Outcome(step, "skipped", StoppedEn, StoppedFa);
             }
         }
 
-        now = clock.UtcNow;
-        await FinishAsync(plan, stopped ? AgentPlanStatus.Failed : AgentPlanStatus.Executed, results, executedAt: now, ct);
-        await RecordOutcomeAsync(plan, outcomes, now, ct);
-        return new ClaimedRun(new AgentPlanResultView(plan.Id, StatusName(plan.Status), results));
+        // Every step done means only the record failed the first time; the plan itself did not.
+        var status = ledger.Results.All(r => r!.State == "done") ? AgentPlanStatus.Executed : AgentPlanStatus.Failed;
+        try
+        {
+            var results = await FinishAsync(plan, status, ledger,
+                executedAt: ledger.AnyRan ? clock.UtcNow : null, CancellationToken.None);
+            return new ClaimedRun(new AgentPlanResultView(plan.Id, StatusName(status), results));
+        }
+        catch (Exception again)
+        {
+            logger.LogError(again, "Plan {Plan} could not be recorded either; it stays executing.", plan.Id);
+            AgentTracker.DetachAllChanges(db);
+            return new ClaimedRun(new AgentPlanResultView(plan.Id, StatusName(status),
+                ledger.Results.Select(x => x!).ToList()));
+        }
     }
+
+    private const string NotRunEn = "Not run: another step was refused when the plan was re-checked.";
+    private const string NotRunFa = "اجرا نشد: مرحلهٔ دیگری هنگام بررسی دوباره رد شد.";
+    private const string StepBrokeEn = "The step failed unexpectedly; see the server log.";
+    private const string StepBrokeFa = "این مرحله به‌طور غیرمنتظره ناموفق بود؛ لاگ سرور را ببینید.";
+    private const string StoppedEn = "Not run: the plan stopped because of an error on the server.";
+    private const string StoppedFa = "اجرا نشد: برنامه به‌خاطر خطایی در سرور متوقف شد.";
 
     private sealed record Revalidation(IAgentTool? Tool, JsonElement Args, string? Error, string? ErrorFa);
 
     /// <summary>
     /// One step, checked again as if it had just been proposed: the tool still exists, still has the
     /// consent level the person approved, the person still holds its capability, and the tool's own
-    /// validation still accepts it. A destructive step must also still name the same resource — the
-    /// phrase the person typed was checked against the old one.
+    /// validation still accepts it — without changing anything. A destructive step must also still name
+    /// the same resource — the phrase the person typed was checked against the old one.
     /// </summary>
     private async Task<Revalidation> RevalidateAsync(
         AgentPlanStep step, AgentActor actor, AgentToolContext context, AgentPlanScope scope, CancellationToken ct)
@@ -400,9 +520,6 @@ public sealed class AgentPlanService(
             return new(null, default, $"The tool '{step.Tool}' changed since this plan was made; ask again.",
                 $"ابزار «{step.Tool}» پس از ساخت این برنامه تغییر کرده است؛ دوباره درخواست کنید.");
 
-        if (!await registry.AllowsAsync(actor.User, tool, ct))
-            return new(null, default, "Your role no longer allows this step.", "نقش شما دیگر اجازهٔ این مرحله را نمی‌دهد.");
-
         JsonElement args;
         try
         {
@@ -414,16 +531,24 @@ public sealed class AgentPlanService(
             return new(null, default, "The stored arguments of this step are unreadable.", "آرگومان‌های ذخیره‌شدهٔ این مرحله خوانا نیستند.");
         }
 
+        var before = AgentTracker.ForeignChanges(db);
         AgentValidation validation;
         try
         {
+            if (!await registry.AllowsAsync(actor.User, tool, ct))
+                return new(null, default, "Your role no longer allows this step.", "نقش شما دیگر اجازهٔ این مرحله را نمی‌دهد.");
+
             validation = await tool.ValidateAsync(args, context, scope, ct);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex)
         {
             logger.LogError(ex, "Agent tool {Tool} threw while re-validating.", step.Tool);
+            AgentTracker.DetachForeignChanges(db, before);
             return new(null, default, "This step could not be checked; see the server log.", "این مرحله بررسی نشد؛ لاگ سرور را ببینید.");
         }
+
+        if (ValidationLeftChanges(step.Tool, before) is { } leaked)
+            return new(null, default, leaked.En, leaked.Fa);
 
         if (!validation.Ok)
             return new(null, default, validation.Error ?? "Refused.", validation.ErrorFa ?? "رد شد.");
@@ -437,20 +562,44 @@ public sealed class AgentPlanService(
         return new(tool, args, null, null);
     }
 
-    private async Task FinishAsync(
-        AgentPlan plan, AgentPlanStatus status, List<AgentPlanStepResultView> results, DateTimeOffset? executedAt,
-        CancellationToken ct)
+    /// <summary>
+    /// Validation must not change anything. A tool whose validation left unsaved changes in the shared
+    /// context would have them written by the next save the agent makes — before anybody consented — so
+    /// they are dropped, logged, and the step refused. Shared with the loop; wave-B tools rely on it.
+    /// </summary>
+    internal (string En, string Fa)? ValidationLeftChanges(string toolName, IReadOnlySet<object> before)
     {
+        var dropped = AgentTracker.DetachForeignChanges(db, before);
+        if (dropped.Count == 0) return null;
+
+        logger.LogWarning("Agent tool {Tool} left unsaved changes while validating ({Types}); they were dropped and the step refused.",
+            toolName, string.Join(", ", dropped));
+        return ("This step was refused: checking it tried to change data, which a check must never do.",
+            "این مرحله رد شد: بررسی آن کوشید داده‌ای را تغییر دهد، که یک بررسی هرگز نباید بکند.");
+    }
+
+    /// <summary>
+    /// Ends a claimed plan: its status, its results and the conversation's record of them, in one save —
+    /// so the plan never says it finished while the conversation still believes the steps are waiting.
+    /// Every step must have a result in <paramref name="ledger"/> by now.
+    /// </summary>
+    private async Task<List<AgentPlanStepResultView>> FinishAsync(
+        AgentPlan plan, AgentPlanStatus status, RunLedger ledger, DateTimeOffset? executedAt, CancellationToken ct)
+    {
+        var results = ledger.Results.Select(r => r!).ToList();
+
         // Plain tracked write: this call owns the plan since it won the claim, so there is no race left.
         var tracked = await db.AgentPlans.IgnoreQueryFilters().FirstAsync(p => p.Id == plan.Id, ct);
         tracked.Status = status;
         tracked.ResultsJson = AgentJson.Serialize(results);
         tracked.ExecutedAt = executedAt;
+        await AddOutcomeMessagesAsync(plan, ledger.Outcomes.Select(o => o!).ToList(), clock.UtcNow, ct);
         await db.SaveChangesAsync(ct);
 
         plan.Status = status;
         plan.ResultsJson = tracked.ResultsJson;
         plan.ExecutedAt = executedAt;
+        return results;
     }
 
     private async Task RememberAsync(
@@ -518,7 +667,9 @@ public sealed class AgentPlanService(
                 .SetProperty(p => p.Status, to)
                 .SetProperty(p => p.DecidedAt, decidedAt)
                 .SetProperty(p => p.UpdatedAt, now), ct);
-            await RefreshTrackedAsync(planId, ct);
+            // Once the move has committed it must not be undone in memory by a cancelled refresh: the
+            // caller goes on to run the plan, and a stale tracked copy would say it is still pending.
+            await RefreshTrackedAsync(planId, moved > 0 ? CancellationToken.None : ct);
             return moved;
         }
 
@@ -555,12 +706,13 @@ public sealed class AgentPlanService(
     }
 
     /// <summary>The refusal for a plan that can no longer be decided — expired (written down on the
-    /// way out) or already decided — or null when it is still pending and in time.</summary>
+    /// way out, and told to the conversation) or already decided — or null when it is still pending and
+    /// in time.</summary>
     private async Task<AgentPlanRefusal?> RefuseUndecidableAsync(AgentActor actor, AgentPlan plan, DateTimeOffset now, CancellationToken ct)
     {
         if (plan.Status == AgentPlanStatus.Pending && now >= plan.ExpiresAt)
         {
-            await TryMoveAsync(actor, plan.Id, AgentPlanStatus.Expired, now, requireUnexpired: false, ct);
+            await ExpireAsync(actor, plan, now, ct);
             return Expired();
         }
 
@@ -600,6 +752,15 @@ public sealed class AgentPlanService(
     /// N") and may only be answered once.
     /// </summary>
     private async Task RecordOutcomeAsync(AgentPlan plan, IReadOnlyList<StepOutcome> outcomes, DateTimeOffset now, CancellationToken ct)
+    {
+        if (outcomes.Count == 0) return;
+        await AddOutcomeMessagesAsync(plan, outcomes, now, ct);
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary><see cref="RecordOutcomeAsync"/>'s messages, added to the context but not saved — so
+    /// <see cref="FinishAsync"/> can write them in the same save as the plan's own result.</summary>
+    private async Task AddOutcomeMessagesAsync(AgentPlan plan, IReadOnlyList<StepOutcome> outcomes, DateTimeOffset now, CancellationToken ct)
     {
         if (outcomes.Count == 0) return;
 
@@ -649,7 +810,6 @@ public sealed class AgentPlanService(
         }
 
         await AgentConversationLog.TouchAsync(db, plan.ConversationId, now, ct);
-        await db.SaveChangesAsync(ct);
     }
 
     private static string CallId(AgentPlan plan, AgentPlanStep step) => $"plan_{plan.Id:N}_{step.Index}";

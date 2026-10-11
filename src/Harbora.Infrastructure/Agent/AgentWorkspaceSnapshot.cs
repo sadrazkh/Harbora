@@ -52,7 +52,7 @@ public sealed class AgentWorkspaceSnapshot(HarboraDbContext db, AgentResourceRes
         }
 
         if (tree.Omitted > 0)
-            text.Append($"- …and {tree.Omitted} more apps and databases not listed here; call list_resources to see them.\n");
+            text.Append($"- …and {tree.Omitted} more apps and databases not listed here; call list_resources to see them (it answers in pages).\n");
 
         return text.ToString().TrimEnd();
     }

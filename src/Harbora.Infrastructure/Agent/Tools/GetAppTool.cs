@@ -21,7 +21,7 @@ namespace Harbora.Infrastructure.Agent.Tools;
 /// </summary>
 public sealed class GetAppTool(HarboraDbContext db, AgentResourceResolver resolver, ISecretProtector protector) : AgentReadTool
 {
-    private const int MaxValueLength = 200;
+    private const int MaxValueLength = 120;
 
     public override string Name => "get_app";
 
@@ -101,9 +101,6 @@ public sealed class GetAppTool(HarboraDbContext db, AgentResourceResolver resolv
             replicas = app.DesiredReplicas,
             maintenanceMode = app.MaintenanceMode,
             domains,
-            environmentVariables = variables.Select(v => v.IsSecret
-                ? (object)new { key = v.Key, secret = "set", availableAtBuild = v.AvailableAtBuild }
-                : new { key = v.Key, value = Scrub(v.Value, MaxValueLength), availableAtBuild = v.AvailableAtBuild }).ToList(),
             attachedDatabases = attachments.Select(a => new
             {
                 a.database, engine = AgentResourceResolver.Lower(a.engine), a.alias, a.logicalDatabase
@@ -119,7 +116,12 @@ public sealed class GetAppTool(HarboraDbContext db, AgentResourceResolver resolv
                 commit = d.CommitSha is null ? null : d.CommitSha[..Math.Min(8, d.CommitSha.Length)],
                 commitMessage = Scrub(d.CommitMessage?.Split('\n')[0], 120),
                 error = Scrub(d.ErrorMessage, 300)
-            }).ToList()
+            }).ToList(),
+            // Last, because a tool result is cut from the end on its way to the model, and an app with a
+            // long list of variables should lose the tail of that list, not its deployments.
+            environmentVariables = variables.Select(v => v.IsSecret
+                ? (object)new { key = v.Key, secret = "set", availableAtBuild = v.AvailableAtBuild }
+                : new { key = v.Key, value = Scrub(v.Value, MaxValueLength), availableAtBuild = v.AvailableAtBuild }).ToList()
         };
 
         return Found(payload, $"Read app {app.Slug}", $"اپ {app.Slug} بررسی شد");

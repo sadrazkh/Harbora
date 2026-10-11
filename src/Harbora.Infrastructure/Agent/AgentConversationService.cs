@@ -174,9 +174,6 @@ public sealed class AgentConversationService(
             if (existing is null)
                 return new(AgentSendStatus.NotFound, "There is no such conversation.", "چنین گفت‌وگویی وجود ندارد.");
             conversation = existing;
-
-            // A card left open while the person moved on is withdrawn, and the turn below is told so.
-            await plans.SupersedePendingAsync(actor, conversation.Id, ct);
         }
         else
         {
@@ -191,6 +188,16 @@ public sealed class AgentConversationService(
             db.AgentConversations.Add(conversation);
         }
 
+        // The design's gates after the entitlement: can a model be reached, and is any of today's
+        // allowance left. Asked before anything else changes, so a message that cannot be answered does
+        // not withdraw a card that could still have been approved.
+        var refusal = await GateAsync(actor, ct);
+
+        // A card left open while the person moved on is withdrawn, and the turn is told so — only for a
+        // message that will actually be answered, and before it, so the record reads in order.
+        if (refusal is null && conversationId is not null)
+            await plans.SupersedePendingAsync(actor, conversation.Id, ct);
+
         // The person's words are kept whatever happens next, so the conversation they reopen shows what
         // they asked — including when the answer was an error.
         await AppendAsync(conversation, new AgentMessage { Role = AgentMessageRole.User, Text = text }, ct);
@@ -199,7 +206,10 @@ public sealed class AgentConversationService(
 
         try
         {
-            await RunTurnAsync(actor, conversation, request!.Page, persianInterface, emit, ct);
+            if (refusal is not null)
+                await emit(new AgentStreamEvent(AgentStreamEvents.Error, refusal), ct);
+            else
+                await RunTurnAsync(actor, conversation, request!.Page, persianInterface, emit, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -221,18 +231,6 @@ public sealed class AgentConversationService(
         AgentActor actor, AgentConversation conversation, AgentPageContext? page, bool persianInterface,
         Func<AgentStreamEvent, CancellationToken, Task> emit, CancellationToken ct)
     {
-        if (await chat.GetAvailabilityAsync(ct) is { } unavailable)
-        {
-            await emit(new AgentStreamEvent(AgentStreamEvents.Error, await UnavailableAsync(actor, unavailable, ct)), ct);
-            return;
-        }
-
-        if (await meter.RemainingAsync(actor.WorkspaceId, ct) == 0)
-        {
-            await emit(Error(CapReachedEn, CapReachedFa), ct);
-            return;
-        }
-
         var context = new AgentToolContext(actor.WorkspaceId, actor.UserId, actor.User, conversation.Id, page);
         var system = AgentSystemPrompt.Build(
             await snapshot.DescribeAsync(context, ct),
@@ -331,6 +329,19 @@ public sealed class AgentConversationService(
         }
     }
 
+    /// <summary>Why this message cannot be answered at all right now, or null: no reachable model, or
+    /// none of today's allowance left. (Each model call still reserves its own share as it is made.)</summary>
+    private async Task<AgentErrorData?> GateAsync(AgentActor actor, CancellationToken ct)
+    {
+        if (await chat.GetAvailabilityAsync(ct) is { } unavailable)
+            return await UnavailableAsync(actor, unavailable, ct);
+
+        if (await meter.RemainingAsync(actor.WorkspaceId, ct) == 0)
+            return new AgentErrorData(CapReachedEn, CapReachedFa);
+
+        return null;
+    }
+
     /// <summary>The state one turn accumulates across its tool calls.</summary>
     private sealed class Turn(
         AgentActor actor, AgentToolContext context, IReadOnlySet<string> remembered, IReadOnlyList<IAgentTool> allowed)
@@ -373,16 +384,25 @@ public sealed class AgentConversationService(
         var kind = AgentConsentPolicy.KindLabel(tool.Kind);
         await emit(new AgentStreamEvent(AgentStreamEvents.Tool, new AgentToolEventData(tool.Name, kind, "running", null, null)), ct);
 
+        var before = AgentTracker.ForeignChanges(db);
         AgentToolResult result;
         try
         {
             result = await tool.ExecuteAsync(args, turn.Context, ct);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (!IsCallerCancellation(ex, ct))
         {
+            // Includes the tool's own timeout: that is a failed read for the model to hear about, not
+            // the end of the turn.
             logger.LogError(ex, "Agent read tool {Tool} threw.", tool.Name);
             result = AgentToolResult.Failed($"The tool '{tool.Name}' failed on the server.", $"ابزار «{tool.Name}» در سرور ناموفق بود.");
         }
+
+        // A read must not leave anything to save; whatever it did leave would be written by the next
+        // message this loop stores.
+        var dropped = AgentTracker.DetachForeignChanges(db, before);
+        if (dropped.Count > 0)
+            logger.LogWarning("Agent read tool {Tool} left unsaved changes ({Types}); they were dropped.", tool.Name, string.Join(", ", dropped));
 
         var summaryEn = result.Ok ? result.SummaryEn ?? $"Looked up: {tool.Name}" : result.Error ?? $"{tool.Name} failed";
         var summaryFa = result.Ok ? result.SummaryFa ?? $"بررسی شد: {tool.Name}" : result.ErrorFa ?? $"{tool.Name} ناموفق بود";
@@ -395,17 +415,23 @@ public sealed class AgentConversationService(
     private async Task<ToolAnswer> ProposeWriteAsync(
         IAgentTool tool, AgentToolCall call, JsonElement args, Turn turn, CancellationToken ct)
     {
+        var before = AgentTracker.ForeignChanges(db);
         AgentValidation validation;
         try
         {
             validation = await tool.ValidateAsync(args, turn.Context, turn.Scope, ct);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (!IsCallerCancellation(ex, ct))
         {
             logger.LogError(ex, "Agent tool {Tool} threw while validating.", tool.Name);
             validation = AgentValidation.Refused("The tool could not check this request on the server.",
                 "ابزار نتوانست این درخواست را در سرور بررسی کند.");
         }
+
+        // Validation must change nothing: this loop saves after every tool call, before anybody has
+        // consented, so a change a validation left behind would be written by that save.
+        if (plans.ValidationLeftChanges(tool.Name, before) is { } leaked)
+            validation = AgentValidation.Refused(leaked.En, leaked.Fa);
 
         // A delete with no phrase to type would run on a click. That is a tool bug, and it fails closed.
         if (validation.Ok && AgentConsentPolicy.NeedsTypedConfirmation(tool.Kind)
@@ -443,23 +469,43 @@ public sealed class AgentConversationService(
     }
 
     /// <summary>
+    /// Whether an exception is this request being cancelled — the browser went away, so the turn ends.
+    /// Any other cancellation (a tool's own timeout, an <c>HttpClient.Timeout</c>) is a tool failure.
+    /// </summary>
+    private static bool IsCallerCancellation(Exception ex, CancellationToken ct) =>
+        ex is OperationCanceledException && ct.IsCancellationRequested;
+
+    /// <summary>
     /// The model's calls with ids that can be answered: a weak model sometimes sends a blank id, or the
     /// same id twice in one reply, and every answer has to name exactly one call or the provider refuses
-    /// the next request outright. Such an id is replaced by one of ours — the provider only ever sees
-    /// it again in the history this conversation sends back, where it is consistent.
+    /// the next request outright. Such an id is replaced by one of ours, chosen so it can collide with no
+    /// id the reply really carries — the provider only ever sees it again in the history this
+    /// conversation sends back, where it is consistent.
     /// </summary>
     private static IReadOnlyList<AgentToolCall> NormalizeCalls(IReadOnlyList<AgentToolCall>? calls, int round)
     {
         if (calls is null || calls.Count == 0) return [];
 
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        static bool Usable(string? id) => !string.IsNullOrWhiteSpace(id) && id.Length <= AgentMessage.MaxToolCallIdLength;
+
+        // First every id that will be kept as sent (the first use of each usable one), so a generated id
+        // can be checked against all of them, including ones later in the reply.
+        var used = new HashSet<string>(StringComparer.Ordinal);
+        var keep = new bool[calls.Count];
+        for (var i = 0; i < calls.Count; i++)
+            keep[i] = Usable(calls[i].Id) && used.Add(calls[i].Id);
+
         var normalized = new List<AgentToolCall>(calls.Count);
         for (var i = 0; i < calls.Count; i++)
         {
-            var id = calls[i].Id;
-            if (string.IsNullOrWhiteSpace(id) || id.Length > AgentMessage.MaxToolCallIdLength || seen.Contains(id))
-                id = $"call_r{round}_{i + 1}";
-            seen.Add(id);
+            if (keep[i])
+            {
+                normalized.Add(calls[i]);
+                continue;
+            }
+
+            var id = $"call_r{round}_{i + 1}";
+            for (var n = 2; !used.Add(id); n++) id = $"call_r{round}_{i + 1}_{n}";
             normalized.Add(calls[i] with { Id = id });
         }
         return normalized;

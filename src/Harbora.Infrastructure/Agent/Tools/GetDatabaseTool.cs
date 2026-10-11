@@ -1,5 +1,7 @@
 using System.Text.Json;
+using Harbora.Application.Abstractions;
 using Harbora.Data;
+using Harbora.Infrastructure.Assistant;
 using Harbora.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
 
@@ -10,7 +12,8 @@ namespace Harbora.Infrastructure.Agent.Tools;
 /// attached to it, its logical databases and its measured size. Never a username, password or
 /// connection string; an attached app the person cannot see is left out rather than named.
 /// </summary>
-public sealed class GetDatabaseTool(HarboraDbContext db, AgentResourceResolver resolver, ProjectAccessService access)
+public sealed class GetDatabaseTool(
+    HarboraDbContext db, AgentResourceResolver resolver, ProjectAccessService access, ISecretProtector protector)
     : AgentReadTool
 {
     public override string Name => "get_database";
@@ -58,6 +61,8 @@ public sealed class GetDatabaseTool(HarboraDbContext db, AgentResourceResolver r
             .Select(d => new { name = d.Name, isDefault = d.IsDefault })
             .ToListAsync(ct);
 
+        var secrets = await AgentSecrets.ForDatabaseAsync(db, protector, service, ct);
+
         var primary = service.PrimaryManagedServiceId is { } primaryId
             ? await db.ManagedServices.AsNoTracking()
                 .Where(s => s.Id == primaryId && s.WorkspaceId == context.WorkspaceId)
@@ -73,7 +78,9 @@ public sealed class GetDatabaseTool(HarboraDbContext db, AgentResourceResolver r
             engine = AgentResourceResolver.Lower(service.Type),
             version = service.Version,
             status = AgentResourceResolver.Lower(service.Status),
-            error = Clip(service.ErrorMessage, 300),
+            // Redacted before it is clipped — by value against the database's own passwords, then by shape
+            // — so a clip can never cut a secret in half and leave the half that is no longer recognisable.
+            error = service.ErrorMessage is null ? null : Clip(AssistantRedaction.Redact(service.ErrorMessage, secrets).Text, 300),
             size = service.InstanceSizeKey,
             storageBytes = service.StorageBytes,
             storageMeasuredAt = service.StorageMeasuredAt,

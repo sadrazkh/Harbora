@@ -603,4 +603,95 @@ public class AgentConversationServiceTests
         (await h.Service.StatusAsync(h.Actor, default)).Should().Be(
             new AgentStatusView(false, "No model is configured.", "مدلی تنظیم نشده است.", "test/agent-model:free", 10));
     }
+
+    // ---- fixes after review --------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_read_tool_that_times_out_is_a_failed_read_and_the_turn_goes_on()
+    {
+        var slow = new FakeTool("peek", AgentToolKind.Read)
+        {
+            OnExecute = (_, _) => throw new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout.")
+        };
+        using var h = new AgentHarness([slow]);
+        h.Chat.ThenCall("peek").ThenText("The lookup timed out.");
+
+        var (_, events) = await h.SendAsync("peek");
+
+        events.Names().Should().Equal("started", "tool", "tool", "message", "done");
+        events.Where(e => e.Name == "tool").Select(e => ((AgentToolEventData)e.Data).State).Should().Equal("running", "failed");
+        h.Chat.Requests.Should().HaveCount(2, "the model heard about the failure and answered");
+    }
+
+    [Fact]
+    public async Task A_write_whose_validation_changes_data_is_refused_and_the_change_is_never_saved()
+    {
+        AgentHarness? harness = null;
+        var leaky = new FakeTool("create_project", AgentToolKind.SafeWrite)
+        {
+            OnValidate = (_, context, _) =>
+            {
+                harness!.Db.Projects.Add(new Harbora.Domain.Projects.Project { WorkspaceId = context.WorkspaceId, Name = "Leak", Slug = "leaked" });
+                return new AgentValidation(true, TitleEn: "Create project");
+            }
+        };
+        using var h = new AgentHarness([leaky]);
+        harness = h;
+        h.Chat.ThenCall("create_project").ThenText("I could not.");
+
+        var (_, events) = await h.SendAsync("create a project");
+
+        h.Chat.Requests[1].Messages.Last().Content.Should().StartWith("Refused: This step was refused: checking it tried to change data");
+        events.Names().Should().NotContain("plan");
+        (await h.Db.Projects.IgnoreQueryFilters().AnyAsync(p => p.Slug == "leaked")).Should().BeFalse(
+            "the loop saves after every tool call; a validation's change must not ride along");
+    }
+
+    [Fact]
+    public async Task A_message_that_cannot_be_answered_does_not_withdraw_a_card_that_can_still_be_approved()
+    {
+        var create = new FakeTool("create_database", AgentToolKind.SafeWrite);
+        using var h = new AgentHarness([create]);
+        h.Chat.ThenCall("create_database").ThenText("Approve it?");
+        var (_, first) = await h.SendAsync("create a database");
+        var id = first.Single<AgentStartedData>("started").ConversationId;
+        var planId = first.Single<AgentPlanView>("plan").Id;
+
+        h.Chat.Unavailable = new AssistantUnavailable("The assistant is turned off.", "دستیار خاموش است.");
+        var (_, refused) = await h.SendAsync("are you there?", id);
+
+        refused.Names().Should().Equal("started", "error", "done");
+        (await h.Db.AgentPlans.AsNoTracking().SingleAsync()).Status.Should().Be(AgentPlanStatus.Pending);
+        (await h.Plans.ApproveAsync(h.Actor, planId, new AgentApproveRequest(null, null), default)).Ok.Should().BeTrue();
+        create.Executions.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task A_model_call_that_fails_still_spends_its_share_of_the_cap()
+    {
+        using var h = new AgentHarness();
+        h.SetDailyLimit("1");
+        h.Chat.Then(AgentChatResponse.Failed("Upstream 500.", "خطای ۵۰۰."));
+
+        var (_, events) = await h.SendAsync("hello");
+
+        ((AgentDoneData)events.Last().Data).RemainingToday.Should().Be(0,
+            "the provider was asked, and the cap counts what was asked, not what was answered");
+    }
+
+    [Fact]
+    public async Task A_generated_call_id_never_collides_with_an_id_the_reply_really_carries()
+    {
+        var peek = Reader();
+        using var h = new AgentHarness([peek]);
+        h.Chat.ThenCalls(new AgentToolCall("", "peek", "{}"), new AgentToolCall("call_r1_1", "peek", "{}"))
+            .ThenText("ok");
+
+        await h.SendAsync("peek twice");
+
+        var ids = h.Chat.Requests[1].Messages.Single(m => m.Role == AgentRole.Assistant).ToolCalls!.Select(c => c.Id).ToList();
+        ids.Should().OnlyHaveUniqueItems();
+        ids[1].Should().Be("call_r1_1", "a usable id the model sent is kept as sent");
+        ids[0].Should().NotBe("call_r1_1");
+    }
 }

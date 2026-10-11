@@ -23,11 +23,20 @@ public sealed class GetDeploymentTool(HarboraDbContext db, AgentResourceResolver
 {
     public const int LogLines = 40;
 
+    /// <summary>The longest a single log line is sent; a minified bundle printed on one line says nothing
+    /// in its 5,001st character that its 200th did not.</summary>
+    public const int MaxLineLength = 200;
+
+    /// <summary>The most the whole result may serialise to — under the cut, with room for the redaction
+    /// every result passes through on the way to lengthen it.</summary>
+    public const int ResultBudget = AgentJson.MaxToolResultLength - 300;
+
     public override string Name => "get_deployment";
 
     public override string Description =>
         "Shows one deployment of an app: its status, trigger, when it started and finished, the error if it failed, and " +
-        "the last 40 lines of its log (secrets removed). Without a number, the app's latest deployment.";
+        "the end of its log — up to the last 40 lines, long lines shortened, secrets removed. Without a number, the " +
+        "app's latest deployment.";
 
     public override string ParametersSchema =>
         """
@@ -68,10 +77,15 @@ public sealed class GetDeploymentTool(HarboraDbContext db, AgentResourceResolver
         tail.Reverse();
 
         var secrets = await AgentSecrets.ForAppAsync(db, protector, app.Id, context.WorkspaceId, ct);
-        var log = AssistantRedaction.Redact(string.Join('\n', tail), secrets).Text;
         var error = AssistantRedaction.Redact(deployment.ErrorMessage, secrets).Text;
 
-        var payload = new
+        // Redacted line by line (a secret never spans a line break in a log), then each line clipped:
+        // redacting first, so a clip cannot cut a secret in half and leave a half no longer recognisable.
+        var lines = tail
+            .Select(line => Clip(AssistantRedaction.Redact(line, secrets).Text, MaxLineLength) ?? "")
+            .ToList();
+
+        object Payload(int dropped) => new
         {
             app = app.Slug,
             number = deployment.Number,
@@ -82,10 +96,18 @@ public sealed class GetDeploymentTool(HarboraDbContext db, AgentResourceResolver
             finishedAt = deployment.FinishedAt,
             commit = deployment.CommitSha,
             error = string.IsNullOrEmpty(error) ? null : Clip(error, 600),
-            logTail = log.Length == 0 ? Array.Empty<string>() : log.Split('\n')
+            earlierLinesLeftOut = dropped,
+            logTail = lines.Skip(dropped).ToList()
         };
 
-        return Found(payload,
+        // The result is cut to MaxToolResultLength on its way to the model, and the cut keeps the head —
+        // but the line that says why a deployment failed is nearly always the last one. So the oldest
+        // lines are dropped here until the whole result fits, and the tail is what arrives.
+        var droppedLines = 0;
+        while (droppedLines < lines.Count && AgentJson.Serialize(Payload(droppedLines)).Length > ResultBudget)
+            droppedLines++;
+
+        return Found(Payload(droppedLines),
             $"Read deployment #{deployment.Number} of {app.Slug}",
             $"دیپلوی شمارهٔ {deployment.Number} از {app.Slug} بررسی شد");
     }
