@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
@@ -15,8 +16,15 @@ namespace Harbora.Infrastructure.Projects;
 /// this keeps it true for workspaces created afterwards, so no screen ever has to handle "belongs to
 /// nothing" — the state that would otherwise appear months later, in production, on somebody's
 /// dashboard.
+/// <para>
+/// Creating a project or an environment writes its own audit entry (<c>project.created</c>,
+/// <c>environment.created</c>) here rather than in each caller, so the panel's forms and the in-panel
+/// agent leave the same trace. <paramref name="audit"/> is optional only for the tests that build this
+/// directly; DI always supplies it.
+/// </para>
 /// </summary>
-public sealed partial class ProjectService(HarboraDbContext db, ISystemClock clock, IQuotaService? quota = null)
+public sealed partial class ProjectService(
+    HarboraDbContext db, ISystemClock clock, IQuotaService? quota = null, IAuditLogger? audit = null)
 {
     /// <summary>The slug the migration used, so old and new workspaces look identical.</summary>
     public const string DefaultProjectSlug = "default";
@@ -128,6 +136,18 @@ public sealed partial class ProjectService(HarboraDbContext db, ISystemClock clo
         {
             await db.SaveChangesAsync(ct);
             await reservation.CommitAsync(ct);
+
+            // Only on the saving path: PrepareAsync's caller owns the unit of work, and an entry
+            // written before that work commits would outlive a stack deployment that rolled back.
+            if (audit is not null)
+            {
+                await audit.LogAsync("project.created", "project", project.Id.ToString(),
+                    metadataJson: JsonSerializer.Serialize(new
+                    {
+                        name = project.Name, slug = project.Slug, environment = environment.Id
+                    }),
+                    workspaceId: workspaceId, ct: ct);
+            }
         }
         return (project, environment);
     }
@@ -171,6 +191,16 @@ public sealed partial class ProjectService(HarboraDbContext db, ISystemClock clo
         db.Environments.Add(environment);
         await db.SaveChangesAsync(ct);
         await reservation.CommitAsync(ct);
+
+        if (audit is not null)
+        {
+            await audit.LogAsync("environment.created", "environment", environment.Id.ToString(),
+                metadataJson: JsonSerializer.Serialize(new
+                {
+                    name = environment.Name, slug = environment.Slug, project = projectId
+                }),
+                workspaceId: workspaceId, ct: ct);
+        }
         return environment;
     }
 

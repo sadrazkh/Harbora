@@ -157,6 +157,12 @@ public class AppScopeCensusTests
             "The GET: renders a blank creation form with no project or environment chosen yet, the "
             + "same reason AppsController's own Create GET needs nothing — the POST overload is the "
             + "one that checks (AllowsAsync).",
+        ["DatabasesController.cs:Create(CreateServiceViewModel model"] =
+            "The POST hands the whole creation to DatabaseProvisioningService (round six, phase 0b), "
+            + "which the in-panel agent calls too, and that service asks the placement question "
+            + "itself (AllowsAsync on the resolved environment) — a scan of this method body cannot "
+            + "see it there. DatabaseProvisioningServiceTests proves a member scoped to another "
+            + "project is refused.",
 
         ["EmailProvidersController.cs:Create(string name"] =
             "BYO SMTP providers are a per-workspace credential catalogue (this file's own opening "

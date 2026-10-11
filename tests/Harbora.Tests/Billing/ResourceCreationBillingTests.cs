@@ -20,7 +20,7 @@ public sealed class ResourceCreationBillingTests
 
     [Theory]
     [InlineData("src/Harbora.Web/Controllers/AppsController.cs")]
-    [InlineData("src/Harbora.Web/Controllers/DatabasesController.cs")]
+    [InlineData("src/Harbora.Infrastructure/Services/DatabaseProvisioningService.cs")]
     [InlineData("src/Harbora.Infrastructure/Templates/TemplateDeploymentService.cs")]
     [InlineData("src/Harbora.Infrastructure/Projects/EnvironmentCloner.cs")]
     [InlineData("src/Harbora.Infrastructure/Projects/PreviewEnvironmentService.cs")]

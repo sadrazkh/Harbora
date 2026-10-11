@@ -1,5 +1,4 @@
 ﻿using System.Security.Cryptography;
-using System.Text.RegularExpressions;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Apps;
@@ -50,9 +49,31 @@ public sealed partial class DatabasesController(
     Harbora.Infrastructure.Backups.WalArchivingService walArchiving,
     Harbora.Infrastructure.Backups.PitrRestoreService pitrRestore,
     Harbora.Infrastructure.Services.DatabaseMaintenanceService maintenance,
-    Harbora.Application.Abstractions.ISystemClock clock) : Controller
+    Harbora.Application.Abstractions.ISystemClock clock,
+    // Round six (phase 0b): creation, removal and attach/detach live in these services now, which the
+    // in-panel agent calls too. DI always supplies both; see Provisioning below for why they are
+    // optional.
+    IDatabaseProvisioningService? provisioning = null,
+    IDatabaseAttachmentService? attachments = null) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
+
+    /// <summary>
+    /// The registered service, or — for a controller built by hand, as the tests that exercise its
+    /// other actions do — one built from the same dependencies this controller was handed, so it
+    /// behaves identically either way. That fallback is also the only reader left of
+    /// <c>scheduler</c> and <c>protector</c>, which the creation code used before it moved; they stay
+    /// in the constructor because those tests pass them by position.
+    /// </summary>
+    private IDatabaseProvisioningService Provisioning => provisioning ??= new DatabaseProvisioningService(
+        db, engine, quota, scheduler, protector, projects, access, creationBilling, audit, currentUser);
+
+    private IDatabaseAttachmentService Attachments =>
+        attachments ??= new DatabaseAttachmentService(db, access, audit, currentUser);
+
+    private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
+
+    private string InReadersLanguage(ServiceRefusal refusal) => IsFa ? refusal.MessageFa : refusal.Message;
 
     private bool IsFa => System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
 
@@ -531,136 +552,47 @@ public sealed partial class DatabasesController(
     [Authorize(Policy = Capabilities.DatabasesManage)]
     public async Task<IActionResult> Create(CreateServiceViewModel model, CancellationToken ct)
     {
-        // The operator's list, not the shipped one — the form offered theirs, and validating
-        // against a different list refuses the option the page just showed.
-        var catalog = await ServiceCatalogReader.EffectiveAsync(db, engine, ct);
-        var entry = catalog.FirstOrDefault(c => c.Type == model.Type);
-        if (entry is null) ModelState.AddModelError(nameof(model.Type), "Unknown service type.");
-        else if (!string.IsNullOrWhiteSpace(model.Version) &&
-                 !entry.Versions.Contains(model.Version, StringComparer.OrdinalIgnoreCase))
+        var request = new DatabaseCreateRequest(
+            WorkspaceId, currentUser.UserId ?? Guid.Empty, model.Name, model.Type, model.Version,
+            model.EnvironmentId, model.InstanceSizeKey, model.ServerId,
+            model.RedisEvictionPolicy, model.RedisMaxMemoryMb, ClientIp);
+
+        // A form that did not bind (an empty name) is never created. The service is still asked what
+        // else it would refuse, so the page shows those beside it, as it always has.
+        if (!ModelState.IsValid)
         {
-            ModelState.AddModelError(nameof(model.Version), "The selected database version is not supported.");
-        }
-
-        await using var quotaReservation = await quota.AcquireCreationLockAsync(WorkspaceId, ct);
-        var check = await quota.CanAddServiceAsync(WorkspaceId, model.InstanceSizeKey, ct);
-        if (!check.Allowed) ModelState.AddModelError(string.Empty, check.Reason ?? "Plan quota exceeded.");
-
-        var environment = await projects.ResolveEnvironmentAsync(WorkspaceId, model.EnvironmentId, ct);
-        if (!await access.AllowsAsync(
-                new ResourcePlacement(environment.ProjectId, environment.Id), Capabilities.DatabasesManage, ct))
-        {
-            ModelState.AddModelError(nameof(model.EnvironmentId),
-                "You do not have permission to create a database in this environment.");
-        }
-
-        if (!ModelState.IsValid) { await PopulateCreateAsync(ct); return View(model); }
-
-        var slug = Slugify(model.Name);
-        if (await db.ManagedServices.AnyAsync(s => s.WorkspaceId == WorkspaceId && s.ContainerName == $"harbora-svc-{slug}", ct))
-        {
-            ModelState.AddModelError(nameof(model.Name), "A service with this name already exists.");
+            AddCreateRefusals(await Provisioning.ValidateCreateAsync(request, ct));
             await PopulateCreateAsync(ct);
             return View(model);
         }
 
-        // The chosen tier, resolved before placement because placement needs to know how much this
-        // database is asking for.
-        var size = string.IsNullOrWhiteSpace(model.InstanceSizeKey)
-            ? null
-            : await db.InstanceSizes.FirstOrDefaultAsync(s => s.Key == model.InstanceSizeKey, ct);
-
-        // Placed the way an application is. This read `IsLocal` and nothing else, so a fleet could
-        // have a dozen nodes and every database still landed on the control plane's own machine —
-        // the panel's host filled up while the nodes it was scheduling applications onto sat empty,
-        // and there was no way to say otherwise.
-        var placement = model.ServerId is { } chosenServer && await db.Servers.AnyAsync(s => s.Id == chosenServer, ct)
-            ? await scheduler.CheckAsync(chosenServer, size?.MemoryBytes ?? 0, size?.CpuCores ?? 0, ct)
-            : await scheduler.PlaceAsync(size?.MemoryBytes ?? 0, size?.CpuCores ?? 0, null, ct);
-
-        if (!placement.Ok)
+        var outcome = await Provisioning.CreateAsync(request, ct);
+        if (!outcome.Ok)
         {
-            ModelState.AddModelError(string.Empty, placement.Reason ?? "No server has capacity for this database.");
+            AddCreateRefusals(outcome.Refusals);
             await PopulateCreateAsync(ct);
             return View(model);
         }
 
-        var serverId = placement.ServerId!.Value;
-        var service = new ManagedService
-        {
-            WorkspaceId = WorkspaceId,
-            EnvironmentId = environment.Id,
-            ServerId = serverId,
-            Name = model.Name,
-            Type = model.Type,
-            Version = string.IsNullOrWhiteSpace(model.Version)
-                ? entry!.Versions[0]
-                : entry!.Versions.First(v => string.Equals(v, model.Version, StringComparison.OrdinalIgnoreCase)),
-            Status = ServiceStatus.Provisioning,
-            ContainerName = $"harbora-svc-{slug}",
-            VolumeName = $"harbora-svc-{slug}-data",
-            InternalPort = entry!.InternalPort,
-            Username = "harbora",
-            DatabaseName = entry.HasDatabaseName ? slug.Replace('-', '_') : string.Empty,
-            EncryptedPassword = protector.Protect(Harbora.Infrastructure.Services.ServiceCredentials.Generate())
-        };
+        return RedirectToAction(nameof(Details), new { id = outcome.Value!.ServiceId });
+    }
 
-        // The chosen plan becomes the container's ceiling. Recorded on the row rather than read at
-        // provision time so it keeps what was agreed, and a tier later withdrawn from the catalogue
-        // does not silently un-limit a running database.
-        if (size is not null)
+    /// <summary>
+    /// A refusal's <see cref="ServiceRefusal.Field"/> is the request property it is about, named the
+    /// same as the form's; one with no field is a form-level error.
+    /// </summary>
+    private void AddCreateRefusals(IReadOnlyList<ServiceRefusal> refusals)
+    {
+        foreach (var refusal in refusals)
         {
-            service.InstanceSizeKey = size.Key;
-            service.MemoryLimitBytes = size.MemoryBytes;
-            service.DiskLimitBytes = size.DiskBytes;
-            service.CpuLimit = size.CpuCores;
+            var key = refusal.Field ?? string.Empty;
+
+            // The view model's own [Required] already said the name is missing; the service says it
+            // again for callers with no model binding, and the form should not say it twice.
+            if (key == nameof(CreateServiceViewModel.Name) && ModelState[key]?.Errors.Count > 0) continue;
+
+            ModelState.AddModelError(key, InReadersLanguage(refusal));
         }
-
-        // 1.6 (redis-eviction): chosen at creation rather than left to arrive at whatever Redis
-        // defaults to unasked — see RedisMemoryPolicy's own doc for why that default is wrong for
-        // half of all users either way. Refused by name rather than clamped, the same rule the
-        // Details-page change uses, so creation and the later change agree on what is allowed.
-        if (model.Type == ManagedServiceType.Redis)
-        {
-            var redisMaxMemoryBytes = model.RedisMaxMemoryMb is > 0 ? (long)model.RedisMaxMemoryMb * 1024 * 1024 : 0L;
-            if (Harbora.Infrastructure.Services.RedisMemoryPolicy.WhyRefused(
-                    model.RedisEvictionPolicy, redisMaxMemoryBytes, service.MemoryLimitBytes, isFa: IsFa) is { } redisRefusal)
-            {
-                ModelState.AddModelError(nameof(model.RedisEvictionPolicy), redisRefusal);
-                await PopulateCreateAsync(ct);
-                return View(model);
-            }
-
-            service.RedisEvictionPolicy = string.IsNullOrWhiteSpace(model.RedisEvictionPolicy)
-                ? null : model.RedisEvictionPolicy.Trim();
-            service.RedisMaxMemoryBytes = redisMaxMemoryBytes;
-        }
-
-        db.ManagedServices.Add(service);
-
-        // D1 (2026-08-25 shared-databases plan): the instance's own admin database, materialised as
-        // its first logical database so the very first attachment already has one to point at.
-        if (Harbora.Domain.Services.ManagedServiceDatabase.DefaultFor(service) is { } defaultDatabase)
-            db.ManagedServiceDatabases.Add(defaultDatabase);
-
-        try
-        {
-            await creationBilling.SaveAsync(WorkspaceId,
-                [new(Harbora.Domain.Billing.BilledResourceType.Service,
-                    service.Id, service.Name, service.InstanceSizeKey, service.ServerId)], ct);
-        }
-        catch (Harbora.Infrastructure.Billing.CreationPaymentRequiredException ex)
-        {
-            db.ChangeTracker.Clear();
-            ModelState.AddModelError(string.Empty, IsFa ? ex.ReasonFa : ex.Message);
-            await PopulateCreateAsync(ct);
-            return View(model);
-        }
-
-        await quotaReservation.CommitAsync(ct);
-
-        await engine.QueueProvisionAsync(service.Id, ct);
-        return RedirectToAction(nameof(Details), new { id = service.Id });
     }
 
     [HttpGet("{id:guid}")]
@@ -921,43 +853,16 @@ public sealed partial class DatabasesController(
     public async Task<IActionResult> Remove(Guid id, bool deleteData, string? confirmName, CancellationToken ct)
     {
         await Guard(id, ct);
-        var svc = await db.ManagedServices.FirstOrDefaultAsync(s => s.Id == id && s.WorkspaceId == WorkspaceId, ct);
+        var svc = await db.ManagedServices.AsNoTracking()
+            .FirstOrDefaultAsync(s => s.Id == id && s.WorkspaceId == WorkspaceId, ct);
         if (svc is null) return NotFound();
 
-        // C1 (2026-08-22 config-delivery plan): the AppStorageBucket/StorageController.Delete idiom
-        // — a database with apps still explicitly attached is refused by name, before EF's own
-        // DeleteBehavior.Restrict on AppManagedService.ManagedServiceId would ever turn this into a
-        // raw constraint violation. Apps still wired the pre-2026-08-22 way (a materialized
-        // EnvironmentVariable copy, no join row) are not caught here — ConfirmRemove's advisory list
-        // still names those, but this hard refusal is authoritative only for what it can enforce at
-        // the database level.
-        var attachedTo = await db.AppManagedServices.AsNoTracking()
-            .Where(ms => ms.ManagedServiceId == id)
-            .Select(ms => ms.App!.Name)
-            .ToListAsync(ct);
-
-        if (attachedTo.Count > 0)
+        // Apps still attached, replicas still streaming — DatabaseProvisioningService names them. Asked
+        // before the typed name, so a refusal is read before anyone is made to type anything.
+        var refusals = await Provisioning.ValidateRemoveAsync(id, ct);
+        if (refusals.Count > 0)
         {
-            TempData["Error"] = IsFa
-                ? $"این دیتابیس هنوز به {NamedList(attachedTo)} متصل است. برای حذف، ابتدا آن را از همه‌ی اپ‌ها جدا کنید."
-                : $"This database is still attached to {NamedList(attachedTo)}. Detach it from every app first, then delete it.";
-            return RedirectToAction(nameof(ConfirmRemove), new { id, deleteData });
-        }
-
-        // 3.2 (round-2 market-gaps plan): the same idiom as the attached-apps refusal just above, one
-        // relationship over — a primary with a live replica must not be deleted out from under it. The
-        // ManagedService.PrimaryManagedServiceId FK is Restrict at the database (HarboraDbContext) as
-        // the backstop; this is the named refusal an operator actually reads, before that ever becomes
-        // a raw constraint violation.
-        var replicaNames = await db.ManagedServices.AsNoTracking()
-            .Where(r => r.PrimaryManagedServiceId == id).Select(r => r.Name).ToListAsync(ct);
-
-        if (replicaNames.Count > 0)
-        {
-            TempData["Error"] = IsFa
-                ? $"این دیتابیس هنوز رپلیکای {NamedList(replicaNames)} را دارد. برای حذف، ابتدا آن‌ها را حذف کنید."
-                : $"This database still has {NamedList(replicaNames)} replicating from it. Delete the " +
-                  "replica(s) first, then delete the primary.";
+            TempData["Error"] = InReadersLanguage(refusals[0]);
             return RedirectToAction(nameof(ConfirmRemove), new { id, deleteData });
         }
 
@@ -968,10 +873,17 @@ public sealed partial class DatabasesController(
             return RedirectToAction(nameof(ConfirmRemove), new { id, deleteData });
         }
 
-        await engine.RemoveAsync(id, deleteData, ct);
-        TempData["Message"] = deleteData
-            ? $"{svc.Name} and its data were deleted."
-            : $"{svc.Name} was removed. Its data is still on the server in volume \"{svc.VolumeName}\".";
+        var outcome = await Provisioning.RemoveAsync(id, deleteData, ClientIp, ct);
+        if (!outcome.Ok)
+        {
+            TempData["Error"] = InReadersLanguage(outcome.Refusals[0]);
+            return RedirectToAction(nameof(ConfirmRemove), new { id, deleteData });
+        }
+
+        var removed = outcome.Value!;
+        TempData["Message"] = removed.DataDeleted
+            ? $"{removed.Name} and its data were deleted."
+            : $"{removed.Name} was removed. Its data is still on the server in volume \"{removed.VolumeName}\".";
         return RedirectToAction(nameof(Index));
     }
 
@@ -1172,94 +1084,34 @@ public sealed partial class DatabasesController(
     public async Task<IActionResult> Attach(
         Guid id, Guid appId, string? returnUrl, string? alias, Guid? databaseId, CancellationToken ct)
     {
+        // DatabaseAttachmentService asks both of these again — it has callers that are not this page.
+        // Asked here first because each has its own HTTP answer the service has no way to give.
         await Guard(id, ct);
         if (!await access.CanTouchAppAsync(appId, Capabilities.AppsEnv, ct)) return NotFound();
-        var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == appId && a.WorkspaceId == WorkspaceId, ct);
-        if (app is null) return NotFound();
 
-        // An environment is a private network, so it is also the wiring boundary. Without this the
-        // attach succeeded and wrote a hostname resolvable only on the other network — the service
-        // then started, looked healthy, and could not reach its database.
-        var service = await db.ManagedServices.FirstOrDefaultAsync(s => s.Id == id, ct);
-        if (service is null) return NotFound();
-
-        // 3.2 (round-2 market-gaps plan): a read replica is never attached to an app on its own — that
-        // would hand out a plain, unmarked DATABASE_URL for a connection that must never take a
-        // write, exactly the ambiguity the plan requires this feature to refuse. A replica surfaces
-        // automatically, as REPLICA_URL, the moment an app attaches its PRIMARY instead (see
-        // ReplicaAttachEnv).
-        if (service.PrimaryManagedServiceId is not null)
+        var outcome = await Attachments.AttachAsync(id, appId, alias, databaseId, ClientIp, ct);
+        if (!outcome.Ok)
         {
-            return BackTo(returnUrl, IsFa
-                ? $"«{service.Name}» یک رپلیکای فقط-خواندنی است و مستقیماً به اپی وصل نمی‌شود. " +
-                  "دیتابیس اصلی آن را وصل کنید — REPLICA_URL به‌صورت خودکار در دسترس اپ قرار می‌گیرد."
-                : $"'{service.Name}' is a read-only replica and cannot be attached to an app on its " +
-                  "own. Attach its primary instead — REPLICA_URL becomes available to the app " +
-                  "automatically.", error: true);
+            var refusal = outcome.Refusals[0];
+            switch (refusal.Field)
+            {
+                // A logical database that is not this instance's was always a 404, not a message.
+                case DatabaseRefusalFields.Database:
+                    return NotFound();
+                // The cross-network refusal always went to the database's own page, not back to
+                // wherever the form was posted from.
+                case DatabaseRefusalFields.Environment:
+                    TempData["Error"] = InReadersLanguage(refusal);
+                    return RedirectToAction(nameof(Details), new { id });
+                default:
+                    return BackTo(returnUrl, InReadersLanguage(refusal), error: true);
+            }
         }
 
-        var verdict = Harbora.Infrastructure.Networking.NetworkWiring.CanAttach(
-            app.EnvironmentId, service.EnvironmentId);
-        if (!verdict.Allowed)
-        {
-            TempData["Error"] = verdict.Reason;
-            return RedirectToAction(nameof(Details), new { id });
-        }
-
-        // D1 (2026-08-25 shared-databases plan): which logical database this attachment actually
-        // points at. A caller that names one gets exactly that database (refused if it does not
-        // belong to this instance); a caller that does not — every attach form this platform shipped
-        // before D3 builds a picker — gets the instance's own default database when it has one, which
-        // is what makes an attachment made today behave exactly as it always did. An instance with no
-        // logical database at all (Redis/RabbitMQ/NATS/Meilisearch, or a Postgres/MySQL/MariaDB row a
-        // migration has not reached) resolves to null, the same fallback every such attachment has
-        // always used.
-        Guid? resolvedDatabaseId;
-        if (databaseId is { } requestedDatabaseId)
-        {
-            var requested = await db.ManagedServiceDatabases.AsNoTracking()
-                .FirstOrDefaultAsync(d => d.Id == requestedDatabaseId && d.ManagedServiceId == id, ct);
-            if (requested is null) return NotFound();
-            resolvedDatabaseId = requested.Id;
-        }
-        else
-        {
-            resolvedDatabaseId = await db.ManagedServiceDatabases.AsNoTracking()
-                .Where(d => d.ManagedServiceId == id && d.IsDefault)
-                .Select(d => (Guid?)d.Id)
-                .FirstOrDefaultAsync(ct);
-        }
-
-        // The refusal this always gave — the same database attached to the same app twice — restated
-        // per logical database rather than per instance, so two different logical databases on the
-        // same instance may both be attached to one app (see the two partial indexes on
-        // AppManagedService in HarboraDbContext for the constraint this mirrors at the schema level).
-        var alreadyAttached = resolvedDatabaseId is { } attachedDatabaseId
-            ? await db.AppManagedServices.AnyAsync(x => x.AppId == appId && x.ManagedServiceDatabaseId == attachedDatabaseId, ct)
-            : await db.AppManagedServices.AnyAsync(
-                x => x.AppId == appId && x.ManagedServiceId == id && x.ManagedServiceDatabaseId == null, ct);
-
-        if (alreadyAttached)
-            return BackTo(returnUrl, IsFa ? "این دیتابیس از قبل به این اپ متصل است." : "This database is already attached.", error: true);
-
-        var existingAliases = await db.AppManagedServices
-            .Where(x => x.AppId == appId).Select(x => x.Alias).ToListAsync(ct);
-        var resolvedAlias = Harbora.Domain.Services.AppManagedServiceAlias.Resolve(alias, service.Name, existingAliases);
-
-        var maxOrder = await db.AppManagedServices
-            .Where(x => x.AppId == appId).Select(x => (int?)x.AttachOrder).MaxAsync(ct) ?? 0;
-
-        db.AppManagedServices.Add(new Harbora.Domain.Services.AppManagedService
-        {
-            AppId = appId, ManagedServiceId = id, ManagedServiceDatabaseId = resolvedDatabaseId, Alias = resolvedAlias,
-            AttachOrder = maxOrder + 1, HasUnpublishedChanges = true
-        });
-        await db.SaveChangesAsync(ct);
-        await audit.LogAsync("database.attached", "service", $"{id}:{appId}", HttpContext.Connection.RemoteIpAddress?.ToString(), workspaceId: WorkspaceId, ct: ct);
-
+        var attached = outcome.Value!;
         return BackTo(returnUrl, IsFa
-            ? $"«{service.Name}» به {app.Name} وصل شد و با نام {resolvedAlias}_* در دسترس است. متغیرهایش با استقرار بعدی این اپ اعمال می‌شوند."
-            : $"Attached '{service.Name}' to {app.Name}, reachable under {resolvedAlias}_*. Its variables apply on this app's next deploy.");
+            ? $"«{attached.ServiceName}» به {attached.AppName} وصل شد و با نام {attached.Alias}_* در دسترس است. متغیرهایش با استقرار بعدی این اپ اعمال می‌شوند."
+            : $"Attached '{attached.ServiceName}' to {attached.AppName}, reachable under {attached.Alias}_*. Its variables apply on this app's next deploy.");
     }
 
     /// <summary>
@@ -1271,23 +1123,12 @@ public sealed partial class DatabasesController(
     [Authorize(Policy = Capabilities.DatabasesManage)]
     public async Task<IActionResult> Detach(Guid id, Guid appId, string? returnUrl, Guid? databaseId, CancellationToken ct)
     {
+        // Asked here as well as in the service, for the reason Attach gives.
         await Guard(id, ct);
         if (!await access.CanTouchAppAsync(appId, Capabilities.AppsEnv, ct)) return NotFound();
 
-        // D1 (2026-08-25 shared-databases plan): naming which logical database disambiguates an app
-        // attached to two of them on the same instance. Every caller before D3 builds a picker still
-        // omits it and gets the pre-D1 behaviour verbatim — the one attachment this app has on this
-        // instance, whichever logical database it happens to point at.
-        var query = db.AppManagedServices.Where(x => x.AppId == appId && x.ManagedServiceId == id);
-        if (databaseId is { } requestedDatabaseId) query = query.Where(x => x.ManagedServiceDatabaseId == requestedDatabaseId);
-
-        var join = await query.FirstOrDefaultAsync(ct);
-        if (join is null)
-            return BackTo(returnUrl, IsFa ? "این اپ به این دیتابیس وصل نیست." : "This app is not attached to this database.", error: true);
-
-        db.AppManagedServices.Remove(join);
-        await db.SaveChangesAsync(ct);
-        await audit.LogAsync("database.detached", "service", $"{id}:{appId}", HttpContext.Connection.RemoteIpAddress?.ToString(), workspaceId: WorkspaceId, ct: ct);
+        var outcome = await Attachments.DetachAsync(id, appId, databaseId, ClientIp, ct);
+        if (!outcome.Ok) return BackTo(returnUrl, InReadersLanguage(outcome.Refusals[0]), error: true);
 
         return BackTo(returnUrl, IsFa
             ? "دیتابیس جدا شد. تا استقرار بعدی، کانتینر در حال اجرا هنوز رشتهٔ اتصال آن را دارد."
@@ -1452,22 +1293,6 @@ public sealed partial class DatabasesController(
     }
 
     /// <summary>
-    /// "2 apps: api, worker" — or past three, "5 apps: api, worker, cron and 2 more". The
-    /// <c>ProjectsController.Delete</c> refusal idiom, reused exactly as <c>StorageController</c>
-    /// already reused it for buckets.
-    /// </summary>
-    private string NamedList(IReadOnlyList<string> names)
-    {
-        const int shown = 3;
-        var listed = names.Count > shown
-            ? string.Join(IsFa ? "، " : ", ", names.Take(shown)) +
-              (IsFa ? $" و {names.Count - shown} مورد دیگر" : $" and {names.Count - shown} more")
-            : string.Join(IsFa ? "، " : ", ", names);
-
-        return IsFa ? $"{names.Count} اپ: {listed}" : $"{names.Count} app{(names.Count == 1 ? "" : "s")}: {listed}";
-    }
-
-    /// <summary>
     /// Ownership is not the whole question: a member scoped to projects belongs to the tenant that
     /// owns this database and still must not touch a project nobody put them on.
     /// </summary>
@@ -1497,12 +1322,6 @@ public sealed partial class DatabasesController(
     }
 
 
-    private static string Slugify(string name)
-    {
-        var slug = NonSlug().Replace(name.Trim().ToLowerInvariant(), "-").Trim('-');
-        return string.IsNullOrWhiteSpace(slug) ? "svc-" + Guid.NewGuid().ToString("N")[..6] : slug;
-    }
-
-    [GeneratedRegex("[^a-z0-9]+")]
-    private static partial Regex NonSlug();
+    /// <summary>The container-name rule creation uses, so a replica is named the same way.</summary>
+    private static string Slugify(string name) => DatabaseProvisioningService.Slugify(name);
 }

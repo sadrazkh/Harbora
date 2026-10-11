@@ -42,7 +42,7 @@ public sealed class WorkspaceGovernanceQuotaTests : IDisposable
 
     [Theory]
     [InlineData("src/Harbora.Web/Controllers/AppsController.cs")]
-    [InlineData("src/Harbora.Web/Controllers/DatabasesController.cs")]
+    [InlineData("src/Harbora.Infrastructure/Services/DatabaseProvisioningService.cs")]
     [InlineData("src/Harbora.Web/Controllers/BackupsController.cs")]
     [InlineData("src/Harbora.Web/Controllers/UsersController.cs")]
     [InlineData("src/Harbora.Web/Controllers/TenantsController.cs")]
