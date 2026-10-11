@@ -41,19 +41,20 @@ public class AssistantGuideTests
     }
 
     [Fact]
-    public async Task The_ai_chapter_renders_the_assistant_guide_with_both_of_its_tables()
+    public async Task The_ai_chapter_renders_the_assistant_guide_with_all_three_of_its_tables()
     {
         var html = await Library.ReadAsync("08-ai");
 
         html.Should().NotBeNull();
         Regex.IsMatch(html!, "<h2[^>]*>دستیار هوشمند پنل</h2>").Should().BeTrue(
             "the guide is a section of its own, under the exact heading the brief and the Help control use");
-        html.Should().Contain("تست مدل عامل").And.Contain("سه سطح تأیید");
+        html.Should().Contain("تست مدل عامل").And.Contain("سه سطح تأیید")
+            .And.Contain("رمزها: دکمهٔ قفل").And.Contain("جواب، رفتن و برگشتن");
 
         // Pipe syntax that Markdig does not recognise as a table is shown as a paragraph of pipes: the
-        // result-column table and the consent table are the two this guide has.
-        Regex.Matches(html!, "<table").Count.Should().Be(2);
-        html.Should().NotContain("|---").And.NotContain("| نتیجه");
+        // tools-by-kind table, the result-column table and the consent table are the three this guide has.
+        Regex.Matches(html!, "<table").Count.Should().Be(3);
+        html.Should().NotContain("|---").And.NotContain("| نتیجه").And.NotContain("| دسته");
     }
 
     [Fact]
@@ -68,6 +69,13 @@ public class AssistantGuideTests
         chapter.Should().Contain($"حداکثر {Fa(AgentConversationService.MaxMessageLength)} نویسه");
         chapter.Should().Contain($"{Fa(AgentConversationService.HistoryMessages)} پیام آخر");
         chapter.Should().Contain($"{Fa(AgentConversationService.ConversationListSize)} گفت‌وگوی آخر");
+
+        // The lock button's vault and the turn that outlives the request.
+        chapter.Should().Contain($"**{Fa((int)AgentSecretHandles.Lifetime.TotalMinutes)} دقیقه**",
+            "the lock button's 30 minutes are the vault's lifetime");
+        chapter.Should().Contain($"حداکثر {Fa(InMemoryAgentSecretVault.MaxPerPerson)} رمز همزمان");
+        chapter.Should().Contain($"نام تا {Fa(AgentSecretService.MaxNameLength)} نویسه و مقدار تا {Fa(AgentSecretService.MaxValueLength)} نویسه");
+        chapter.Should().Contain($"حداکثر {Fa((int)AgentConversationService.DefaultTurnDeadline.TotalMinutes)} دقیقه فرصت");
 
         // These two are written as words in the guide ("شش پرسش", "نه ابزار").
         AgentModelBench.Cases.Count.Should().Be(6);
