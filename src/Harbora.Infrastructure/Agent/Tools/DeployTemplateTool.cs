@@ -90,8 +90,8 @@ public sealed class DeployTemplateTool(
         var template = call.Template!;
         var manifest = call.Manifest!;
         var databases = call.Databases;
-        var projectSlug = await ExpectedProjectSlugAsync(context.WorkspaceId, call.ProjectName, ct);
-        var resource = manifest.Service is null ? await ExpectedAppSlugAsync(call.ResourceName, ct) : call.ResourceName;
+        var projectSlug = call.ProjectSlug;
+        var resource = call.AppSlug ?? call.ResourceName;
 
         var whatEn = manifest.Service is not null
             ? $"database {call.ResourceName} ({databases[^1]})"
@@ -167,6 +167,13 @@ public sealed class DeployTemplateTool(
             };
             return NotPossible(ex.Message, fa);
         }
+        catch
+        {
+            // Not a refusal (a save that lost a race on a unique name, say): the plan engine reports it, but
+            // the graph it staged goes first, in an order that cannot sever a required relationship.
+            DropStaged(db, before);
+            throw;
+        }
 
         await audit.LogAsync("template.deploy", "template", template.Id.ToString(),
             metadataJson: JsonSerializer.Serialize(new { projectId = deployed.ProjectId, dependencies = deployed.DependencyCount }),
@@ -203,12 +210,14 @@ public sealed class DeployTemplateTool(
         var state = deployment is null ? ((string En, string Fa, string Code)?)null : Describe(deployment);
 
         var summaryEn = $"Created project '{project.Slug}' from template {template.Name}";
-        var summaryFa = $"پروژهٔ «{project.Slug}» از قالب {template.Name} ساخته شد";
-        if (app is not null) { summaryEn += $", with app '{app.Slug}'"; summaryFa += $"، با اپ «{app.Slug}»"; }
+        var summaryFa = $"پروژهٔ «{project.Slug}» از قالب {(string.IsNullOrWhiteSpace(template.NameFa) ? template.Name : template.NameFa)}";
+        if (app is not null) { summaryEn += $", with app '{app.Slug}'"; summaryFa += $" با اپ «{app.Slug}»"; }
+        summaryFa += " ساخته شد";
         if (databases.Count > 0)
         {
-            summaryEn += $"; database(s) {string.Join(", ", databases.Select(d => d.Name))} are being provisioned";
-            summaryFa += $"؛ دیتابیس‌های {string.Join("، ", databases.Select(d => d.Name))} در حال آماده‌سازی‌اند";
+            // Queued, like everything long a tool starts: provisioning runs in the job queue.
+            summaryEn += $"; database(s) {string.Join(", ", databases.Select(d => d.Name))} are queued to be provisioned";
+            summaryFa += $"؛ دیتابیس‌های {string.Join("، ", databases.Select(d => d.Name))} در صف آماده‌سازی‌اند";
         }
         summaryEn += ".";
         summaryFa += ".";
@@ -233,12 +242,12 @@ public sealed class DeployTemplateTool(
     // ---- reading the call ----
 
     private sealed record Call(
-        AppTemplate? Template, TemplateManifest? Manifest, string ProjectName, string ResourceName,
+        AppTemplate? Template, TemplateManifest? Manifest, string ProjectName, string ProjectSlug, string ResourceName, string? AppSlug,
         string? Repository, string? GitRef, IReadOnlyDictionary<string, string> Variables, IReadOnlySet<string> Secrets,
         IReadOnlyList<string> Databases, string? Size, bool DeployNow, (string En, string Fa)? Error);
 
     private static Call No(string en, string fa) =>
-        new(null, null, "", "", null, null, new Dictionary<string, string>(), new HashSet<string>(), [], null, false, (en, fa));
+        new(null, null, "", "", "", null, null, null, new Dictionary<string, string>(), new HashSet<string>(), [], null, false, (en, fa));
 
     private async Task<Call> ReadAsync(JsonElement args, AgentToolContext context, CancellationToken ct)
     {
@@ -355,12 +364,28 @@ public sealed class DeployTemplateTool(
             return No(room.Reason ?? "Plan quota exceeded.", room.ReasonFa ?? room.Reason ?? "سقف پلن پر شده است.");
 
         var resourceName = AgentArgs.String(args, "name") ?? template.Name;
-        if (manifest.Service is null && ProjectService.Slugify(resourceName).Length == 0)
+        var projectName = AgentArgs.String(args, "project") ?? template.Name;
+
+        // The slugs the service will derive — ProjectService's rule for both — refused when taken rather
+        // than left to become "ghost-2": the card, and any later step of the plan that names them, were
+        // promised these. (The service would quietly suffix; the agent says so instead.)
+        var projectSlug = ProjectService.Slugify(projectName);
+        if (projectSlug.Length == 0)
+            return No($"'{projectName}' gives no usable project slug. Pass a project name in Latin letters.",
+                $"از «{projectName}» نامک قابل استفاده‌ای برای پروژه درنمی‌آید. نام پروژه را با حروف لاتین بدهید.");
+        if (await db.Projects.AnyAsync(p => p.WorkspaceId == context.WorkspaceId && p.Slug == projectSlug, ct))
+            return No($"A project '{projectSlug}' already exists. A template always creates a new project: pass another project name.",
+                $"پروژهٔ «{projectSlug}» از قبل هست. قالب همیشه پروژهٔ تازه می‌سازد: نام دیگری برای پروژه بدهید.");
+
+        var appSlug = manifest.Service is null ? ProjectService.Slugify(resourceName) : null;
+        if (appSlug is { Length: 0 })
             return No($"'{resourceName}' gives no usable app slug. Pass a name in Latin letters.",
                 $"از «{resourceName}» نامک قابل استفاده‌ای برای اپ درنمی‌آید. نامی با حروف لاتین بدهید.");
+        if (appSlug is not null && await db.Apps.IgnoreQueryFilters().AnyAsync(a => a.Slug == appSlug, ct))
+            return No($"'{appSlug}' is already taken on this platform — app names are shared across every workspace. Pass another name.",
+                $"«{appSlug}» قبلاً در پلتفرم استفاده شده است — نام اپ در کل پلتفرم مشترک است. نام دیگری بدهید.");
 
-        return new Call(template, manifest,
-            AgentArgs.String(args, "project") ?? template.Name, resourceName,
+        return new Call(template, manifest, projectName, projectSlug, resourceName, appSlug,
             repository, AgentArgs.String(args, "gitRef"), given,
             plan.Variables.Where(v => v.Secret).Select(v => v.Key).ToHashSet(StringComparer.Ordinal),
             databases, size, AgentArgs.Bool(args, "deployNow") ?? true, null);
@@ -374,27 +399,4 @@ public sealed class DeployTemplateTool(
 
     private static string Shown(string value) =>
         value.Length > ShownValueLength ? value[..ShownValueLength] + "…" : value;
-
-    /// <summary>The slug <c>ProjectService</c> will give the new project: its own rule, suffixed past the
-    /// workspace's taken slugs — for the card, since the service decides the real one.</summary>
-    private async Task<string> ExpectedProjectSlugAsync(Guid workspaceId, string name, CancellationToken ct)
-    {
-        var slug = ProjectService.Slugify(name);
-        if (slug.Length == 0) slug = "project";
-        var taken = await db.Projects.AsNoTracking().Where(p => p.WorkspaceId == workspaceId).Select(p => p.Slug).ToListAsync(ct);
-        var candidate = slug;
-        for (var n = 2; taken.Contains(candidate, StringComparer.OrdinalIgnoreCase); n++) candidate = $"{slug}-{n}";
-        return candidate;
-    }
-
-    /// <summary>The slug the service will give the app — platform-wide unique, suffixed — so a later step
-    /// of the plan can name it.</summary>
-    private async Task<string> ExpectedAppSlugAsync(string name, CancellationToken ct)
-    {
-        var slug = ProjectService.Slugify(name);
-        if (slug.Length == 0) slug = "app";
-        var candidate = slug;
-        for (var n = 2; await db.Apps.IgnoreQueryFilters().AnyAsync(a => a.Slug == candidate, ct); n++) candidate = $"{slug}-{n}";
-        return candidate;
-    }
 }

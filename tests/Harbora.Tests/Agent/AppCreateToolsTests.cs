@@ -202,6 +202,40 @@ public class AppCreateToolsTests
     }
 
     [Fact]
+    public async Task A_planned_project_offers_only_its_first_environment_unless_an_earlier_step_adds_another()
+    {
+        using var h = new AppToolsHarness();
+        var scope = new AgentPlanScope();
+        // create_project's convention: the project, with its default environment's slug.
+        scope.Add(new AgentPlannedResource(AgentResourceKinds.Project, "blog", Environment: "production"));
+
+        var production = await h.ValidateAsync(h.CreateApp(), new { name = "api", image = "nginx:alpine", project = "blog", environment = "production" }, scope);
+        var staging = await h.ValidateAsync(h.CreateApp(), new { name = "api", image = "nginx:alpine", project = "blog", environment = "staging" }, scope);
+        // add_environment's convention: the environment, with its project.
+        scope.Add(new AgentPlannedResource(AgentResourceKinds.Environment, "staging", Project: "blog"));
+        var stagingPlanned = await h.ValidateAsync(h.CreateApp(), new { name = "api", image = "nginx:alpine", project = "blog", environment = "staging" }, scope);
+
+        production.Ok.Should().BeTrue(production.Error);
+        staging.Ok.Should().BeFalse();
+        staging.Error.Should().Contain("only its 'production' environment");
+        stagingPlanned.Ok.Should().BeTrue(stagingPlanned.Error);
+        stagingPlanned.Creates.Should().Be(new AgentPlannedResource(AgentResourceKinds.App, "api", "blog", "staging"));
+    }
+
+    [Fact]
+    public async Task An_environment_an_earlier_step_adds_to_an_existing_project_is_accepted_and_asked_about_that_project()
+    {
+        using var h = new AppToolsHarness();
+        var scope = new AgentPlanScope();
+        scope.Add(new AgentPlannedResource(AgentResourceKinds.Environment, "staging", Project: h.ProjectSlug));
+
+        var verdict = await h.ValidateAsync(h.CreateApp(), new { name = "api", image = "nginx:alpine", project = h.ProjectSlug, environment = "staging" }, scope);
+
+        verdict.Ok.Should().BeTrue(verdict.Error);
+        verdict.Creates.Should().Be(new AgentPlannedResource(AgentResourceKinds.App, "api", h.ProjectSlug, "staging"));
+    }
+
+    [Fact]
     public async Task The_same_app_twice_in_one_plan_is_refused()
     {
         using var h = new AppToolsHarness();
@@ -311,6 +345,42 @@ public class AppCreateToolsTests
         var result = await h.ExecuteAsync(h.CreateApp(), new { name = "web", image = "nginx:alpine", deployNow = false });
 
         result.Ok.Should().BeTrue(result.Error);
+    }
+
+    /// <summary>A provisioning service that stages an app's whole graph and then throws, as a save that
+    /// lost a unique-slug race to another workspace does.</summary>
+    private sealed class StagesThenThrows(AppToolsHarness h) : Harbora.Infrastructure.Apps.IAppProvisioningService
+    {
+        public Task<IReadOnlyList<ServiceRefusal>> ValidateCreateAsync(Harbora.Infrastructure.Apps.AppCreateRequest request, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<ServiceRefusal>>([]);
+
+        public Task<ServiceOutcome<Harbora.Infrastructure.Apps.AppCreateResult>> CreateAsync(
+            Harbora.Infrastructure.Apps.AppCreateRequest request, CancellationToken ct)
+        {
+            var app = new Harbora.Domain.Apps.App
+            {
+                WorkspaceId = h.WorkspaceId, EnvironmentId = h.EnvironmentId, ServerId = h.Server.Id, Name = "web", Slug = "web"
+            };
+            app.Domains.Add(new Harbora.Domain.Networking.DomainName { Host = "web.apps.example.com", IsPrimary = true });
+            app.Volumes.Add(new Harbora.Domain.Apps.Volume { Name = "v", MountPath = "/data" });
+            app.EnvironmentVariables.Add(new Harbora.Domain.Apps.EnvironmentVariable { Key = "A", Value = "1" });
+            h.Db.Apps.Add(app);
+            throw new DbUpdateException("duplicate key value violates unique constraint \"IX_Apps_Slug\"");
+        }
+    }
+
+    [Fact]
+    public async Task A_create_that_throws_after_staging_the_app_leaves_nothing_tracked_and_lets_the_failure_through()
+    {
+        using var h = new AppToolsHarness();
+        var tool = new Harbora.Infrastructure.Agent.Tools.CreateAppTool(
+            h.Db, h.Agent.Resolver, h.Agent.Access, new StagesThenThrows(h), Microsoft.Extensions.Options.Options.Create(h.Billing));
+        var before = h.Snapshot();
+
+        var act = () => h.ExecuteAsync(tool, new { name = "web", image = "nginx:alpine" });
+
+        await act.Should().ThrowAsync<DbUpdateException>("it is not a refusal; the plan engine reports it as a failed step");
+        h.Snapshot().Should().Be(before, "the staged app, its domain, volume and variable were all dropped — dependents first");
     }
 
     // ---- deploy_template ------------------------------------------------------------------------
@@ -425,6 +495,32 @@ public class AppCreateToolsTests
         verdict.Error.Should().Contain(expected);
         verdict.ErrorFa.Should().MatchRegex("[؀-ۿ]");
         h.Snapshot().Should().Be(before);
+    }
+
+    [Fact]
+    public async Task A_taken_project_or_app_slug_is_refused_rather_than_quietly_suffixed()
+    {
+        using var h = new AppToolsHarness();
+        SeedTemplate(h);
+        h.SeedProject("ghost");
+        h.SeedForeignApp("blog");
+
+        var projectTaken = await h.ValidateAsync(h.DeployTemplate(), GhostArgs());
+        var appTaken = await h.ValidateAsync(h.DeployTemplate(), new
+        {
+            template = "ghost", name = "blog", project = "Ghost Blog",
+            variables = new Dictionary<string, string> { ["url"] = "https://blog.example.com", ["SMTP_PASSWORD"] = "x" }
+        });
+        var free = await h.ValidateAsync(h.DeployTemplate(), new
+        {
+            template = "ghost", name = "journal", project = "Ghost Blog",
+            variables = new Dictionary<string, string> { ["url"] = "https://blog.example.com", ["SMTP_PASSWORD"] = "x" }
+        });
+
+        projectTaken.Error.Should().Be("A project 'ghost' already exists. A template always creates a new project: pass another project name.");
+        appTaken.Error.Should().Contain("'blog' is already taken on this platform");
+        free.Ok.Should().BeTrue(free.Error);
+        free.Creates.Should().Be(new AgentPlannedResource(AgentResourceKinds.App, "journal", "ghost-blog", "production"));
     }
 
     [Fact]

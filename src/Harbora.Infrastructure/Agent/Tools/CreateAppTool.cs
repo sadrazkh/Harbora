@@ -158,7 +158,21 @@ public sealed partial class CreateAppTool(
         }
 
         var request = form.Request! with { EnvironmentId = place.Environment?.Id };
-        var outcome = await provisioning.CreateAsync(request, ct);
+        var before = AgentTracker.ForeignChanges(db);
+        ServiceOutcome<AppCreateResult> outcome;
+        try
+        {
+            outcome = await provisioning.CreateAsync(request, ct);
+        }
+        catch
+        {
+            // A refusal leaves nothing behind (the service attaches the app only after its checks), but an
+            // exception — the unique slug or host lost to another workspace in the same instant, which the
+            // service documents as surfacing this way — leaves the app's graph added. It goes first, leaves
+            // before the rows they hang off, so the plan engine's own clean-up has nothing left to trip on.
+            DropStaged(db, before);
+            throw;
+        }
         if (!outcome.Ok) return Failed(outcome.Refusals);
         var created = outcome.Value!;
 
@@ -382,19 +396,33 @@ public sealed partial class CreateAppTool(
             return new Place(found, owner, found.Slug, WillExist: false, found.ProjectId, Error: null);
         }
 
-        // Not there yet: fine only when an earlier step of this plan makes it.
+        // Not there yet: fine only when an earlier step of this plan makes it. create_project plans a
+        // project with its default environment's slug in Environment; add_environment plans an
+        // environment with its project in Project.
         var wantedProject = project.Trim().ToLowerInvariant();
         var wantedEnvironment = environment?.Trim().ToLowerInvariant();
-        var plannedProject = scope?.Plans(AgentResourceKinds.Project, wantedProject) == true;
+        var plannedProject = scope?.Planned.FirstOrDefault(p =>
+            p.Kind == AgentResourceKinds.Project && string.Equals(p.Name, wantedProject, StringComparison.OrdinalIgnoreCase));
         var plannedEnvironment = wantedEnvironment is not null && scope?.Planned.Any(p =>
             p.Kind == AgentResourceKinds.Environment
             && string.Equals(p.Name, wantedEnvironment, StringComparison.OrdinalIgnoreCase)
             && string.Equals(p.Project, wantedProject, StringComparison.OrdinalIgnoreCase)) == true;
-        if (!plannedProject && !plannedEnvironment) return Place.No(lookup.Error!, lookup.ErrorFa!);
 
-        var existing = plannedProject ? null : await Resolver.ProjectAsync(context, project, ct);
-        return new Place(null, existing?.Value?.Slug ?? wantedProject, wantedEnvironment ?? ProjectService.DefaultEnvironmentSlug,
-            WillExist: true, existing?.Value?.Id, Error: null);
+        if (plannedProject is not null)
+        {
+            var firstEnvironment = plannedProject.Environment ?? ProjectService.DefaultEnvironmentSlug;
+            if (wantedEnvironment is not null && !plannedEnvironment
+                && !string.Equals(wantedEnvironment, firstEnvironment, StringComparison.OrdinalIgnoreCase))
+                return Place.No(
+                    $"Project '{wantedProject}' is created by an earlier step with only its '{firstEnvironment}' environment; there is no '{wantedEnvironment}' in it.",
+                    $"پروژهٔ «{wantedProject}» در مرحلهٔ قبلی فقط با محیط «{firstEnvironment}» ساخته می‌شود و محیط «{wantedEnvironment}» ندارد.");
+            return new Place(null, wantedProject, wantedEnvironment ?? firstEnvironment, WillExist: true, ProjectId: null, Error: null);
+        }
+
+        if (!plannedEnvironment) return Place.No(lookup.Error!, lookup.ErrorFa!);
+        var existing = await Resolver.ProjectAsync(context, project, ct);
+        if (!existing.Found) return Place.No(existing.Error!, existing.ErrorFa!);
+        return new Place(null, existing.Value!.Slug, wantedEnvironment!, WillExist: true, existing.Value.Id, Error: null);
     }
 
     /// <summary>Placement access with AppsCreate, asked of the right place: the environment when it
