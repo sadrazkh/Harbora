@@ -8,6 +8,7 @@ using Harbora.Domain.Common;
 using Harbora.Domain.Features;
 using Harbora.Domain.Identity;
 using Harbora.Domain.Services;
+using Harbora.Domain.Tenancy;
 using Xunit;
 
 namespace Harbora.Tests;
@@ -20,10 +21,12 @@ namespace Harbora.Tests;
 /// <c>node --test</c> (Scripts/tests/assistant-*.test.mjs); this is the Razor half.
 ///
 /// <para>
-/// Each entitlement test runs in a workspace of its own with an explicit workspace-level grant. The
-/// shared fixture workspace sits on the seeded provider plan, which DbSeeder grants every feature,
-/// so a grant written there would leak into every other test in the collection. Assertions read
-/// <c>data-</c> attributes, never a sentence: this harness renders Persian by default.
+/// Every test runs in a workspace of its own and says what that workspace is entitled to. The shared
+/// fixture workspace is no place for this: other tests move it between plans (AppAddressHttpTests puts
+/// it on a plan of its own, where the assistant is Locked by default — the context tests below were
+/// first written against it and failed only in the full run), and a grant written on it would leak
+/// into every test after this one.
+/// Assertions read <c>data-</c> attributes, never a sentence: this harness renders Persian by default.
 /// </para>
 /// </summary>
 [Collection(HarboraHttpCollection.Name)]
@@ -31,12 +34,30 @@ public class AssistantPaneHttpTests(HarboraHttpFixture fixture)
 {
     private HarboraWebFactory Panel => fixture.Panel;
 
-    private Guid GivenWorkspaceWithAssistant(string slug, string email, FeatureState? state)
+    private sealed record Given(Guid WorkspaceId, Guid EnvironmentId);
+
+    /// <param name="state">The workspace-level decision, or null for none (the plan decides).</param>
+    /// <param name="planState">When set, the workspace is put on a plan of its own that decides this.</param>
+    private Given GivenWorkspaceWithAssistant(string slug, string email, FeatureState? state, FeatureState? planState = null)
     {
         var workspaceId = Guid.CreateVersion7();
+        var environmentId = Guid.CreateVersion7();
         Panel.Seed(db =>
         {
-            db.Workspaces.Add(new Workspace { Id = workspaceId, Name = slug, Slug = slug, IsDefault = false });
+            Guid? planId = null;
+            if (planState is { } p)
+            {
+                var plan = new Plan { Name = slug, NameFa = slug };
+                db.Plans.Add(plan);
+                db.FeatureGrants.Add(new FeatureGrant
+                {
+                    Scope = FeatureScope.Plan, TargetId = plan.Id,
+                    FeatureKey = PlatformFeatures.Assistant, State = p
+                });
+                planId = plan.Id;
+            }
+
+            db.Workspaces.Add(new Workspace { Id = workspaceId, Name = slug, Slug = slug, IsDefault = false, PlanId = planId });
             if (state is { } s)
             {
                 db.FeatureGrants.Add(new FeatureGrant
@@ -45,9 +66,17 @@ public class AssistantPaneHttpTests(HarboraHttpFixture fixture)
                     FeatureKey = PlatformFeatures.Assistant, State = s
                 });
             }
+
+            var projectId = Guid.CreateVersion7();
+            db.Projects.Add(new Harbora.Domain.Projects.Project { Id = projectId, WorkspaceId = workspaceId, Name = slug, Slug = slug });
+            db.Environments.Add(new Harbora.Domain.Projects.Environment
+            {
+                Id = environmentId, WorkspaceId = workspaceId, ProjectId = projectId,
+                Name = "Production", Slug = "production", IsDefault = true
+            });
         });
         Panel.GivenUser(workspaceId, email, SystemRole.Owner);
-        return workspaceId;
+        return new Given(workspaceId, environmentId);
     }
 
     private static async Task<IDocument> PageAsync(HttpClient client, string path)
@@ -134,15 +163,18 @@ public class AssistantPaneHttpTests(HarboraHttpFixture fixture)
     [Fact]
     public async Task A_workspace_nobody_decided_for_follows_its_plan()
     {
-        // No workspace grant: the plan decides. This workspace has no plan of its own, so it is on the
-        // platform default — the provider plan, which DbSeeder grants every feature.
-        GivenWorkspaceWithAssistant("assistant-inherit", "assistant-inherit@example.com", state: null);
-        var client = await Panel.SignedInAs("198.51.100.134", "assistant-inherit@example.com");
+        // No workspace-level grant, so the plan's decision is the answer — the same resolution the
+        // sidebar's Feature: items get, because both read FeatureView.
+        GivenWorkspaceWithAssistant("assistant-plan-locked", "assistant-plan-locked@example.com", state: null, planState: FeatureState.Locked);
+        GivenWorkspaceWithAssistant("assistant-plan-enabled", "assistant-plan-enabled@example.com", state: null, planState: FeatureState.Enabled);
 
-        var document = await PageAsync(client, "/apps");
+        var locked = await PageAsync(await Panel.SignedInAs("198.51.100.134", "assistant-plan-locked@example.com"), "/apps");
+        locked.QuerySelector("header [data-assistant-state='locked']").Should().NotBeNull();
+        locked.GetElementById("assistant-panel").Should().BeNull();
 
-        document.QuerySelector("header [data-assistant-state='enabled']").Should().NotBeNull();
-        document.GetElementById("assistant-panel").Should().NotBeNull();
+        var enabled = await PageAsync(await Panel.SignedInAs("198.51.100.139", "assistant-plan-enabled@example.com"), "/apps");
+        enabled.QuerySelector("header [data-assistant-state='enabled']").Should().NotBeNull();
+        enabled.GetElementById("assistant-panel").Should().NotBeNull();
     }
 
     [Fact]
@@ -173,35 +205,35 @@ public class AssistantPaneHttpTests(HarboraHttpFixture fixture)
     [Fact]
     public async Task The_app_details_page_tells_the_assistant_which_app_this_is()
     {
+        var given = GivenWorkspaceWithAssistant("assistant-context-app", "assistant-context-app@example.com", FeatureState.Enabled);
         var app = new App
         {
-            WorkspaceId = fixture.WorkspaceId, EnvironmentId = fixture.DefaultEnvironmentId, ServerId = Guid.CreateVersion7(),
+            WorkspaceId = given.WorkspaceId, EnvironmentId = given.EnvironmentId, ServerId = Guid.CreateVersion7(),
             Name = "assistant-context-app", Slug = "assistant-context-app",
             SourceType = AppSourceType.PrebuiltImage, PrebuiltImage = "ghcr.io/example/assistant:1.0", Status = AppStatus.Running
         };
         Panel.Seed(db => db.Apps.Add(app));
-        Panel.GivenUser(fixture.WorkspaceId, "assistant-context-app@example.com", SystemRole.Owner);
         var client = await Panel.SignedInAs("198.51.100.136", "assistant-context-app@example.com");
 
         var context = ContextOf(await PageAsync(client, $"/apps/details/{app.Id}"));
 
         context.GetProperty("appId").GetGuid().Should().Be(app.Id);
-        context.GetProperty("environmentId").GetGuid().Should().Be(fixture.DefaultEnvironmentId);
+        context.GetProperty("environmentId").GetGuid().Should().Be(given.EnvironmentId);
         context.GetProperty("serviceId").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
     [Fact]
     public async Task The_database_details_page_tells_the_assistant_which_database_this_is()
     {
+        var given = GivenWorkspaceWithAssistant("assistant-context-db", "assistant-context-db@example.com", FeatureState.Enabled);
         var service = new ManagedService
         {
-            WorkspaceId = fixture.WorkspaceId, EnvironmentId = fixture.DefaultEnvironmentId, ServerId = Guid.CreateVersion7(),
+            WorkspaceId = given.WorkspaceId, EnvironmentId = given.EnvironmentId, ServerId = Guid.CreateVersion7(),
             Name = "assistant-context-db", Type = ManagedServiceType.PostgreSql, Version = "16", Status = ServiceStatus.Running,
             ContainerName = "harbora-svc-assistant-context-db", InternalPort = 5432, Username = "harbora",
             DatabaseName = "assistant_context_db", VolumeName = "harbora-svc-assistant-context-db-data"
         };
         Panel.Seed(db => db.ManagedServices.Add(service));
-        Panel.GivenUser(fixture.WorkspaceId, "assistant-context-db@example.com", SystemRole.Owner);
         var client = await Panel.SignedInAs("198.51.100.137", "assistant-context-db@example.com");
 
         var context = ContextOf(await PageAsync(client, $"/databases/{service.Id}"));
@@ -213,12 +245,12 @@ public class AssistantPaneHttpTests(HarboraHttpFixture fixture)
     [Fact]
     public async Task A_page_that_declares_no_context_sends_none()
     {
-        Panel.GivenUser(fixture.WorkspaceId, "assistant-context-none@example.com", SystemRole.Owner);
+        GivenWorkspaceWithAssistant("assistant-context-none", "assistant-context-none@example.com", FeatureState.Enabled);
         var client = await Panel.SignedInAs("198.51.100.138", "assistant-context-none@example.com");
 
         var drawer = (await PageAsync(client, "/apps")).GetElementById("assistant-panel");
 
-        drawer.Should().NotBeNull("the shared workspace is on the provider plan, which has the assistant");
+        drawer.Should().NotBeNull();
         drawer!.HasAttribute("data-assistant-context").Should().BeFalse(
             "a list page has no single resource for \"this\" to mean, and must not invent one");
     }
