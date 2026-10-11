@@ -373,6 +373,27 @@ public class ProjectToolsTests
     }
 
     [Fact]
+    public async Task A_volume_protected_after_validation_stops_the_delete_before_anything_goes()
+    {
+        using var rig = new DatabaseToolRig();
+        var (project, production) = rig.SeedProject("store", "Store");
+        var web = rig.SeedApp("store-web", production.Id);
+        rig.SeedDatabase("store-db", production.Id);
+        (await rig.ValidateAsync(rig.DeleteProject(), """{"project":"store"}""")).Ok.Should().BeTrue();
+        rig.Db.Volumes.Add(new Volume { AppId = web.Id, Name = "store-web-data", MountPath = "/data", Protected = true });
+        await rig.Db.SaveChangesAsync();
+        var before = rig.Counts();
+
+        var result = await rig.ExecuteAsync(rig.DeleteProject(), """{"project":"store"}""");
+
+        result.Ok.Should().BeFalse();
+        result.Error.Should().Contain("protected volume");
+        rig.Counts().Should().Be(before);
+        rig.AppOps.Deleted.Should().BeEmpty();
+        (await rig.Db.Projects.AnyAsync(p => p.Id == project.Id)).Should().BeTrue();
+    }
+
+    [Fact]
     public async Task A_project_that_is_only_partly_deleted_is_a_failure_naming_what_is_left()
     {
         using var rig = new DatabaseToolRig();

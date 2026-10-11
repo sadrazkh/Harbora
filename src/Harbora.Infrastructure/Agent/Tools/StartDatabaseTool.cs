@@ -116,6 +116,13 @@ public sealed class StartDatabaseTool(
         if (service!.Status == ServiceStatus.Running)
             return (null, AgentValidation.Refused($"{service.Name} is already running.", $"{service.Name} از قبل روشن است."));
 
+        // The engine marks the row running whether or not it found a container to start, so starting one that
+        // is still being provisioned would report a running database that is not there yet.
+        if (service.Status == ServiceStatus.Provisioning)
+            return (null, AgentValidation.Refused(
+                $"{service.Name} is still being provisioned; it starts by itself when that finishes.",
+                $"{service.Name} هنوز در حال آماده‌سازی است؛ پس از پایان آن خودش روشن می‌شود."));
+
         var mayStart = await billingGate.CanStartAsync(context.WorkspaceId, BilledResourceType.Service, service.Id, ct);
         if (!mayStart.Allowed) return (null, QuotaRefused(mayStart));
 

@@ -331,6 +331,7 @@ public class DatabaseToolsTests
         var row = await rig.Db.AppManagedServices.SingleAsync();
         (row.AppId, row.ManagedServiceId, row.Alias, row.HasUnpublishedChanges).Should().Be((web.Id, shop.Id, "MAIN", true));
         result.SummaryEn.Should().Be("Attached shop-db to web as MAIN_*; it takes effect on web's next deploy.");
+        result.SummaryFa.Should().Be("دیتابیس shop-db با پیشوند MAIN_* به اپ web وصل شد؛ با استقرار بعدی web اعمال می‌شود.");
         result.Links!.Select(l => l.Url).Should().Equal($"/databases/{shop.Id}", $"/apps/details/{web.Id}");
         rig.H.Audit.Entries.Should().ContainSingle(e => e.Action == "database.attached");
     }
@@ -469,6 +470,7 @@ public class DatabaseToolsTests
         (await rig.Db.ManagedServices.AsNoTracking().SingleAsync(s => s.Id == shop.Id)).EncryptedPassword.Should().NotBe(oldCipher);
         result.ResultJson.Should().Contain("\"redeploy\":[\"legacy\",\"web\"]");
         result.SummaryEn.Should().Be("Rotated the password of shop-db. Redeploy legacy, web so they use it.");
+        result.SummaryFa.Should().Be("رمز دیتابیس shop-db عوض شد. legacy، web را دوباره مستقر کنید تا از رمز تازه استفاده کنند.");
         result.Links!.Select(l => l.Kind).Should().Equal("database", "app", "app");
         string[] everything = [result.ResultJson, result.SummaryEn!, result.SummaryFa!];
         everything.Should().NotContain(text => text.Contains(ToolEngine.NewPassword) || text.Contains("OldPassw0rd"));
@@ -598,6 +600,7 @@ public class DatabaseToolsTests
 
         started.Ok.Should().BeTrue(started.Error);
         started.SummaryEn.Should().Be("Started idle.");
+        started.SummaryFa.Should().Be("دیتابیس idle راه‌اندازی شد.");
         refused.Should().BeEquivalentTo(new { Ok = false, Error = "Suspended by the provider.", ErrorFa = "توسط مدیر پلتفرم معلق شده است." });
         (await rig.Db.ManagedServices.AsNoTracking().SingleAsync(s => s.Name == "other")).Status.Should().Be(ServiceStatus.Stopped);
     }
@@ -659,6 +662,7 @@ public class DatabaseToolsTests
         rig.Engine.Removed.Should().Equal((shop.Id, false));
         (await rig.Db.ManagedServices.CountAsync()).Should().Be(0);
         result.SummaryEn.Should().Be("Deleted shop-db; its data is kept on the server in volume harbora-svc-shop-db-data.");
+        result.SummaryFa.Should().Be("دیتابیس shop-db حذف شد؛ داده‌هایش در والیوم harbora-svc-shop-db-data روی سرور مانده است.");
         result.ResultJson.Should().Contain("\"dataDeleted\":false");
         rig.H.Audit.Entries.Should().ContainSingle(e => e.Action == "database.removed");
     }
@@ -676,6 +680,122 @@ public class DatabaseToolsTests
         result.Ok.Should().BeFalse();
         rig.Engine.Removed.Should().BeEmpty();
         (await rig.Db.ManagedServices.CountAsync()).Should().Be(1);
+    }
+
+    // ---- every tool: validation changes nothing; who may not -----------------------------------
+
+    [Theory]
+    [InlineData("create_project", """{"name":"Shop","slug":"shop"}""")]
+    [InlineData("add_environment", """{"project":"__P__","name":"staging"}""")]
+    [InlineData("create_database", """{"name":"new-db","engine":"postgresql","project":"__P__"}""")]
+    [InlineData("attach_database", """{"database":"shop-db","app":"web"}""")]
+    [InlineData("detach_database", """{"database":"linked-db","app":"web"}""")]
+    [InlineData("rotate_database_password", """{"database":"shop-db"}""")]
+    [InlineData("stop_database", """{"database":"shop-db"}""")]
+    [InlineData("start_database", """{"database":"idle"}""")]
+    [InlineData("delete_database", """{"database":"idle","deleteData":true}""")]
+    [InlineData("delete_project", """{"project":"store"}""")]
+    public async Task Every_tools_validation_accepts_a_sound_step_and_leaves_nothing_behind(string tool, string json)
+    {
+        using var rig = new DatabaseToolRig();
+        var web = rig.SeedApp("web");
+        rig.SeedDatabase("shop-db");
+        rig.SeedDatabase("idle", status: ServiceStatus.Stopped);
+        rig.AttachRow(web, rig.SeedDatabase("linked-db"));
+        var (_, storeProduction) = rig.SeedProject("store", "Store");
+        rig.SeedApp("store-web", storeProduction.Id);
+        rig.SeedDatabase("store-db", storeProduction.Id);
+        var before = rig.Counts();
+
+        var verdict = await rig.ValidateAsync(rig.All().Single(t => t.Name == tool), json.Replace("__P__", rig.ProjectSlug));
+
+        verdict.Ok.Should().BeTrue(verdict.Error);
+        verdict.TitleEn.Should().NotBeNullOrWhiteSpace();
+        verdict.TitleFa.Should().NotBeNullOrWhiteSpace().And.NotBe(verdict.TitleEn);
+        verdict.DetailFa.Should().NotBeNullOrWhiteSpace().And.NotBe(verdict.DetailEn);
+        (verdict.WarningsFa?.Count ?? 0).Should().Be(verdict.WarningsEn?.Count ?? 0, "every warning in both languages");
+        rig.Counts().Should().Be(before);
+        rig.PendingChanges.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData("detach_database", """{"database":"shop-db","app":"web"}""")]
+    [InlineData("rotate_database_password", """{"database":"shop-db"}""")]
+    [InlineData("stop_database", """{"database":"shop-db"}""")]
+    [InlineData("start_database", """{"database":"idle"}""")]
+    [InlineData("delete_database", """{"database":"idle"}""")]
+    public async Task A_viewer_or_a_scoped_member_without_a_grant_cannot_touch_a_database(string tool, string json)
+    {
+        foreach (var (role, scoped) in new[] { (SystemRole.Viewer, false), (SystemRole.Member, true) })
+        {
+            using var rig = new DatabaseToolRig(role, scoped);
+            var shop = rig.SeedDatabase("shop-db");
+            rig.SeedDatabase("idle", status: ServiceStatus.Stopped);
+            rig.AttachRow(rig.SeedApp("web"), shop);
+            var before = rig.Counts();
+            var named = json.Contains("idle") ? "idle" : "shop-db";
+
+            var verdict = await rig.ValidateAsync(rig.All().Single(t => t.Name == tool), json);
+            var result = await rig.ExecuteAsync(rig.All().Single(t => t.Name == tool), json);
+
+            verdict.Ok.Should().BeFalse($"{role} scoped={scoped}");
+            verdict.Error.Should().Be(scoped
+                ? $"No database named '{named}' that you can see."
+                : DatabaseRefusals.ServiceNotFound.Message, "seeing is not touching, and not seeing reads as not there");
+            result.Ok.Should().BeFalse();
+            rig.Counts().Should().Be(before);
+        }
+    }
+
+    [Fact]
+    public async Task Stop_and_start_leave_a_database_that_is_still_being_provisioned_alone()
+    {
+        using var rig = new DatabaseToolRig();
+        rig.SeedDatabase("fresh", status: ServiceStatus.Provisioning);
+
+        var stop = await rig.ValidateAsync(rig.Stop(), """{"database":"fresh"}""");
+        var start = await rig.ValidateAsync(rig.Start(), """{"database":"fresh"}""");
+
+        stop.Error.Should().Be("fresh is not running (it is provisioning), so there is nothing to stop.");
+        start.Error.Should().Be("fresh is still being provisioned; it starts by itself when that finishes.");
+        start.ErrorFa.Should().Contain("آماده‌سازی");
+    }
+
+    [Fact]
+    public async Task A_database_started_or_removed_after_validation_is_refused_at_execute()
+    {
+        using var rig = new DatabaseToolRig();
+        var idle = rig.SeedDatabase("idle", status: ServiceStatus.Stopped);
+        var shop = rig.SeedDatabase("shop-db");
+        (await rig.ValidateAsync(rig.Start(), """{"database":"idle"}""")).Ok.Should().BeTrue();
+        (await rig.ValidateAsync(rig.Rotate(), """{"database":"shop-db"}""")).Ok.Should().BeTrue();
+
+        idle.Status = ServiceStatus.Running;
+        rig.Db.ManagedServices.Remove(shop);
+        await rig.Db.SaveChangesAsync();
+        var start = await rig.ExecuteAsync(rig.Start(), """{"database":"idle"}""");
+        var rotate = await rig.ExecuteAsync(rig.Rotate(), """{"database":"shop-db"}""");
+
+        start.Should().BeEquivalentTo(new { Ok = false, Error = "idle is already running." });
+        rotate.Should().BeEquivalentTo(new { Ok = false, Error = "No database named 'shop-db' that you can see." });
+        rig.Engine.Started.Should().BeEmpty();
+        rig.Engine.Rotated.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_rotation_that_fails_after_storing_the_new_password_says_the_password_changed()
+    {
+        using var rig = new DatabaseToolRig();
+        var oldCipher = rig.SeedDatabase("cache", type: ManagedServiceType.Redis).EncryptedPassword;
+        rig.Engine.RotateFailsAfterStoring = true;
+
+        var result = await rig.ExecuteAsync(rig.Rotate(), """{"database":"cache"}""");
+
+        result.Ok.Should().BeFalse();
+        result.Error.Should().StartWith("The password of cache was changed, but the rest of the rotation failed: The container could not be recreated");
+        result.ErrorFa.Should().StartWith("رمز cache عوض شد");
+        result.ResultJson.Should().Contain("\"rotated\":true");
+        (await rig.Db.ManagedServices.AsNoTracking().SingleAsync()).EncryptedPassword.Should().NotBe(oldCipher);
     }
 
     // ---- every tool: another workspace's database is not there ----------------------------------

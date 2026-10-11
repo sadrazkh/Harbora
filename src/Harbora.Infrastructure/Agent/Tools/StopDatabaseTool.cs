@@ -115,8 +115,13 @@ public sealed class StopDatabaseTool(
         var (service, refusal) = await ManagedDatabaseAsync(resolver, access, context, args, ct);
         if (refusal is not null) return (null, refusal);
 
+        // The panel offers Stop only on a running database; the same rule here.
         if (service!.Status == ServiceStatus.Stopped)
             return (null, AgentValidation.Refused($"{service.Name} is already stopped.", $"{service.Name} از قبل متوقف است."));
+        if (service.Status != ServiceStatus.Running)
+            return (null, AgentValidation.Refused(
+                $"{service.Name} is not running (it is {AgentResourceResolver.Lower(service.Status)}), so there is nothing to stop.",
+                $"{service.Name} در حال اجرا نیست (وضعیت: {AgentResourceResolver.Lower(service.Status)})، پس چیزی برای متوقف کردن نیست."));
 
         return (service, null);
     }

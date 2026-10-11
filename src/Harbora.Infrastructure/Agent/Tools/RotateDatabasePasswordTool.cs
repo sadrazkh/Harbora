@@ -112,6 +112,16 @@ public sealed class RotateDatabasePasswordTool(
             // they are redacted (by this database's passwords, then by shape) and cut before anyone reads them.
             var reason = AssistantRedaction.Redact(ex.Message, secrets).Text;
             if (reason.Length > 400) reason = reason[..400] + "…";
+
+            // Asked, not assumed: a failure after the new password was stored (recreating a Redis container,
+            // say) must not be reported as a password that did not change.
+            if (await StoredPasswordAsync(service.Id, ct) != before)
+                return new AgentToolResult(false,
+                    AgentJson.Serialize(new { database = service.Name, rotated = true, completed = false }),
+                    Error: $"The password of {service.Name} was changed, but the rest of the rotation failed: {reason} Check the database's page; the apps that use it need a redeploy.",
+                    ErrorFa: $"رمز {service.Name} عوض شد، ولی بقیهٔ کار ناموفق ماند: {reason} صفحهٔ دیتابیس را بررسی کنید؛ اپ‌های استفاده‌کننده باید دوباره مستقر شوند.",
+                    Links: [DatabaseLink(service.Id, service.Name)]);
+
             return AgentToolResult.Failed(
                 $"The password was not changed. {reason}",
                 $"رمز عوض نشد. {reason}");

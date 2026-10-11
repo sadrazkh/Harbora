@@ -251,6 +251,7 @@ internal sealed class ToolEngine(HarboraDbContext db, ISecretProtector protector
     public bool Hang { get; set; }
     public string? RotateRefusal { get; set; }
     public bool RotateDoesNothing { get; set; }
+    public bool RotateFailsAfterStoring { get; set; }
     public List<RotatedApp> Rewrites { get; } = [];
 
     public Task QueueProvisionAsync(Guid serviceId, CancellationToken ct)
@@ -294,6 +295,8 @@ internal sealed class ToolEngine(HarboraDbContext db, ISecretProtector protector
         var service = await db.ManagedServices.FirstAsync(s => s.Id == serviceId, ct);
         service.EncryptedPassword = protector.Protect(NewPassword);
         await db.SaveChangesAsync(ct);
+        if (RotateFailsAfterStoring)
+            throw new InvalidOperationException("The container could not be recreated with the new password.");
         return Rewrites.ToList();
     }
 
