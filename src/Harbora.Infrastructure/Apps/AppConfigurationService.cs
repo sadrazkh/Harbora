@@ -147,11 +147,16 @@ public sealed class AppConfigurationService(
     public async Task<ServiceOutcome<AppDomainAdded>> AddDomainAsync(
         AppActor actor, Guid appId, string? host, bool ssl, CancellationToken ct)
     {
+        // The lock first, then every check inside it: two adds of one host in this workspace are decided
+        // one after the other, and the second is refused as in use rather than failing on the unique
+        // index. (Another workspace claiming the same host in the same instant is not serialised by a
+        // per-workspace lock; the unique index on Host refuses that insert, as an exception.)
+        await using var quotaReservation = await quota.AcquireCreationLockAsync(actor.WorkspaceId, ct);
+
         var check = await CheckDomainAsync(actor, appId, host, track: true, ct);
         if (check.Refusal is { } refusal) return ServiceOutcome<AppDomainAdded>.Refused(refusal);
         var app = check.App!;
 
-        await using var quotaReservation = await quota.AcquireCreationLockAsync(actor.WorkspaceId, ct);
         var quotaCheck = await quota.CanAddGovernedResourcesAsync(actor.WorkspaceId, new GovernanceQuotaDelta(Domains: 1), ct);
         if (!quotaCheck.Allowed)
             return ServiceOutcome<AppDomainAdded>.Refused(
@@ -174,7 +179,7 @@ public sealed class AppConfigurationService(
 
     private sealed record DomainCheck(App? App, string Host, ServiceRefusal? Refusal);
 
-    /// <summary>Everything but the quota, which the add asks under the creation lock.</summary>
+    /// <summary>Everything but the quota. The add runs it inside the creation lock, the validate without one.</summary>
     private async Task<DomainCheck> CheckDomainAsync(AppActor actor, Guid appId, string? requested, bool track, CancellationToken ct)
     {
         var app = await ReachAsync(actor, appId, track, q => q.Include(a => a.Domains), ct);
@@ -298,11 +303,15 @@ public sealed class AppConfigurationService(
     public async Task<ServiceOutcome<AppVolumeAdded>> AddVolumeAsync(
         AppActor actor, Guid appId, string? mountPath, CancellationToken ct)
     {
+        // The lock first, then every check inside it. Nothing in the schema stops two volumes on one
+        // mount path (there is no unique index on it), so this ordering is the only thing that does:
+        // the second of two concurrent adds reads the first one's row and is refused as a duplicate.
+        await using var quotaReservation = await quota.AcquireCreationLockAsync(actor.WorkspaceId, ct);
+
         var check = await CheckVolumeAsync(actor, appId, mountPath, track: true, ct);
         if (check.Refusal is { } refusal) return ServiceOutcome<AppVolumeAdded>.Refused(refusal);
         var app = check.App!;
 
-        await using var quotaReservation = await quota.AcquireCreationLockAsync(actor.WorkspaceId, ct);
         var quotaCheck = await quota.CanAddGovernedResourcesAsync(actor.WorkspaceId, new GovernanceQuotaDelta(Volumes: 1), ct);
         if (!quotaCheck.Allowed)
             return ServiceOutcome<AppVolumeAdded>.Refused(

@@ -352,6 +352,40 @@ public sealed class AppConfigurationServiceTests
             ("app.volume_deleted", "shop:/data"), ("app.volume_detached", "shop:/uploads"));
     }
 
+    // ---- every check runs again inside the creation lock ----
+
+    [Fact]
+    public async Task A_volume_another_request_adds_while_this_one_waits_for_the_lock_is_seen_and_refused()
+    {
+        using var h = new AppServiceHarness();
+        var app = await SeedAppAsync(h);
+        (await h.Configuration().ValidateAddVolumeAsync(h.Actor, app.Id, "/data", default)).Should().BeEmpty();
+
+        // There is no unique index on (AppId, MountPath): only a duplicate check made inside the lock
+        // can see a row another request committed while this one waited for it.
+        h.OnCreationLock = other => other.Volumes.Add(new Volume { AppId = app.Id, Name = "shop-data", MountPath = "/data" });
+        var added = await h.Configuration().AddVolumeAsync(h.Actor, app.Id, "/data", default);
+
+        added.Refusals.Should().Equal(new ServiceRefusal("/data is already mounted.", "«/data» از قبل هست.", "MountPath"));
+        (await h.Db.Volumes.AsNoTracking().CountAsync(v => v.AppId == app.Id)).Should().Be(1);
+        h.Audit.Entries.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_host_another_request_claims_while_this_one_waits_for_the_lock_is_refused_as_in_use()
+    {
+        using var h = new AppServiceHarness();
+        var app = await SeedAppAsync(h);
+        var other = await SeedAppAsync(h, "other");
+        (await h.Configuration().ValidateAddDomainAsync(h.Actor, app.Id, "shop.mycompany.com", default)).Should().BeEmpty();
+
+        h.OnCreationLock = db => db.Domains.Add(new DomainName { AppId = other.Id, Host = "shop.mycompany.com", IsPrimary = true });
+        var added = await h.Configuration().AddDomainAsync(h.Actor, app.Id, "shop.mycompany.com", ssl: true, default);
+
+        added.Refusals.Should().Equal(new ServiceRefusal("This domain is already in use.", "این دامنه پیش‌تر استفاده شده است.", "Host"));
+        (await h.Db.Domains.AsNoTracking().CountAsync(d => d.Host == "shop.mycompany.com")).Should().Be(1);
+    }
+
     // ---- access, checked by the service itself ----
 
     [Fact]

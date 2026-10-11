@@ -45,10 +45,12 @@ public sealed class AppProvisioningServiceTests
 
         var entry = h.Audit.Entries.Should().ContainSingle().Which;
         entry.Action.Should().Be("app.created");
-        entry.TargetId.Should().Be(app.Id.ToString());
+        entry.TargetId.Should().Be("Shop API:shop-api", "the same {app}:{what} shape as the other app.* entries");
         entry.WorkspaceId.Should().Be(h.WorkspaceId, "IAuditLogger never defaults the workspace; the service must pass it");
         entry.IpAddress.Should().Be("203.0.113.9");
-        JsonDocument.Parse(entry.MetadataJson!).RootElement.GetProperty("slug").GetString().Should().Be("shop-api");
+        var metadata = JsonDocument.Parse(entry.MetadataJson!).RootElement;
+        metadata.GetProperty("slug").GetString().Should().Be("shop-api");
+        metadata.GetProperty("appId").GetGuid().Should().Be(app.Id);
     }
 
     [Fact]
@@ -360,6 +362,94 @@ public sealed class AppProvisioningServiceTests
         (await h.Db.Apps.IgnoreQueryFilters().CountAsync()).Should().Be(0);
         (await h.Db.GitProviders.IgnoreQueryFilters().CountAsync()).Should().Be(0);
         h.Audit.Entries.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_template_whose_manifest_does_not_parse_is_refused_by_name()
+    {
+        using var h = new AppServiceHarness();
+        var broken = new AppTemplate { Key = "broken", Name = "Broken", IsEnabled = true, ManifestJson = "not json at all" };
+        h.Db.AppTemplates.Add(broken);
+        await h.Db.SaveChangesAsync();
+        var request = h.ImageApp() with { TemplateId = broken.Id };
+
+        var validated = await h.Provisioning().ValidateCreateAsync(request, default);
+        var created = await h.Provisioning().CreateAsync(request, default);
+
+        validated.Should().Equal(new ServiceRefusal(
+            "The template 'Broken' cannot be used: its manifest does not parse.",
+            "قالب «Broken» قابل استفاده نیست: مانیفست آن خوانده نمی‌شود.",
+            nameof(AppCreateRequest.TemplateId)));
+        created.Refusals.Should().Equal(validated, "a plain app must not be created and called a template");
+        (await h.Db.Apps.IgnoreQueryFilters().CountAsync()).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task The_plans_scheduled_job_ceiling_is_refused_in_both_languages()
+    {
+        using var h = new AppServiceHarness();
+        h.Plan.MaxCronJobs = 1;
+        h.Db.Apps.Add(new App
+        {
+            WorkspaceId = h.WorkspaceId, EnvironmentId = h.Environment!.Id, Name = "nightly", Slug = "nightly",
+            SourceType = AppSourceType.PrebuiltImage, Kind = ServiceKind.Cron, CronExpression = "0 3 * * *", Command = "run"
+        });
+        await h.Db.SaveChangesAsync();
+        var request = h.ImageApp("Backup") with { Kind = ServiceKind.Cron, CronExpression = "0 4 * * *", Command = "backup" };
+
+        var validated = await h.Provisioning().ValidateCreateAsync(request, default);
+        var created = await h.Provisioning().CreateAsync(request, default);
+
+        validated.Should().Equal(new ServiceRefusal(
+            "The plan allows 1 scheduled job(s); this operation would use 2.",
+            "این پلن حداکثر 1 کار زمان‌بندی‌شده اجازه می‌دهد؛ این عملیات مصرف را به 2 می‌رساند."));
+        created.Refusals.Should().Equal(validated);
+        (await h.Db.Apps.CountAsync()).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task A_default_project_past_the_plans_ceiling_is_refused_alongside_every_other_reason()
+    {
+        // A workspace with a project but no environment at all: the create would have to make the
+        // default project, and the plan has no room for a second one.
+        using var h = new AppServiceHarness(withEnvironment: false);
+        h.Plan.MaxProjects = 1;
+        h.Db.Projects.Add(h.Project);
+        await h.Db.SaveChangesAsync();
+        var request = h.ImageApp() with { PrebuiltImage = null };
+
+        var validated = await h.Provisioning().ValidateCreateAsync(request, default);
+        var created = await h.Provisioning().CreateAsync(request, default);
+
+        validated.Should().HaveCount(2);
+        validated[0].Field.Should().Be(nameof(AppCreateRequest.PrebuiltImage),
+            "the form's own refusal is not dropped because a later one fired");
+        validated[1].Message.Should().Contain("project");
+        validated[1].MessageFa.Should().Contain("پروژه");
+        created.Refusals.Should().Equal(validated, "create reports everything validate does, not only the project ceiling");
+        (await h.Db.Projects.IgnoreQueryFilters().CountAsync()).Should().Be(1);
+        (await h.Db.Environments.IgnoreQueryFilters().CountAsync()).Should().Be(0);
+        (await h.Db.Apps.IgnoreQueryFilters().CountAsync()).Should().Be(0);
+    }
+
+    // ---- every check runs again inside the creation lock ----
+
+    [Fact]
+    public async Task A_slug_another_workspace_takes_while_this_create_waits_for_the_lock_is_refused_not_duplicated()
+    {
+        using var h = new AppServiceHarness();
+        var request = h.ImageApp(slug: "api");
+        (await h.Provisioning().ValidateCreateAsync(request, default)).Should().BeEmpty("nothing holds 'api' yet");
+
+        // Another request commits 'api' after that validate, while this create waits for the lock.
+        h.OnCreationLock = other => other.Apps.Add(new App
+        {
+            WorkspaceId = Guid.CreateVersion7(), Name = "theirs", Slug = "api", SourceType = AppSourceType.PrebuiltImage
+        });
+        var created = await h.Provisioning().CreateAsync(request, default);
+
+        created.Refusals.Should().ContainSingle().Which.Field.Should().Be(nameof(AppCreateRequest.Slug));
+        (await h.Db.Apps.IgnoreQueryFilters().CountAsync(a => a.Slug == "api")).Should().Be(1);
     }
 
     // ---- access ----

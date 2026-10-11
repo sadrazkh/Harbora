@@ -34,6 +34,8 @@ internal sealed class AppServiceHarness : IDisposable
     public const string RootDomain = "apps.example.com";
     public const string PanelDomain = "panel.example.com";
 
+    private readonly string _store = "app-services-" + Guid.NewGuid();
+
     public HarboraDbContext Db { get; }
     public Guid WorkspaceId { get; } = Guid.CreateVersion7();
     public Guid UserId { get; } = Guid.CreateVersion7();
@@ -55,7 +57,7 @@ internal sealed class AppServiceHarness : IDisposable
     public AppServiceHarness(WorkspaceRole role = WorkspaceRole.Admin, bool scoped = false, bool withEnvironment = true)
     {
         Db = new HarboraDbContext(new DbContextOptionsBuilder<HarboraDbContext>()
-            .UseInMemoryDatabase("app-services-" + Guid.NewGuid()).Options,
+            .UseInMemoryDatabase(_store).Options,
             new FixedWorkspaceScope(WorkspaceId));
 
         Project = new Project { WorkspaceId = WorkspaceId, Name = "Shop", Slug = "shop" };
@@ -85,9 +87,28 @@ internal sealed class AppServiceHarness : IDisposable
 
     public void Dispose() => Db.Dispose();
 
-    public AppActor Actor => new(WorkspaceId, UserId, "203.0.113.9");
+    public AppActor Actor => new(WorkspaceId, "203.0.113.9");
 
-    private QuotaService Quota() => new(Db, Options.Create(Billing));
+    /// <summary>
+    /// Runs once, the next time either service takes the workspace's creation lock, and is then
+    /// cleared — standing in for another request that commits while this one waits for the lock. A
+    /// check made before the lock cannot see what this writes; a check made inside it must.
+    /// </summary>
+    public Action<HarboraDbContext>? OnCreationLock { get; set; }
+
+    /// <summary>A second context over the same rows and workspace: another request, as far as EF knows.</summary>
+    public HarboraDbContext OtherRequest() => new(new DbContextOptionsBuilder<HarboraDbContext>()
+        .UseInMemoryDatabase(_store).Options, new FixedWorkspaceScope(WorkspaceId));
+
+    private IQuotaService Quota() => new LockHookQuota(new QuotaService(Db, Options.Create(Billing)), () =>
+    {
+        var hook = OnCreationLock;
+        OnCreationLock = null;
+        if (hook is null) return;
+        using var other = OtherRequest();
+        hook(other);
+        other.SaveChanges();
+    });
 
     private IConfiguration Config() => new ConfigurationBuilder()
         .AddInMemoryCollection(new Dictionary<string, string?> { ["PANEL_DOMAIN"] = PanelDomain })
@@ -99,7 +120,7 @@ internal sealed class AppServiceHarness : IDisposable
 
     public AppProvisioningService Provisioning() => new(
         Db, Quota(), Scheduler, new PassthroughProtector(), Audit, Deployments,
-        new ProjectService(Db, Clock, Quota()), Access(), Addresses(),
+        new ProjectService(Db, Clock, new QuotaService(Db, Options.Create(Billing))), Access(), Addresses(),
         new ResourceCreationBilling(Db, Clock, Options.Create(Billing)));
 
     public AppConfigurationService Configuration() => new(
@@ -172,6 +193,31 @@ internal sealed class AppServiceHarness : IDisposable
             Entries.Add(new Entry(action, targetType, targetId, ipAddress, metadataJson, workspaceId));
             return Task.CompletedTask;
         }
+    }
+
+    /// <summary>The real quota service, with a hook just after the creation lock is taken.</summary>
+    public sealed class LockHookQuota(IQuotaService inner, Action afterLock) : IQuotaService
+    {
+        public async Task<IQuotaReservation> AcquireCreationLockAsync(Guid workspaceId, CancellationToken ct)
+        {
+            var reservation = await inner.AcquireCreationLockAsync(workspaceId, ct);
+            afterLock();
+            return reservation;
+        }
+
+        public Task<WorkspaceUsage> GetUsageAsync(Guid workspaceId, CancellationToken ct) => inner.GetUsageAsync(workspaceId, ct);
+        public Task<QuotaCheck> CanAddAppAsync(Guid workspaceId, string? instanceSizeKey, Guid? excludeAppId, CancellationToken ct) =>
+            inner.CanAddAppAsync(workspaceId, instanceSizeKey, excludeAppId, ct);
+        public Task<QuotaCheck> CanAddServiceAsync(Guid workspaceId, string? instanceSizeKey, CancellationToken ct) =>
+            inner.CanAddServiceAsync(workspaceId, instanceSizeKey, ct);
+        public Task<QuotaCheck> CanAddGovernedResourcesAsync(Guid workspaceId, GovernanceQuotaDelta delta, CancellationToken ct) =>
+            inner.CanAddGovernedResourcesAsync(workspaceId, delta, ct);
+        public Task<QuotaCheck> CanAddWorkloadsAsync(Guid workspaceId, WorkloadQuotaDelta delta, CancellationToken ct) =>
+            inner.CanAddWorkloadsAsync(workspaceId, delta, ct);
+        public Task<QuotaCheck> CanQueueDeploymentAsync(Guid workspaceId, CancellationToken ct) =>
+            inner.CanQueueDeploymentAsync(workspaceId, ct);
+        public Task<QuotaCheck> CanUseBackupRetentionAsync(Guid workspaceId, int retentionCount, CancellationToken ct) =>
+            inner.CanUseBackupRetentionAsync(workspaceId, retentionCount, ct);
     }
 
     public sealed class StubScheduler : ISchedulerService

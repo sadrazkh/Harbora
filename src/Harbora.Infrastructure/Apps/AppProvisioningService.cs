@@ -29,7 +29,8 @@ namespace Harbora.Infrastructure.Apps;
 /// Validation and creation share every rule below; the differences are only the ones "no side effects"
 /// forces. Validation does not take the creation lock, reads the environment without creating the
 /// default one (<see cref="PeekEnvironmentAsync"/>), and asks the address and template questions of an
-/// app that is never attached to the context.
+/// app that is never attached to the context. Creation takes the lock before its first check and runs
+/// all of them inside it.
 /// </para>
 /// </summary>
 public sealed class AppProvisioningService(
@@ -50,6 +51,16 @@ public sealed class AppProvisioningService(
         var slug = await CheckFormAsync(request, refusals, ct);
         var size = await SizeAsync(request.InstanceSizeKey, ct);
         var environment = await PeekEnvironmentAsync(request.WorkspaceId, request.EnvironmentId, ct);
+
+        // The create would make this workspace's default project and environment first, and
+        // ProjectService refuses that past the plan's ceilings — ask the same question it asks.
+        if (environment is null)
+        {
+            var check = await quota.CanAddGovernedResourcesAsync(request.WorkspaceId,
+                new GovernanceQuotaDelta(Projects: 1, Environments: 1), ct);
+            if (!check.Allowed) refusals.Add(AppRefusals.Quota(check, "Plan quota exceeded.", "سقف پلن پر شده است."));
+        }
+
         var placed = await CheckWorkspaceAsync(request, size, environment, refusals, ct);
         if (refusals.Count > 0) return refusals;
 
@@ -66,17 +77,20 @@ public sealed class AppProvisioningService(
 
     public async Task<ServiceOutcome<AppCreateResult>> CreateAsync(AppCreateRequest request, CancellationToken ct)
     {
+        // Taken before the first check, not after the cheap ones: every answer below — the slug is
+        // free, the plan has room, the typed host is not in use — is then read while no other creation
+        // in this workspace can change it, and stays true until the app and its first-hour debit
+        // commit. A validate that ran earlier proves nothing here; the world may have moved since.
+        await using var quotaReservation = await quota.AcquireCreationLockAsync(request.WorkspaceId, ct);
+
         var refusals = new List<ServiceRefusal>();
         var slug = await CheckFormAsync(request, refusals, ct);
         var size = await SizeAsync(request.InstanceSizeKey, ct);
 
-        // Keep the count we are about to read stable until the app and its first-hour debit commit.
-        await using var quotaReservation = await quota.AcquireCreationLockAsync(request.WorkspaceId, ct);
-
         // The environment id is a writable form value. Workspace ownership alone is not enough: a
         // project-scoped member must not create an app in another project in the same workspace —
         // CheckWorkspaceAsync asks that of whatever this resolves to.
-        Environment environment;
+        Environment? environment;
         try
         {
             environment = await projects.ResolveEnvironmentAsync(request.WorkspaceId, request.EnvironmentId, ct);
@@ -84,15 +98,19 @@ public sealed class AppProvisioningService(
         catch (QuotaRefusedException ex)
         {
             // Only reachable for a workspace with no environment at all, whose default project would
-            // cross the plan's project ceiling. Nothing was saved: ProjectService refuses before it
-            // builds the project. It used to escape the form as an unhandled exception.
-            return ServiceOutcome<AppCreateResult>.Refused(new ServiceRefusal(ex.Message, ex.ReasonFa ?? ex.Message));
+            // cross the plan's ceilings. Nothing was saved: ProjectService refuses before it builds the
+            // project. It used to escape the form as an unhandled exception; it is now one refusal
+            // among the others, and the rest of the checks still run so all of them are reported.
+            refusals.Add(AppRefusals.Quota(new QuotaCheck(false, ex.Message, ex.ReasonFa),
+                "Plan quota exceeded.", "سقف پلن پر شده است."));
+            environment = null;
         }
 
         var placed = await CheckWorkspaceAsync(request, size, environment, refusals, ct);
         if (refusals.Count > 0) return ServiceOutcome<AppCreateResult>.Refused(refusals);
 
-        var app = Shape(request, slug, size, environment.Id, placed.ServerId!.Value);
+        // Not null here: a refused default environment added a refusal above.
+        var app = Shape(request, slug, size, environment!.Id, placed.ServerId!.Value);
 
         // One rule, one place. This used to derive the host inline, check reserved names inline, and
         // then silently skip the insert when the name was taken — so an app could be created with no
@@ -145,9 +163,12 @@ public sealed class AppProvisioningService(
 
         await quotaReservation.CommitAsync(ct);
 
-        await audit.LogAsync("app.created", "app", app.Id.ToString(), request.ClientIp,
+        // The same "{app}:{what}" target shape as every other app.* entry these services write, the
+        // slug being the "what" here because it is the one name that is unique; the id is in metadata.
+        await audit.LogAsync("app.created", "app", $"{app.Name}:{app.Slug}", request.ClientIp,
             metadataJson: JsonSerializer.Serialize(new
             {
+                appId = app.Id,
                 name = app.Name,
                 slug = app.Slug,
                 sourceType = app.SourceType.ToString(),

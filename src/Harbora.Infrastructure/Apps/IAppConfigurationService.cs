@@ -3,9 +3,18 @@ using Harbora.Application.Abstractions;
 
 namespace Harbora.Infrastructure.Apps;
 
-/// <summary>Who is changing an app: the workspace the change happens in, the person, and — for the audit
-/// entry — the address the request came from, when there is a request.</summary>
-public sealed record AppActor(Guid WorkspaceId, Guid UserId, string? ClientIp = null);
+/// <summary>
+/// Where an app change happens: the workspace, and — for the audit entry — the address the request came
+/// from, when there is a request.
+///
+/// <para>
+/// Deliberately no user id. The person is always the request's own signed-in user: the access check
+/// (<c>ProjectAccessService</c>) and the audit entry's actor (<c>AuditLogger</c>) both read
+/// <c>ICurrentUser</c>, and a field here that neither of them reads would only suggest that a caller can
+/// act or be recorded as somebody else. It cannot.
+/// </para>
+/// </summary>
+public sealed record AppActor(Guid WorkspaceId, string? ClientIp = null);
 
 /// <summary>
 /// One of an app's own items — an environment variable, a domain, a volume — named either by its row id

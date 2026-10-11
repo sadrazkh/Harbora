@@ -121,10 +121,19 @@ public interface IAppProvisioningService
     Task<IReadOnlyList<ServiceRefusal>> ValidateCreateAsync(AppCreateRequest request, CancellationToken ct);
 
     /// <summary>
-    /// Re-runs every check under the workspace's creation lock and creates the app exactly as the form
-    /// always has: Git provider and repository rows, address, template volumes and variables, first-hour
-    /// billing, an <c>app.created</c> audit entry, then the first deployment when asked for. Nothing was
-    /// changed when the outcome carries refusals.
+    /// Takes the workspace's creation lock first, runs every check again inside it — nothing is trusted
+    /// from an earlier validate — and creates the app exactly as the form always has: Git provider and
+    /// repository rows, address, template volumes and variables, first-hour billing, an
+    /// <c>app.created</c> audit entry, then the first deployment when asked for. Nothing was changed
+    /// when the outcome carries refusals.
+    ///
+    /// <para>
+    /// The lock serialises creations within one workspace, so two of them cannot both pass on a stale
+    /// read of the plan, the slug or a typed host. It cannot serialise across workspaces: the two names
+    /// that are unique platform-wide — the app slug and a typed host — can still be claimed by another
+    /// workspace in the same instant. The database's unique indexes refuse the second insert; that
+    /// surfaces as an exception from this method rather than a refusal, as it always did from the form.
+    /// </para>
     /// </summary>
     Task<ServiceOutcome<AppCreateResult>> CreateAsync(AppCreateRequest request, CancellationToken ct);
 }

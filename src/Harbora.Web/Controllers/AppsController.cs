@@ -62,8 +62,9 @@ public sealed partial class AppsController(
     private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
     private bool IsFa => System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
 
-    /// <summary>Who the app services are acting for: this request's workspace, user and address.</summary>
-    private AppActor Actor => new(WorkspaceId, currentUser.UserId ?? Guid.Empty, ClientIp);
+    /// <summary>Where the app services are acting: this request's workspace and address. The person is
+    /// the signed-in user, whom the services read themselves.</summary>
+    private AppActor Actor => new(WorkspaceId, ClientIp);
 
     /// <summary>A refusal in the language this page is being shown in.</summary>
     private string Say(ServiceRefusal refusal) => IsFa ? refusal.MessageFa : refusal.Message;
