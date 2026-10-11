@@ -41,9 +41,10 @@ namespace Harbora.Infrastructure.Agent.Tools;
 /// <para>
 /// A variable the template marks secret takes no plain value: it arrives as a lock-button handle
 /// (<c>{{secret:…}}</c>), checked to exist when carded and resolved only here at execution, so its value
-/// never reaches the model, the conversation or the plan. A handle given for a variable the template left
-/// plain is honoured too — the value is stored, then made a secret through the configuration service
-/// before anything deploys it.
+/// never reaches the model, the conversation or the plan. A handle for a variable the template leaves
+/// plain is refused: the service would commit it as plain configuration, readable by anyone who can see the
+/// app, and no step after that commit can make the change atomic — so the person is told to set it as a
+/// secret afterwards with <c>set_env_vars</c> instead.
 /// </para>
 /// </summary>
 public sealed class DeployTemplateTool(
@@ -55,7 +56,6 @@ public sealed class DeployTemplateTool(
     IQuotaService quota,
     IAuditLogger audit,
     IOptions<BillingOptions> billing,
-    Apps.IAppConfigurationService configuration,
     ILogger<DeployTemplateTool> logger,
     // Optional so the tool resolves, and fails closed on every handle, on a host that holds no vault yet.
     IAgentSecretVault? vault = null) : AgentAppTool(resolver, access)
@@ -167,13 +167,28 @@ public sealed class DeployTemplateTool(
 
         // Handles become values only now, in memory, on their way into the service.
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        var secrets = new List<string>();
         foreach (var (key, value) in call.Variables)
         {
             if (!call.Handles.Contains(key)) { values[key] = value; continue; }
             if (vault?.Resolve(context.WorkspaceId, context.UserId, value.Trim()) is not { } resolved)
                 return NotPossible(Expired(key).En, Expired(key).Fa);
+
+            // The service runs every value through its ${{service.field}} substitution. A secret is not
+            // configuration to be expanded, and a reference it cannot resolve comes back in a refusal that
+            // quotes it — so such a value is refused here, in words that do not repeat any of it.
+            if (resolved.Contains("${{", StringComparison.Ordinal))
+                return NotPossible(
+                    $"The secret entered for {key} contains \"${{{{\", which this template would read as a reference to one of its services, so it cannot be used here. Nothing was created.",
+                    $"رمزی که برای {key} وارد شده «${{{{» دارد که این قالب آن را ارجاع به یکی از سرویس‌هایش می‌خواند، پس این‌جا قابل استفاده نیست. چیزی ساخته نشد.");
             values[key] = resolved;
+            if (resolved.Length > 0) secrets.Add(resolved);
         }
+
+        // Whatever the service or the server says on the way out is scrubbed of the resolved values first:
+        // a refusal that quotes a value must not carry a secret into the result the model reads.
+        string Scrub(string text) =>
+            secrets.Aggregate(text, (scrubbed, secret) => scrubbed.Replace(secret, AgentSecretHandles.Masked, StringComparison.Ordinal));
 
         // The service stages the project, its environment and the databases before some of its refusals;
         // whatever it left behind when it throws is this step's to drop, not the agent's next save's to write.
@@ -197,7 +212,7 @@ public sealed class DeployTemplateTool(
                 CreationPaymentRequiredException payment => payment.ReasonFa,
                 _ => $"قالب مستقر نشد: {ex.Message}"
             };
-            return await NotFinishedAsync(context, call, ex.Message, fa, ct);
+            return await NotFinishedAsync(context, call, Scrub(ex.Message), Scrub(fa), ct);
         }
         catch (Exception ex)
         {
@@ -214,19 +229,6 @@ public sealed class DeployTemplateTool(
         await audit.LogAsync("template.deploy", "template", template.Id.ToString(),
             metadataJson: JsonSerializer.Serialize(new { projectId = deployed.ProjectId, dependencies = deployed.DependencyCount }),
             workspaceId: context.WorkspaceId, ct: ct);
-
-        // A handle given for a variable the template left plain: the value is stored, and made a secret now —
-        // through the configuration service, before anything deploys it.
-        var madeSecret = call.Handles.Where(key => !call.Secrets.Contains(key)).ToList();
-        if (deployed.AppId is { } securedApp && madeSecret.Count > 0)
-        {
-            var secured = await configuration.SetEnvAsync(ActorOf(context), securedApp,
-                madeSecret.Select(key => new Apps.AppEnvVarInput(key, values[key], IsSecret: true)).ToList(), ct);
-            if (!secured.Ok)
-                return await NotFinishedAsync(context, call,
-                    $"{string.Join(", ", madeSecret)} could not be made secret ({string.Join(" ", secured.Refusals.Select(r => r.Message))}); it is stored as plain text and nothing was deployed. Change it in the panel.",
-                    $"{string.Join("، ", madeSecret)} محرمانه نشد ({string.Join(" ", secured.Refusals.Select(r => r.MessageFa))})؛ به‌صورت متن معمولی ذخیره شده و چیزی مستقر نشد. آن را در پنل تغییر دهید.", ct);
-        }
 
         var project = await db.Projects.AsNoTracking().FirstAsync(p => p.Id == deployed.ProjectId, ct);
         var databases = await db.ManagedServices.AsNoTracking()
@@ -278,11 +280,6 @@ public sealed class DeployTemplateTool(
         }
         summaryEn += ".";
         summaryFa += ".";
-        if (madeSecret.Count > 0)
-        {
-            summaryEn += $" {string.Join(", ", madeSecret)} stored as a secret.";
-            summaryFa += $" {string.Join("، ", madeSecret)} به‌صورت محرمانه ذخیره شد.";
-        }
         if (state is { } s) { summaryEn += $" Its first {s.En}."; summaryFa += $" اولین {s.Fa}."; }
         else if (deployRefused is { } refused) { summaryEn += $" Its first deployment did not start: {refused.En}"; summaryFa += $" استقرار اول شروع نشد: {refused.Fa}"; }
         else if (app is not null) { summaryEn += " The app is not deployed yet."; summaryFa += " اپ هنوز مستقر نشده است."; }
@@ -305,12 +302,12 @@ public sealed class DeployTemplateTool(
 
     private sealed record Call(
         AppTemplate? Template, TemplateManifest? Manifest, string ProjectName, string ProjectSlug, string ResourceName, string? AppSlug,
-        string? Repository, string? GitRef, IReadOnlyDictionary<string, string> Variables, IReadOnlySet<string> Secrets,
+        string? Repository, string? GitRef, IReadOnlyDictionary<string, string> Variables,
         IReadOnlySet<string> Handles,
         IReadOnlyList<string> Databases, string? Size, bool DeployNow, (string En, string Fa)? Error);
 
     private static Call No(string en, string fa) =>
-        new(null, null, "", "", "", null, null, null, new Dictionary<string, string>(), new HashSet<string>(), new HashSet<string>(), [], null, false, (en, fa));
+        new(null, null, "", "", "", null, null, null, new Dictionary<string, string>(), new HashSet<string>(), [], null, false, (en, fa));
 
     private async Task<Call> ReadAsync(JsonElement args, AgentToolContext context, bool executing, CancellationToken ct)
     {
@@ -399,6 +396,13 @@ public sealed class DeployTemplateTool(
         {
             if (AgentSecretHandles.IsHandle(value))
             {
+                // The template stores this one as plain configuration, committed in plain text before anything
+                // here could change that — so a privately entered value is refused rather than exposed.
+                if (!plan.Variables.First(v => v.Key == key).Secret)
+                    return No(
+                        $"Template '{template.Name}' stores {key} as plain configuration, so a value entered with the lock button cannot go there — it would be saved as plain text. Deploy with a plain value for {key} (or ask the user for one), then set it as a secret afterwards with set_env_vars, using the lock button.",
+                        $"قالب «{template.Name}» {key} را به‌صورت تنظیم معمولی ذخیره می‌کند، پس مقداری که با دکمهٔ قفل وارد شده نمی‌تواند آن‌جا برود — به‌صورت متن معمولی ذخیره می‌شد. با مقدار معمولی برای {key} مستقر کنید (یا آن را از کاربر بپرسید)، سپس با set_env_vars و دکمهٔ قفل آن را محرمانه کنید.");
+
                 if (vault?.Resolve(context.WorkspaceId, context.UserId, value.Trim()) is null)
                 {
                     var unknown = executing ? Expired(key) : UnknownHandle(key);
@@ -479,7 +483,7 @@ public sealed class DeployTemplateTool(
 
         return new Call(template, manifest, projectName, projectSlug, resourceName, appSlug,
             repository, AgentArgs.String(args, "gitRef"), given,
-            plan.Variables.Where(v => v.Secret).Select(v => v.Key).ToHashSet(StringComparer.Ordinal), handles,
+            handles,
             databases, size, AgentArgs.Bool(args, "deployNow") ?? true, null);
     }
 

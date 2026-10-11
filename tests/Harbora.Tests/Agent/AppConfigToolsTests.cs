@@ -151,6 +151,71 @@ public class AppConfigToolsTests
         rows.Single(v => v.Key == "API_KEY").Should().BeEquivalentTo(new { Value = "enc:sk-live-rotated", IsSecret = true });
     }
 
+    [Theory]
+    [InlineData("handle", "one entered with the lock button is always a secret")]
+    [InlineData("generate", "a generated one is always a secret")]
+    public async Task Secret_false_beside_a_handle_or_generate_on_an_existing_secret_is_called_contradictory(string how, string expected)
+    {
+        using var h = new AppToolsHarness();
+        h.SeedApp("web"); // API_KEY is a secret on it
+        object variable = how == "handle"
+            ? new { key = "API_KEY", value = h.Lock("API_KEY", "sk-live-rotated"), secret = false }
+            : new { key = "API_KEY", generate = true, secret = false };
+        var before = h.Snapshot();
+
+        var verdict = await h.ValidateAsync(h.SetEnvVars(), One(variable));
+
+        verdict.Ok.Should().BeFalse();
+        verdict.Error.Should().Contain("secret: false contradicts the value").And.Contain(expected)
+            .And.NotContain("plain text", "it is not a request to make the variable plain, and is not described as one");
+        verdict.ErrorFa.Should().Contain("ناسازگار");
+        h.Snapshot().Should().Be(before);
+    }
+
+    /// <summary>The real configuration service for reads, with a set that refuses by quoting every value it
+    /// was given — the shape a future refusal could take, and what must never reach the model.</summary>
+    private sealed class QuotingConfiguration(Harbora.Infrastructure.Apps.IAppConfigurationService inner)
+        : Harbora.Infrastructure.Apps.IAppConfigurationService
+    {
+        public Task<IReadOnlyList<Harbora.Application.Abstractions.ServiceRefusal>> ValidateSetEnvAsync(
+            Harbora.Infrastructure.Apps.AppActor actor, Guid appId, IReadOnlyList<Harbora.Infrastructure.Apps.AppEnvVarInput> variables, CancellationToken ct) =>
+            inner.ValidateSetEnvAsync(actor, appId, variables, ct);
+
+        public Task<Harbora.Application.Abstractions.ServiceOutcome<IReadOnlyList<Harbora.Infrastructure.Apps.AppEnvVarChange>>> SetEnvAsync(
+            Harbora.Infrastructure.Apps.AppActor actor, Guid appId, IReadOnlyList<Harbora.Infrastructure.Apps.AppEnvVarInput> variables, CancellationToken ct) =>
+            Task.FromResult(Harbora.Application.Abstractions.ServiceOutcome<IReadOnlyList<Harbora.Infrastructure.Apps.AppEnvVarChange>>.Refused(
+                new Harbora.Application.Abstractions.ServiceRefusal(
+                    "Refused: " + string.Join(", ", variables.Select(v => $"{v.Key}={v.Value}")),
+                    "رد شد: " + string.Join("، ", variables.Select(v => $"{v.Key}={v.Value}")))));
+
+        public Task<IReadOnlyList<Harbora.Application.Abstractions.ServiceRefusal>> ValidateDeleteEnvAsync(Harbora.Infrastructure.Apps.AppActor a, Guid id, Harbora.Infrastructure.Apps.AppItemRef v, CancellationToken ct) => throw new NotSupportedException();
+        public Task<Harbora.Application.Abstractions.ServiceOutcome<string>> DeleteEnvAsync(Harbora.Infrastructure.Apps.AppActor a, Guid id, Harbora.Infrastructure.Apps.AppItemRef v, CancellationToken ct) => throw new NotSupportedException();
+        public Task<IReadOnlyList<Harbora.Application.Abstractions.ServiceRefusal>> ValidateAddDomainAsync(Harbora.Infrastructure.Apps.AppActor a, Guid id, string? host, CancellationToken ct) => throw new NotSupportedException();
+        public Task<Harbora.Application.Abstractions.ServiceOutcome<Harbora.Infrastructure.Apps.AppDomainAdded>> AddDomainAsync(Harbora.Infrastructure.Apps.AppActor a, Guid id, string? host, bool ssl, CancellationToken ct) => throw new NotSupportedException();
+        public Task<IReadOnlyList<Harbora.Application.Abstractions.ServiceRefusal>> ValidateRemoveDomainAsync(Harbora.Infrastructure.Apps.AppActor a, Guid id, Harbora.Infrastructure.Apps.AppItemRef d, CancellationToken ct) => throw new NotSupportedException();
+        public Task<Harbora.Application.Abstractions.ServiceOutcome<Harbora.Infrastructure.Apps.AppDomainRemoved>> RemoveDomainAsync(Harbora.Infrastructure.Apps.AppActor a, Guid id, Harbora.Infrastructure.Apps.AppItemRef d, CancellationToken ct) => throw new NotSupportedException();
+        public Task<IReadOnlyList<Harbora.Application.Abstractions.ServiceRefusal>> ValidateAddVolumeAsync(Harbora.Infrastructure.Apps.AppActor a, Guid id, string? path, CancellationToken ct) => throw new NotSupportedException();
+        public Task<Harbora.Application.Abstractions.ServiceOutcome<Harbora.Infrastructure.Apps.AppVolumeAdded>> AddVolumeAsync(Harbora.Infrastructure.Apps.AppActor a, Guid id, string? path, CancellationToken ct) => throw new NotSupportedException();
+        public Task<IReadOnlyList<Harbora.Application.Abstractions.ServiceRefusal>> ValidateRemoveVolumeAsync(Harbora.Infrastructure.Apps.AppActor a, Guid id, Harbora.Infrastructure.Apps.AppItemRef v, bool deleteData, CancellationToken ct) => throw new NotSupportedException();
+        public Task<Harbora.Application.Abstractions.ServiceOutcome<Harbora.Infrastructure.Apps.AppVolumeRemoved>> RemoveVolumeAsync(Harbora.Infrastructure.Apps.AppActor a, Guid id, Harbora.Infrastructure.Apps.AppItemRef v, bool deleteData, CancellationToken ct) => throw new NotSupportedException();
+    }
+
+    [Fact]
+    public async Task A_refusal_that_quotes_a_secret_value_reaches_the_result_masked()
+    {
+        using var h = new AppToolsHarness();
+        h.SeedApp("web");
+        var tool = new Harbora.Infrastructure.Agent.Tools.SetEnvVarsTool(
+            h.Db, h.Agent.Resolver, h.Agent.Access, new QuotingConfiguration(h.Configuration()), h.Vault);
+        var args = TwoVariables(h.Lock("STRIPE_KEY", Secret));
+
+        var result = await h.ExecuteAsync(tool, args);
+
+        result.Ok.Should().BeFalse();
+        result.Error.Should().Contain($"STRIPE_KEY={AgentSecretHandles.Masked}").And.Contain("DATABASE_URL=postgres://db/shop");
+        (result.Error + result.ErrorFa + result.ResultJson).Should().NotContain(Secret);
+    }
+
     [Fact]
     public async Task A_handle_forces_a_secret_even_against_secret_false()
     {

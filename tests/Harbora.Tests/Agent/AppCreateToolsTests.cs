@@ -458,24 +458,56 @@ public class AppCreateToolsTests
     }
 
     [Fact]
-    public async Task A_handle_for_a_variable_the_template_left_plain_is_stored_as_a_secret_before_anything_deploys()
+    public async Task A_handle_for_a_variable_the_template_stores_as_plain_configuration_is_refused_and_nothing_is_created()
+    {
+        // The service would commit it in plain text before any later step could make it a secret, so the
+        // tool fails closed and says how to get there instead.
+        using var h = new AppToolsHarness();
+        SeedTemplate(h);
+        var args = new
+        {
+            template = "ghost", name = "blog",
+            variables = new Dictionary<string, string>
+            {
+                ["url"] = h.Lock("url", "https://blog.example.com/private"), ["SMTP_PASSWORD"] = h.Lock("SMTP_PASSWORD", "x")
+            }
+        };
+        var before = h.Snapshot();
+
+        var verdict = await h.ValidateAsync(h.DeployTemplate(), args);
+        var result = await h.ExecuteAsync(h.DeployTemplate(), args);
+
+        verdict.Ok.Should().BeFalse();
+        verdict.Error.Should().Contain("Template 'Ghost' stores url as plain configuration")
+            .And.Contain("set it as a secret afterwards with set_env_vars, using the lock button")
+            .And.NotContain("blog.example.com/private");
+        verdict.ErrorFa.Should().Contain("دکمهٔ قفل").And.Contain("set_env_vars");
+        result.Ok.Should().BeFalse();
+        h.Snapshot().Should().Be(before);
+    }
+
+    [Fact]
+    public async Task A_secret_that_looks_like_a_template_reference_is_refused_at_execution_without_repeating_it()
     {
         using var h = new AppToolsHarness();
         SeedTemplate(h);
-        var url = h.Lock("url", "https://blog.example.com/private");
-
-        var result = await h.ExecuteAsync(h.DeployTemplate(), new
+        var args = new
         {
             template = "ghost", name = "blog",
-            variables = new Dictionary<string, string> { ["url"] = url, ["SMTP_PASSWORD"] = h.Lock("SMTP_PASSWORD", "x") }
-        });
+            variables = new Dictionary<string, string>
+            {
+                ["url"] = "https://blog.example.com", ["SMTP_PASSWORD"] = h.Lock("SMTP_PASSWORD", "pa${{mysql.password}}ss")
+            }
+        };
+        (await h.ValidateAsync(h.DeployTemplate(), args)).Ok.Should().BeTrue("the value cannot be seen when the card is drawn");
+        var before = h.Snapshot();
 
-        result.Ok.Should().BeTrue(result.Error);
-        var row = await h.Db.EnvironmentVariables.AsNoTracking().SingleAsync(v => v.App!.Slug == "blog" && v.Key == "url");
-        row.IsSecret.Should().BeTrue();
-        row.Value.Should().Be("enc:https://blog.example.com/private");
-        result.SummaryEn.Should().Contain("url stored as a secret");
-        (result.ResultJson + result.SummaryEn + result.SummaryFa).Should().NotContain("blog.example.com/private");
+        var result = await h.ExecuteAsync(h.DeployTemplate(), args);
+
+        result.Ok.Should().BeFalse("a secret is not configuration for the template to expand");
+        result.Error.Should().Contain("The secret entered for SMTP_PASSWORD contains \"${{\"");
+        (result.Error + result.ErrorFa + result.ResultJson).Should().NotContain("mysql.password").And.NotContain("pa$");
+        h.Snapshot().Should().Be(before);
     }
 
     [Fact]

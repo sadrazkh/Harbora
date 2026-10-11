@@ -119,7 +119,7 @@ internal sealed class AppToolsHarness : IDisposable
 
     public CreateAppTool CreateApp() => new(Db, Agent.Resolver, Agent.Access, Provisioning(), Options.Create(Billing));
     public DeployTemplateTool DeployTemplate() => new(Db, Agent.Resolver, Agent.Access, Templates(), Deployments, Quota(), Agent.Audit, Options.Create(Billing),
-        Configuration(), NullLogger<DeployTemplateTool>.Instance, HasVault ? Vault : null);
+        NullLogger<DeployTemplateTool>.Instance, HasVault ? Vault : null);
     public SetEnvVarsTool SetEnvVars() => new(Db, Agent.Resolver, Agent.Access, Configuration(), HasVault ? Vault : null);
     public DeleteEnvVarTool DeleteEnvVar() => new(Db, Agent.Resolver, Agent.Access, Configuration());
     public AddDomainTool AddDomain() => new(Db, Agent.Resolver, Agent.Access, Configuration(), Quota());

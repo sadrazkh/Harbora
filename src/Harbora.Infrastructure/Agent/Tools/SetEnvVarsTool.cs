@@ -174,7 +174,15 @@ public sealed class SetEnvVarsTool(
         }
 
         var outcome = await configuration.SetEnvAsync(ActorOf(context), app.Id, inputs, ct);
-        if (!outcome.Ok) return Failed(outcome.Refusals);
+        if (!outcome.Ok)
+        {
+            // The service's refusals name keys, not values, today; a secret is scrubbed out regardless, so a
+            // refusal that ever quotes one cannot carry it into the result the model reads.
+            var secrets = inputs.Where(i => i.IsSecret && !string.IsNullOrEmpty(i.Value)).Select(i => i.Value!).ToList();
+            string Scrub(string text) =>
+                secrets.Aggregate(text, (scrubbed, secret) => scrubbed.Replace(secret, AgentSecretHandles.Masked, StringComparison.Ordinal));
+            return Failed(outcome.Refusals.Select(r => r with { Message = Scrub(r.Message), MessageFa = Scrub(r.MessageFa) }).ToList());
+        }
         var changes = outcome.Value!;
         var generated = settled.Where(v => v.Source == Source.Generated).Select(v => v.Key).ToHashSet(StringComparer.Ordinal);
 
@@ -287,6 +295,13 @@ public sealed class SetEnvVarsTool(
         foreach (var variable in requested)
         {
             var exists = current.TryGetValue(variable.Key, out var now);
+
+            // A handle or a generated value is a secret by what it is; "secret: false" beside one contradicts
+            // the call itself, and is said to be that — not mistaken for a request to make the variable plain.
+            if (exists && now.Secret && variable.Secret == false && variable.Source != Source.Plain)
+                return ([], (
+                    $"{variable.Key}: secret: false contradicts the value — {(variable.Source == Source.Handle ? "one entered with the lock button" : "a generated one")} is always a secret. Leave secret out (or pass true) and call again.",
+                    $"{variable.Key}: secret: false با مقدار ناسازگار است — {(variable.Source == Source.Handle ? "مقداری که با دکمهٔ قفل وارد شده" : "مقدار ساخته‌شده")} همیشه محرمانه است. secret را ندهید (یا true بدهید) و دوباره درخواست کنید."));
 
             if (exists && now.Secret && variable.Secret == false)
                 return ([], ($"{variable.Key} is a secret on this app, and the assistant does not turn a secret into plain text. Leave secret out to keep it secret, or change it in the panel.",
