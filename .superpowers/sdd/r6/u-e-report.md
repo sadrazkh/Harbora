@@ -470,3 +470,83 @@ Passed!  - Failed: 0, Passed:    15, Skipped:  0, Total:   15 - Harbora.NodeIngr
 Passed!  - Failed: 0, Passed:  6951, Skipped:  0, Total: 6951 - Harbora.Tests.dll
 dll=2 msb3030=0
 ```
+
+## Fixes after the final review (branch `r6/pane-final`, from master `e4c467c`)
+
+The final reviewer checked the pane against the real server call by call — routes, bodies, casing,
+statuses and event payloads all match. One Important meaning mismatch and four minors remained. All
+are fixed in `cf8e413`.
+
+### Important — a plan refused at re-check said it "already ran"
+
+The server answers a step refused at re-check with `409 { error: "revalidation_refused", status:
+"failed", stepIndex }`, and nothing has run. This is common right after a deploy, which empties the
+in-memory secret vault. The pane showed "This plan has already run and stopped", because
+`describeFailure` dropped `error` and the card read `failed` as "ran".
+
+- `AssistantRequestError` now keeps the code (`body.error`). It is never shown to the person.
+- `applyApproveRefusal` sets `notRun` for `revalidation_refused`, and for any other code that comes with
+  status `failed`, except `not_pending`, which means the plan was decided elsewhere.
+- The heading, now in `planHeading()` in `assistantPlan.js`, reads «اجرا نشد — یکی از گام‌ها هنگام
+  بررسی دوباره رد شد» / "Not run — a step was refused when it was checked again". The step named by
+  `stepIndex` is marked and the server's words appear under the card.
+- The preview harness's `?scenario=refuse` now sends exactly that 409/failed shape. In the browser it
+  showed the not-run heading, step 4 marked and no Run button.
+
+### Minors
+
+- **Skipped steps show the server's own reason.** That is `summaryEn/Fa`, for example «اجرا نشد:
+  مرحلهٔ دیگری هنگام بررسی دوباره رد شد». The generic wording is used only when there is none. This is
+  `resultNote()` in `assistantPlan.js`.
+- **Saved tool messages read as status lines.** On reload they are the person-facing summary in the
+  panel's language, so they are now drawn as a status line with a neutral icon and their own direction.
+  Before, they were a collapsed, left-to-right, monospace "Tool result" block. In the browser: «منابع
+  خوانده شد: …», `dir="rtl"`.
+- **A plan approved in another tab** gets `not_pending` with status `executing`. The pane now re-reads
+  the conversation once, after 3 s (`session.rereadSoon`), instead of leaving a "Running…" card
+  forever. The re-read is skipped if the person has moved on or a turn is running, and is cancelled on
+  dispose.
+- **A turn refused at the gate** (`started` → `error` with no tool, delta, message, plan or executed
+  event before it) withdraws no card on the server. The session now re-reads the conversation, and
+  `restoreSuperseded` gives a card the pane had marked superseded its real status back. The error line
+  explaining the refusal stays on screen. A turn that got past the gate leaves the card superseded and
+  does not re-read.
+
+**Tests added:** plan 2 (headings, skipped reason), api 1 (code kept), timeline 5 (notRun for re-check,
+not for not_pending, for another failed code; restore and keep-withdrawn), session 4 (gate restore,
+no re-read past the gate, re-read once after the delay, skipped when moved on and dropped on dispose),
+format 1 (the tool-history markup is a status line with its own direction, with no `<pre>`, `<details>`
+or `font-mono`).
+
+**Mutation checks:**
+- disabling the gate restore fails the gate test;
+- forcing `notRun = false` fails 2 timeline tests.
+
+## Commands and output — after the final review
+
+Run on `cf8e413` with `MSBUILDDISABLENODEREUSE=1`, `-p:UseSharedCompilation=false` and log
+`/tmp/test-r6-pane-final.log`.
+
+- **Node:** `node --test src/Harbora.Web/Scripts/tests/*.test.mjs` → `# tests 230  # pass 230  # fail 0`.
+  By file: api 34, drawer 20, format 27, plan 17, secrets 22, session 36, stream 15, timeline 47, plus 12
+  that were already there.
+- **Bundle:** `npm run build`, run alone → `NPM_EXIT=0`,
+  `AssistantPanel-*.js 68.27 kB │ gzip: 22.57 kB`, `✓ built in 5.17s`, and the manifest names
+  `"Scripts/main.ts"`.
+
+```
+BUILD_EXIT=0   28 Warning(s) (48x NU1900 + 8x NU1903 lines, the package-feed warnings only)   0 Error(s)
+dotnet test tests/Harbora.Tests --no-build --filter "FullyQualifiedName~AssistantPaneHttpTests"
+Passed!  - Failed: 0, Passed:    10, Skipped:  0, Total:   10 - Harbora.Tests.dll
+dotnet test Harbora.slnx --no-build
+EXIT=0
+Passed!  - Failed: 0, Passed:   500, Skipped: 17, Total:  517 - Harbora.NodeAgent.Tests.dll
+Passed!  - Failed: 0, Passed:    15, Skipped:  0, Total:   15 - Harbora.NodeIngress.Tests.dll
+Passed!  - Failed: 0, Passed:  7304, Skipped:  0, Total: 7304 - Harbora.Tests.dll
+dll=2 msb3030=0
+```
+
+This branch adds no .NET tests. 7304 is master `e4c467c`'s count with every agent's landed work.
+The pane has still not been driven against a running server in a browser here: there is no local
+database. The final reviewer's call-by-call check against the server's code is what stands in for
+that.
