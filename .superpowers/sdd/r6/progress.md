@@ -132,3 +132,22 @@ fallbacks google/gemma-4-31b-it:free, google/gemma-4-26b-a4b-it:free.
 Found by G, not changed (for the task table): ManagedServiceEngine.StartAsync marks a database Running
 when it found no container; DatabaseProvisioningService.CreateAsync clears the shared change tracker on a
 billing refusal. Pane has no UI to revoke "don't ask again" (API only).
+
+## After the pause — 2026-10-12
+
+Owner: «ادامه بده تمومش کن و دیپلوی کن». Then: secrets as black boxes before the deploy (lock button →
+handle; value never reaches the model) — owner chose to build it in this round.
+
+| Work | Outcome |
+|---|---|
+| G db tools | review approved; minor fix pass (rotate failure reporting + new-password redaction, delete card names users); merged 5dfb2e1, 6951 tests |
+| U-C streaming | review: 2 Important (callback faults misreported as provider failures; "stream" heuristic) → fixed, re-review approved; merged 707f896, 7032 |
+| U-D resilient turns | review approved; minors + secrets vault/endpoint; vault review approved; hardening pass (scrub by value in history/cards, expiry window, fail-closed DI, masked DTO, size limit); merged 3f1d0c9, 7077 |
+| U-E typing/resume/lock | review: 3 Important (stuck dots, words lost during create, silent failed read) → fixed; lock button; re-review: Important (password-manager save) → text field + CSS mask + opt-outs; coordinator follow-ups af30c2a; merged, 7077 + node 217 |
+| F app tools | review: 3 Important (secrets via model args, remembered set_env_vars downgrading a secret, rollback target drift) → handles/generate, kept flags, pinned rollback; re-review Important (template plain-variable handle not atomic) → refused; merged 5737b07, 7301 |
+| H docs | guide + READMEs brought to what was built; merged e4c467c, 7304 |
+| Final review (server) | ready to deploy; no Critical/Important; deferred notes triaged |
+| Final review (pane↔server) | every call matches; Important: revalidation_refused shown as "already ran" → sent to E with minors |
+
+A transient network error (SSL verification) killed three agents once; all resumed from their worktrees
+with nothing lost.
