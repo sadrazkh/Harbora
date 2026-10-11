@@ -539,16 +539,20 @@ dotnet run --project src/Harbora.Web                             # auto-migrates
   rate limits, metering, SSRF checks — but no request has ever been made to a real model provider
   from this codebase, so nothing has proven the last hop. It is labelled *Preview* in the panel and
   hidden from the sidebar in Simple mode until one has.
-- **The in-panel assistant is new, and has never talked to a real model either.** It is a chat drawer
-  opened from the top bar (`Ctrl+J`) that answers in Persian or English, looks things up with read-only tools,
-  and turns every change into a plan you approve: safe changes ask once and can be remembered,
-  dangerous ones always ask, and a delete asks you to type the resource's name. It has the signed-in
-  person's permissions and no more, never sees secret values, and its model calls are counted per
-  workspace per day. It stays off until the owner gives **Settings** an OpenAI-compatible provider
-  (OpenRouter works) and switches the `assistant` feature on under **Platform → Features**.
-  Everything around it is tested against scripted fakes, but no request has gone from this codebase to
-  a real provider, so which free models call tools well — in Persian especially — is unproven. The
-  **Test the agent model** button in Settings is how an owner finds out. Guide:
+- **The in-panel assistant is new, and most of it has not met a real model yet.** It is a chat drawer
+  opened from the top bar (`Ctrl+J`) that answers in Persian or English, writes its answer as it is
+  generated (and keeps it if you reload mid-answer), looks things up with read-only tools, and turns
+  every change — apps, databases, projects, environment variables, domains, deploys, rollbacks,
+  deletes — into a plan you approve: safe changes ask once and can be remembered, dangerous ones always
+  ask, and a delete asks you to type the resource's name. Secrets go in through a lock button, so the
+  model only ever sees a placeholder and the panel puts the value in when the step runs. It has the
+  signed-in person's permissions and no more, and its model calls are counted per workspace per day.
+  It stays off until the owner gives **Settings** an OpenAI-compatible provider (OpenRouter works) and
+  the `assistant` feature is enabled under **Platform → Features** (the provider's own default plan has
+  it). Everything is tested against scripted fakes. The first, read-only release has been run against
+  a real free model on OpenRouter (the **Test the agent model** button passed 6 of 6), but the write
+  tools, the streamed answers and the lock button have not yet been run against a real provider, so
+  which free models call tools well — in Persian especially — is still unproven. Guide:
   [docs/tutorial/08-ai.md](docs/tutorial/08-ai.md).
 - Git OAuth requires registering an OAuth app (client id/secret); token connection needs no setup.
 - Billing includes balances, manual operator credit/adjustment, single-use vouchers, hourly PAYG
