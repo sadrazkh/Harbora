@@ -285,8 +285,14 @@ public sealed class AgentPlanService(
         /// <summary>The position of the step whose tool is running right now.</summary>
         public int? Running { get; set; }
 
+        /// <summary>Whether the running step's audit entry has been written.</summary>
+        public bool RunningAudited { get; set; }
+
         /// <summary>Whether any step's tool was entered at all.</summary>
         public bool AnyRan { get; set; }
+
+        /// <summary>Set when re-validation refused a step: the approval's answer, whatever happens after.</summary>
+        public AgentPlanRefusal? Refusal { get; set; }
     }
 
     /// <summary>
@@ -312,7 +318,7 @@ public sealed class AgentPlanService(
         catch (Exception ex)
         {
             logger.LogError(ex, "Plan {Plan} broke after it was claimed; it is marked failed with what had run.", plan.Id);
-            return await FinishBrokenRunAsync(plan, steps, ledger);
+            return await FinishBrokenRunAsync(actor, plan, steps, ledger);
         }
     }
 
@@ -358,16 +364,18 @@ public sealed class AgentPlanService(
                 }
             }
 
+            // Decided before anything is saved, so the answer is still the refusal even if the save below
+            // breaks and the plan is finished by FinishBrokenRunAsync instead.
+            ledger.Refusal = new AgentPlanRefusal(AgentPlanRefusal.RevalidationRefusedCode,
+                $"Nothing ran: step {r.Step.Index + 1} was refused when the plan was checked again. {r.Error}",
+                $"هیچ‌چیز اجرا نشد: مرحلهٔ {r.Step.Index + 1} هنگام بررسی دوباره رد شد. {r.ErrorFa}",
+                StatusName(AgentPlanStatus.Failed), r.Step.Index);
+
             var results = await FinishAsync(plan, AgentPlanStatus.Failed, ledger, executedAt: null, ct);
 
             // A refused approval remembers nothing: like every other refusal it changes nothing but the
             // plan's own state, and "don't ask again" was consent to an approval that did not go ahead.
-            return new ClaimedRun(
-                new AgentPlanResultView(plan.Id, StatusName(plan.Status), results),
-                new AgentPlanRefusal(AgentPlanRefusal.RevalidationRefusedCode,
-                    $"Nothing ran: step {r.Step.Index + 1} was refused when the plan was checked again. {r.Error}",
-                    $"هیچ‌چیز اجرا نشد: مرحلهٔ {r.Step.Index + 1} هنگام بررسی دوباره رد شد. {r.ErrorFa}",
-                    StatusName(plan.Status), r.Step.Index));
+            return new ClaimedRun(new AgentPlanResultView(plan.Id, StatusName(plan.Status), results), ledger.Refusal);
         }
 
         // The approval is going ahead, so its "don't ask again" ticks are recorded now.
@@ -385,7 +393,11 @@ public sealed class AgentPlanService(
                 continue;
             }
 
+            // What was already pending before this step — an audit row an earlier swallowed save left
+            // Added, say — is not this step's to drop if it fails.
+            var before = AgentTracker.ForeignChanges(db);
             ledger.Running = position;
+            ledger.RunningAudited = false;
             ledger.AnyRan = true;
 
             AgentToolResult result;
@@ -405,25 +417,15 @@ public sealed class AgentPlanService(
             {
                 // A failed step may have left half-made rows in the shared context — an entity still Added
                 // after its save threw on a unique-slug race. The audit entry's save below would write
-                // them again and fail the same way, so they are dropped first.
-                var dropped = AgentTracker.DetachForeignChanges(db);
+                // them again and fail the same way, so what this step left is dropped first.
+                var dropped = AgentTracker.DetachForeignChanges(db, before);
                 if (dropped.Count > 0)
                     logger.LogWarning("Step {Step} of plan {Plan} ({Tool}) failed leaving unsaved changes; dropped: {Types}.",
                         step.Index + 1, plan.Id, step.Tool, string.Join(", ", dropped));
             }
 
-            await audit.LogAsync(StepExecutedAction, targetType: "agent_plan", targetId: plan.Id.ToString(),
-                ipAddress: actor.IpAddress,
-                metadataJson: JsonSerializer.Serialize(new
-                {
-                    conversationId = plan.ConversationId,
-                    planId = plan.Id,
-                    step = step.Index + 1, // the ordinal a person reads on the card
-                    stepIndex = step.Index,
-                    tool = step.Tool,
-                    ok = result.Ok
-                }),
-                workspaceId: actor.WorkspaceId, ct: ct);
+            await AuditStepAsync(actor, plan, step, result.Ok);
+            ledger.RunningAudited = true;
 
             if (result.Ok)
             {
@@ -448,16 +450,34 @@ public sealed class AgentPlanService(
         return new ClaimedRun(new AgentPlanResultView(plan.Id, StatusName(plan.Status), finished));
     }
 
+    /// <summary>One <c>assistant.step_executed</c> entry: conversation, plan, step, tool and whether it worked.</summary>
+    private Task AuditStepAsync(AgentActor actor, AgentPlan plan, AgentPlanStep step, bool ok) =>
+        audit.LogAsync(StepExecutedAction, targetType: "agent_plan", targetId: plan.Id.ToString(),
+            ipAddress: actor.IpAddress,
+            metadataJson: JsonSerializer.Serialize(new
+            {
+                conversationId = plan.ConversationId,
+                planId = plan.Id,
+                step = step.Index + 1, // the ordinal a person reads on the card
+                stepIndex = step.Index,
+                tool = step.Tool,
+                ok
+            }),
+            workspaceId: actor.WorkspaceId, ct: CancellationToken.None);
+
     /// <summary>
-    /// The way out for a run that something escaped — a save that threw, a failure in the record
-    /// itself. The tracker is cleared of everything unsaved, so nothing half-written is retried along
-    /// with the record; the step that was running fails, every step without a result is skipped, and
-    /// the plan is finished as failed. If even that cannot be written, it is logged and the plan stays
-    /// executing — the one state that never claims anything happened.
+    /// The way out for a run that something escaped — a save that threw, a tracker a tool left
+    /// inconsistent, a failure in the record itself. The tracker is cleared outright
+    /// (<c>ChangeTracker.Clear</c>, which, unlike enumerating its entries, cannot itself throw on an
+    /// inconsistent graph), so nothing half-written is retried along with the record. The step that was
+    /// running fails — and is audited, if it had not been — every step without a result is skipped, and
+    /// the plan is finished. If even that cannot be written, it is logged and the plan stays executing —
+    /// the one state that never claims anything happened.
     /// </summary>
-    private async Task<ClaimedRun> FinishBrokenRunAsync(AgentPlan plan, IReadOnlyList<AgentPlanStep> steps, RunLedger ledger)
+    private async Task<ClaimedRun> FinishBrokenRunAsync(
+        AgentActor actor, AgentPlan plan, IReadOnlyList<AgentPlanStep> steps, RunLedger ledger)
     {
-        AgentTracker.DetachAllChanges(db);
+        db.ChangeTracker.Clear();
 
         for (var position = 0; position < steps.Count; position++)
         {
@@ -479,18 +499,22 @@ public sealed class AgentPlanService(
         var status = ledger.Results.All(r => r!.State == "done") ? AgentPlanStatus.Executed : AgentPlanStatus.Failed;
         try
         {
+            if (ledger.Running is { } running && !ledger.RunningAudited)
+                await AuditStepAsync(actor, plan, steps[running], ok: false);
+
             var results = await FinishAsync(plan, status, ledger,
                 executedAt: ledger.AnyRan ? clock.UtcNow : null, CancellationToken.None);
-            return new ClaimedRun(new AgentPlanResultView(plan.Id, StatusName(status), results));
+            return new ClaimedRun(new AgentPlanResultView(plan.Id, StatusName(status), results), ledger.Refusal);
         }
         catch (Exception again)
         {
             logger.LogError(again, "Plan {Plan} could not be recorded either; it stays executing.", plan.Id);
-            AgentTracker.DetachAllChanges(db);
+            db.ChangeTracker.Clear();
             return new ClaimedRun(new AgentPlanResultView(plan.Id, StatusName(status),
-                ledger.Results.Select(x => x!).ToList()));
+                ledger.Results.Select(x => x!).ToList()), ledger.Refusal);
         }
     }
+
 
     private const string NotRunEn = "Not run: another step was refused when the plan was re-checked.";
     private const string NotRunFa = "اجرا نشد: مرحلهٔ دیگری هنگام بررسی دوباره رد شد.";

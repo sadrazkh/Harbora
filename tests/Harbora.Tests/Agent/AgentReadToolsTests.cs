@@ -361,9 +361,10 @@ public class AgentReadToolsTests
         var app = AddApp(h, "shop-web", status: AppStatus.Failed);
         var deployment = new Deployment { AppId = app.Id, WorkspaceId = h.WorkspaceId, Number = 1, Status = DeploymentStatus.Failed };
         h.Db.Deployments.Add(deployment);
-        for (var i = 1; i <= 39; i++)
+        // 45 rows: the first five are older than the 40-line window, and the long ones force more out.
+        for (var i = 1; i <= 44; i++)
             h.Db.DeploymentLogs.Add(new DeploymentLog { DeploymentId = deployment.Id, Sequence = i, Message = $"line {i} " + new string('x', 500) });
-        h.Db.DeploymentLogs.Add(new DeploymentLog { DeploymentId = deployment.Id, Sequence = 40, Message = "FATAL: port 8080 is already in use" });
+        h.Db.DeploymentLogs.Add(new DeploymentLog { DeploymentId = deployment.Id, Sequence = 45, Message = "FATAL: port 8080 is already in use" });
         h.Db.SaveChanges();
 
         var result = await new GetDeploymentTool(h.Db, h.Resolver, h.Protector).ExecuteAsync(Args("""{"app":"shop-web"}"""), Context(h), default);
@@ -374,7 +375,39 @@ public class AgentReadToolsTests
         var lines = json.RootElement.GetProperty("logTail").EnumerateArray().Select(l => l.GetString()!).ToList();
         lines[^1].Should().Be("FATAL: port 8080 is already in use");
         lines.Should().OnlyContain(l => l.Length <= GetDeploymentTool.MaxLineLength + 1);
-        json.RootElement.GetProperty("earlierLinesLeftOut").GetInt32().Should().Be(40 - lines.Count);
+        json.RootElement.GetProperty("earlierLinesLeftOut").GetInt32().Should().Be(45 - lines.Count,
+            "every earlier line not shown is counted: the five before the window and the ones dropped to fit");
+    }
+
+    [Fact]
+    public async Task A_private_key_and_a_multi_line_secret_spanning_log_rows_reach_the_model_in_no_fragment()
+    {
+        using var h = new AgentHarness();
+        var app = AddApp(h, "shop-web", status: AppStatus.Failed);
+        var multiLine = string.Join('\n', Enumerable.Range(1, 3).Select(i => $"MULTISECRET-line{i}-" + new string('m', 40)));
+        h.Db.EnvironmentVariables.Add(new EnvironmentVariable { AppId = app.Id, Key = "SERVICE_ACCOUNT", Value = h.Protector.Protect(multiLine), IsSecret = true });
+        var deployment = new Deployment { AppId = app.Id, WorkspaceId = h.WorkspaceId, Number = 1, Status = DeploymentStatus.Failed };
+        h.Db.Deployments.Add(deployment);
+
+        // Rows 1–34: a private key whose body is far longer than the result may be, so cutting the
+        // oldest lines to fit would — redacted row by row — drop the BEGIN line and keep the body and the
+        // END line, which the backstop pattern can no longer recognise. Rows 35–37: the multi-line secret,
+        // printed across three rows. Rows 38–40: ordinary lines.
+        var rows = new List<string> { "-----BEGIN RSA PRIVATE KEY-----" };
+        rows.AddRange(Enumerable.Range(1, 32).Select(i => $"KEYBODY{i:D2}" + new string('A', 120)));
+        rows.Add("-----END RSA PRIVATE KEY-----");
+        rows.AddRange(multiLine.Split('\n'));
+        rows.AddRange(["retrying", "still failing", "FATAL: could not authenticate"]);
+        for (var i = 0; i < rows.Count; i++)
+            h.Db.DeploymentLogs.Add(new DeploymentLog { DeploymentId = deployment.Id, Sequence = i + 1, Message = rows[i] });
+        h.Db.SaveChanges();
+        rows.Should().HaveCount(GetDeploymentTool.LogLines);
+
+        var result = await new GetDeploymentTool(h.Db, h.Resolver, h.Protector).ExecuteAsync(Args("""{"app":"shop-web"}"""), Context(h), default);
+        var sent = AgentJson.ForModel(result.ResultJson);
+
+        sent.Should().NotContain("KEYBODY").And.NotContain("PRIVATE KEY").And.NotContain("MULTISECRET").And.NotContain("mmmmmmmm");
+        sent.Should().Contain("FATAL: could not authenticate").And.Contain("[redacted]");
     }
 
     [Fact]

@@ -68,8 +68,9 @@ public sealed class GetDeploymentTool(HarboraDbContext db, AgentResourceResolver
                 ? NotFound($"App '{app.Slug}' has not been deployed yet.", $"اپ «{app.Slug}» هنوز دیپلوی نشده است.")
                 : NotFound($"App '{app.Slug}' has no deployment #{number}.", $"اپ «{app.Slug}» دیپلوی شمارهٔ {number} ندارد.");
 
-        var tail = await db.DeploymentLogs.AsNoTracking()
-            .Where(l => l.DeploymentId == deployment.Id)
+        var logs = db.DeploymentLogs.AsNoTracking().Where(l => l.DeploymentId == deployment.Id);
+        var totalRows = await logs.CountAsync(ct);
+        var tail = await logs
             .OrderByDescending(l => l.Sequence)
             .Take(LogLines)
             .Select(l => l.Message)
@@ -79,11 +80,15 @@ public sealed class GetDeploymentTool(HarboraDbContext db, AgentResourceResolver
         var secrets = await AgentSecrets.ForAppAsync(db, protector, app.Id, context.WorkspaceId, ct);
         var error = AssistantRedaction.Redact(deployment.ErrorMessage, secrets).Text;
 
-        // Redacted line by line (a secret never spans a line break in a log), then each line clipped:
-        // redacting first, so a clip cannot cut a secret in half and leave a half no longer recognisable.
-        var lines = tail
-            .Select(line => Clip(AssistantRedaction.Redact(line, secrets).Text, MaxLineLength) ?? "")
-            .ToList();
+        // Redacted as one text, then split, then clipped and trimmed — in that order. A secret can span
+        // lines: a private key is a BEGIN line, a body and an END line, and a multi-line secret value is
+        // matched whole. Redacting row by row would match neither, and dropping the oldest lines afterwards
+        // could then keep a key's body without the BEGIN line the backstop pattern needs.
+        var redacted = AssistantRedaction.Redact(string.Join('\n', tail), secrets).Text;
+        List<string> lines = redacted.Length == 0
+            ? []
+            : redacted.Split('\n').Select(line => Clip(line, MaxLineLength) ?? "").ToList();
+        var olderRows = totalRows - tail.Count;
 
         object Payload(int dropped) => new
         {
@@ -96,7 +101,9 @@ public sealed class GetDeploymentTool(HarboraDbContext db, AgentResourceResolver
             finishedAt = deployment.FinishedAt,
             commit = deployment.CommitSha,
             error = string.IsNullOrEmpty(error) ? null : Clip(error, 600),
-            earlierLinesLeftOut = dropped,
+            // Everything earlier that is not shown: the log's lines before the last LogLines, and the
+            // oldest of those that were dropped so the result fits.
+            earlierLinesLeftOut = olderRows + dropped,
             logTail = lines.Skip(dropped).ToList()
         };
 

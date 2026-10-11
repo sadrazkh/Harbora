@@ -445,6 +445,94 @@ public class AgentPlanServiceTests
     }
 
     [Fact]
+    public async Task A_step_that_leaves_the_tracker_inconsistent_still_ends_in_a_failed_audited_plan()
+    {
+        AgentHarness? harness = null;
+        var poisoner = new FakeTool("poison", AgentToolKind.SafeWrite)
+        {
+            // A navigation pointed at a second instance of an already-tracked key: from here on every
+            // DetectChanges — ChangeTracker.Entries() included — throws.
+            OnExecute = (_, _) =>
+            {
+                var environment = harness!.Db.Environments.Local.Single(e => e.Id == harness.EnvironmentId);
+                environment.Project = new Harbora.Domain.Projects.Project
+                {
+                    Id = harness.ProjectId, WorkspaceId = harness.WorkspaceId, Name = "Twin", Slug = "twin"
+                };
+                throw new InvalidOperationException("the tool broke after confusing the tracker");
+            }
+        };
+        var after = new FakeTool("after", AgentToolKind.SafeWrite);
+        var (h, plan) = await PlanWith(poisoner, after);
+        harness = h;
+        using var _ = h;
+
+        var act = () => h.Db.ChangeTracker.Entries().ToList();
+        var outcome = await h.Plans.ApproveAsync(h.Actor, plan.Id, Approve(), default);
+
+        outcome.Result!.Steps.Select(s => s.State).Should().Equal("failed", "skipped");
+        h.Audit.Entries.Where(e => e.Action == AgentPlanService.StepExecutedAction)
+            .Select(e => JsonDocument.Parse(e.MetadataJson!).RootElement.GetProperty("ok").GetBoolean())
+            .Should().Equal([false], "the step that broke the run is still audited");
+        await AssertFinishedAsFailed(h, plan, "failed", "skipped");
+        act.Should().NotThrow("the fallback clears the tracker instead of enumerating it");
+    }
+
+    [Fact]
+    public async Task A_failing_step_drops_only_what_it_left_not_what_was_already_pending()
+    {
+        AgentHarness? harness = null;
+        var first = new FakeTool("first", AgentToolKind.SafeWrite)
+        {
+            // Leaves a change for the agent's next save to write, the way an audit row left Added by an
+            // earlier swallowed save would be.
+            OnExecute = (_, context) =>
+            {
+                harness!.Db.Projects.Add(new Harbora.Domain.Projects.Project { WorkspaceId = context.WorkspaceId, Name = "One", Slug = "left-by-first" });
+                return new AgentToolResult(true, "{}", "first done", "اول انجام شد");
+            }
+        };
+        var second = new FakeTool("second", AgentToolKind.SafeWrite)
+        {
+            OnExecute = (_, context) =>
+            {
+                harness!.Db.Projects.Add(new Harbora.Domain.Projects.Project { WorkspaceId = context.WorkspaceId, Name = "Two", Slug = "left-by-second" });
+                return AgentToolResult.Failed("No.", "نه.");
+            }
+        };
+        var (h, plan) = await PlanWith(first, second);
+        harness = h;
+        using var _ = h;
+
+        await h.Plans.ApproveAsync(h.Actor, plan.Id, Approve(), default);
+
+        (await h.Db.Projects.IgnoreQueryFilters().AnyAsync(p => p.Slug == "left-by-first")).Should().BeTrue(
+            "it was pending before the failing step ran, so it was not that step's to drop");
+        (await h.Db.Projects.IgnoreQueryFilters().AnyAsync(p => p.Slug == "left-by-second")).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_recheck_refusal_is_still_the_answer_when_its_first_save_breaks()
+    {
+        var tool = new FakeTool("create", AgentToolKind.SafeWrite);
+        var (h, plan) = await PlanWith(tool);
+        using var _ = h;
+        tool.OnValidate = (_, context, _) =>
+        {
+            // An agent row the change guard does not drop, and that the first save cannot write.
+            h.Db.AgentConversations.Add(new AgentConversation { WorkspaceId = context.WorkspaceId, UserId = context.UserId, Title = null! });
+            return AgentValidation.Refused("Gone.", "رفته.");
+        };
+
+        var outcome = await h.Plans.ApproveAsync(h.Actor, plan.Id, Approve(), default);
+
+        outcome.Ok.Should().BeFalse();
+        outcome.Refusal!.Code.Should().Be(AgentPlanRefusal.RevalidationRefusedCode, "a 409, not a 200 with a failed result");
+        (await h.Db.AgentPlans.AsNoTracking().SingleAsync(p => p.Id == plan.Id)).Status.Should().Be(AgentPlanStatus.Failed);
+        tool.Executions.Should().Be(0);
+    }
+
+    [Fact]
     public async Task An_auto_run_whose_tool_times_out_reports_the_failure_instead_of_saying_nothing_ran()
     {
         var create = new FakeTool("create_database", AgentToolKind.SafeWrite)

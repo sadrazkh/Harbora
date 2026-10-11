@@ -48,12 +48,4 @@ internal static class AgentTracker
         }
         return dropped;
     }
-
-    /// <summary>Detaches every unsaved change, the agent's own included — the clean slate a broken run
-    /// is recorded on, so nothing half-written is retried along with the record.</summary>
-    public static void DetachAllChanges(DbContext db)
-    {
-        foreach (var entry in db.ChangeTracker.Entries().Where(IsChange).ToList())
-            entry.State = EntityState.Detached;
-    }
 }
