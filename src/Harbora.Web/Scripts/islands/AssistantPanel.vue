@@ -9,6 +9,7 @@ import AssistantText from './AssistantText.vue';
 import AssistantPlanCard from './AssistantPlanCard.vue';
 import AssistantResultCard from './AssistantResultCard.vue';
 import { createAssistantApi, buildPageContext, parseDeclaredContext, isGuid } from './assistantApi.js';
+import { textDirection } from './assistantFormat.js';
 import {
   createTimeline, loadConversation, addUserMessage, applyStreamEvent, applyPlanResult,
   markPlanRejected, settleTurn,
@@ -111,6 +112,9 @@ async function showHistory() {
 }
 
 async function openConversation(id: string, { quietIfGone = false } = {}) {
+  // A turn still streaming writes into whatever conversation is on screen; switching under it
+  // would put its answer into the wrong one.
+  if (streaming.value) return;
   if (!isGuid(id)) { prefs.setConversationId(null); return; }
   loadingConversation.value = true;
   try {
@@ -297,17 +301,19 @@ const Back = fa ? ChevronRight : ChevronLeft;
         <AssistantIcon :icon="Sparkles" />
       </span>
       <div class="min-w-0 flex-1">
-        <h2 class="text-sm font-semibold text-ink">{{ t('Assistant', 'دستیار') }}</h2>
-        <p class="truncate text-[11px] text-ink-faint" data-assistant-status
-           :data-available="status ? String(status.available) : 'unknown'">
-          <template v-if="statusLoading && !status">{{ t('Checking…', 'در حال بررسی…') }}</template>
-          <template v-else-if="statusError">{{ say(statusError) }}</template>
-          <template v-else-if="unavailable">{{ t('Unavailable', 'در دسترس نیست') }}</template>
+        <h2 class="text-lg font-semibold leading-6 text-ink">{{ t('Assistant', 'دستیار') }}</h2>
+        <!-- Two lines rather than one truncated one: a long model id must not push the remaining
+             count — the number people actually need — off the end. -->
+        <div class="text-[11px] leading-4 text-ink-faint" data-assistant-status
+             :data-available="status ? String(status.available) : 'unknown'">
+          <p v-if="statusLoading && !status">{{ t('Checking…', 'در حال بررسی…') }}</p>
+          <p v-else-if="statusError" class="truncate" :title="say(statusError)">{{ say(statusError) }}</p>
+          <p v-else-if="unavailable">{{ t('Unavailable', 'در دسترس نیست') }}</p>
           <template v-else-if="status">
-            <span dir="ltr">{{ status.model || t('default model', 'مدل پیش‌فرض') }}</span>
-            <template v-if="remainingLabel"> · <span :class="outOfRequests ? 'text-danger' : ''">{{ remainingLabel }}</span></template>
+            <p v-if="remainingLabel" :class="outOfRequests ? 'text-danger' : ''" data-assistant-remaining>{{ remainingLabel }}</p>
+            <p class="truncate" dir="ltr" :class="fa ? 'text-end' : ''" :title="status.model || ''">{{ status.model || t('default model', 'مدل پیش‌فرض') }}</p>
           </template>
-        </p>
+        </div>
       </div>
       <button type="button" class="rounded-lg p-1.5 text-ink-muted hover:bg-surface-2 hover:text-ink disabled:opacity-40"
               :class="view === 'history' ? 'bg-surface-2 text-ink' : ''" :aria-pressed="view === 'history'"
@@ -329,21 +335,21 @@ const Back = fa ? ChevronRight : ChevronLeft;
 
     <!-- Conversation list -->
     <div v-if="view === 'history'" class="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3" data-assistant-conversations>
-      <button type="button" class="mb-2 flex items-center gap-1 text-xs text-ink-muted hover:text-ink" @click="view = 'chat'">
+      <button type="button" class="mb-2 flex items-center gap-1 text-sm text-ink-muted hover:text-ink" @click="view = 'chat'">
         <AssistantIcon :icon="Back" :size="14" />{{ t('Back to the conversation', 'بازگشت به گفت‌وگو') }}
       </button>
       <p v-if="conversationsLoading" class="flex items-center gap-2 p-3 text-sm text-ink-faint">
         <AssistantIcon :icon="LoaderCircle" spin />{{ t('Loading…', 'در حال بارگذاری…') }}
       </p>
-      <p v-else-if="conversationsError" class="alert-danger text-xs" role="alert">{{ say(conversationsError) }}</p>
+      <p v-else-if="conversationsError" class="alert-danger text-sm" role="alert">{{ say(conversationsError) }}</p>
       <p v-else-if="conversations.length === 0" class="p-3 text-sm text-ink-faint">{{ t('No conversations yet.', 'هنوز گفت‌وگویی نیست.') }}</p>
       <ul v-else class="space-y-1">
         <li v-for="c in conversations" :key="c.id">
-          <button type="button" class="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-start hover:bg-surface-2"
-                  :class="c.id === timeline.conversationId ? 'bg-accent-soft' : ''" @click="openConversation(c.id)">
+          <button type="button" class="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-start hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
+                  :class="c.id === timeline.conversationId ? 'bg-accent-soft' : ''" :disabled="streaming" @click="openConversation(c.id)">
             <AssistantIcon :icon="MessageSquare" class="mt-0.5 text-ink-faint" />
             <span class="min-w-0 flex-1">
-              <span class="block truncate text-sm text-ink" dir="auto">{{ c.title || t('Untitled', 'بی‌عنوان') }}</span>
+              <span class="block truncate text-sm text-ink" :dir="textDirection(c.title)">{{ c.title || t('Untitled', 'بی‌عنوان') }}</span>
               <span class="block text-[11px] text-ink-faint">{{ formatDate(c.updatedAt) }}</span>
             </span>
           </button>
@@ -354,10 +360,10 @@ const Back = fa ? ChevronRight : ChevronLeft;
     <!-- The conversation -->
     <div v-else ref="scroller" class="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-4 py-4"
          role="log" aria-live="polite" :aria-busy="streaming ? 'true' : 'false'" data-assistant-log>
-      <div v-if="unavailable" class="flex items-start gap-2 rounded-xl border border-warn/20 bg-warn-soft px-3 py-2.5 text-xs leading-5 text-warn" role="status" data-assistant-unavailable>
-        <AssistantIcon :icon="TriangleAlert" :size="14" class="mt-0.5" /><span dir="auto">{{ unavailableReason }}</span>
+      <div v-if="unavailable" class="flex items-start gap-2 rounded-xl border border-warn/20 bg-warn-soft px-3 py-2.5 text-sm leading-5 text-warn" role="status" data-assistant-unavailable>
+        <AssistantIcon :icon="TriangleAlert" :size="14" class="mt-0.5" /><span :dir="textDirection(unavailableReason)">{{ unavailableReason }}</span>
       </div>
-      <div v-else-if="outOfRequests" class="rounded-xl border border-warn/20 bg-warn-soft px-3 py-2.5 text-xs leading-5 text-warn" role="status">
+      <div v-else-if="outOfRequests" class="rounded-xl border border-warn/20 bg-warn-soft px-3 py-2.5 text-sm leading-5 text-warn" role="status">
         {{ t("Today's assistant requests for this workspace are used up.", 'سهمیهٔ درخواست‌های امروز دستیار برای این ورک‌اسپیس تمام شده است.') }}
       </div>
 
@@ -368,25 +374,25 @@ const Back = fa ? ChevronRight : ChevronLeft;
       <div v-else-if="timeline.items.length === 0 && !unavailable" class="space-y-3 pt-6 text-center">
         <p class="text-sm text-ink-muted">{{ t('Ask in Persian or English. Changes are shown to you as a plan first — nothing runs until you approve it.', 'به فارسی یا انگلیسی بپرسید. هر تغییری اول به‌صورت برنامه نشانتان داده می‌شود — تا تأیید نکنید، چیزی اجرا نمی‌شود.') }}</p>
         <div class="flex flex-col items-stretch gap-1.5">
-          <button v-for="s in suggestions" :key="s" type="button" class="rounded-lg border border-line bg-surface-2 px-3 py-2 text-start text-xs text-ink-muted hover:border-accent/30 hover:text-ink" dir="auto" @click="useSuggestion(s)">{{ s }}</button>
+          <button v-for="s in suggestions" :key="s" type="button" class="rounded-lg border border-line bg-surface-2 px-3 py-2 text-start text-sm text-ink-muted hover:border-accent/30 hover:text-ink" :dir="textDirection(s)" @click="useSuggestion(s)">{{ s }}</button>
         </div>
       </div>
 
       <template v-for="item in timeline.items" :key="item.key">
         <div v-if="item.kind === 'user'" class="flex justify-end" data-assistant-message="user">
-          <div class="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-ee-md bg-accent px-3 py-2 text-sm leading-6 text-white" dir="auto">{{ item.text }}</div>
+          <div class="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-ee-md bg-accent px-3 py-2 text-sm leading-6 text-white" :dir="textDirection(item.text)">{{ item.text }}</div>
         </div>
 
         <div v-else-if="item.kind === 'assistant'" class="text-sm text-ink" data-assistant-message="assistant">
           <AssistantText :text="item.text" />
         </div>
 
-        <div v-else-if="item.kind === 'tool'" class="flex items-center gap-2 text-xs text-ink-muted" :data-tool-state="item.state">
+        <div v-else-if="item.kind === 'tool'" class="flex items-center gap-2 text-sm text-ink-muted" :data-tool-state="item.state">
           <AssistantIcon :icon="toolIcon(item.state)" :size="14" :spin="item.state === 'running'" :class="toolIconClass(item.state)" />
-          <span class="min-w-0 truncate" dir="auto">{{ toolText(item) }}</span>
+          <span class="min-w-0 truncate" :dir="textDirection(toolText(item))">{{ toolText(item) }}</span>
         </div>
 
-        <details v-else-if="item.kind === 'tool-history'" class="group text-xs text-ink-faint">
+        <details v-else-if="item.kind === 'tool-history'" class="group text-[11px] text-ink-faint">
           <summary class="flex cursor-pointer list-none items-center gap-2 [&::-webkit-details-marker]:hidden">
             <AssistantIcon :icon="Wrench" :size="14" />
             <span>{{ t('Tool result:', 'نتیجهٔ ابزار:') }} <code dir="ltr" class="font-mono">{{ item.toolName }}</code></span>
@@ -399,13 +405,13 @@ const Back = fa ? ChevronRight : ChevronLeft;
 
         <AssistantResultCard v-else-if="item.kind === 'result'" :result="item.result" :plan="item.plan" :fa="fa" />
 
-        <div v-else-if="item.kind === 'error'" class="flex items-start gap-2 rounded-xl border border-danger/20 bg-danger-soft px-3 py-2.5 text-xs leading-5 text-danger" role="alert" data-assistant-error>
+        <div v-else-if="item.kind === 'error'" class="flex items-start gap-2 rounded-xl border border-danger/20 bg-danger-soft px-3 py-2.5 text-sm leading-5 text-danger" role="alert" data-assistant-error>
           <AssistantIcon :icon="TriangleAlert" :size="14" class="mt-0.5" />
-          <span dir="auto">{{ fa ? item.messageFa || item.messageEn : item.messageEn || item.messageFa }}</span>
+          <span :dir="textDirection(fa ? item.messageFa || item.messageEn : item.messageEn || item.messageFa)">{{ fa ? item.messageFa || item.messageEn : item.messageEn || item.messageFa }}</span>
         </div>
       </template>
 
-      <p v-if="streaming" class="flex items-center gap-2 text-xs text-ink-faint" data-assistant-working>
+      <p v-if="streaming" class="flex items-center gap-2 text-sm text-ink-faint" data-assistant-working>
         <AssistantIcon :icon="LoaderCircle" :size="14" spin />{{ t('The assistant is working…', 'دستیار در حال کار است…') }}
       </p>
     </div>
@@ -414,7 +420,7 @@ const Back = fa ? ChevronRight : ChevronLeft;
     <form class="border-t border-line p-3" @submit.prevent="send">
       <div class="flex items-end gap-2 rounded-xl border border-line-strong bg-surface px-2 py-1.5 focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/15">
         <label for="assistant-composer" class="sr-only">{{ t('Message the assistant', 'پیام به دستیار') }}</label>
-        <textarea id="assistant-composer" ref="composer" v-model="draft" rows="1" dir="auto"
+        <textarea id="assistant-composer" ref="composer" v-model="draft" rows="1" :dir="textDirection(draft)"
                   :disabled="unavailable || outOfRequests"
                   :placeholder="t('Ask the assistant…', 'از دستیار بپرسید…')"
                   class="max-h-40 min-h-[2.25rem] flex-1 resize-none bg-transparent px-1 py-1.5 text-sm text-ink outline-none placeholder:text-ink-faint focus-visible:outline-none disabled:cursor-not-allowed"
@@ -424,7 +430,7 @@ const Back = fa ? ChevronRight : ChevronLeft;
           <AssistantIcon :icon="streaming ? LoaderCircle : ArrowUp" :spin="streaming" />
         </button>
       </div>
-      <p class="mt-1.5 px-1 text-[10.5px] text-ink-faint">{{ t('Enter to send · Shift+Enter for a new line · Ctrl+J to open or close', 'Enter برای ارسال · Shift+Enter برای خط تازه · Ctrl+J برای باز و بسته کردن') }}</p>
+      <p class="mt-1.5 px-1 text-[11px] text-ink-faint">{{ t('Enter to send · Shift+Enter for a new line · Ctrl+J to open or close', 'Enter برای ارسال · Shift+Enter برای خط تازه · Ctrl+J برای باز و بسته کردن') }}</p>
     </form>
   </div>
 </template>

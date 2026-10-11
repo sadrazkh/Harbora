@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
-import { formatMessage, safeHref } from '../islands/assistantFormat.js';
+import { formatMessage, safeHref, textDirection, blockText } from '../islands/assistantFormat.js';
 
 // Model text is untrusted: it can repeat back anything a user, a resource name or a log line put in
 // front of the model. The pane formats it into a tree of plain-text nodes that the template renders
@@ -95,6 +95,39 @@ test('empty and missing text produce no blocks', () => {
   assert.deepEqual(formatMessage(''), []);
   assert.deepEqual(formatMessage(null), []);
   assert.deepEqual(formatMessage(undefined), []);
+});
+
+test('a Persian sentence that opens with a resource name still reads right to left', () => {
+  // dir="auto" goes by the first strong character, which here is the "s" of shop-db — and lays the
+  // whole sentence out left to right with its full stop on the wrong side.
+  assert.equal(textDirection('shop-db ساخته شد؛ آماده‌سازی در پس‌زمینه ادامه دارد.'), 'rtl');
+  assert.equal(textDirection('برای shop یک دیتابیس Postgres بساز'), 'rtl');
+  // Words, not letters: these have more Latin letters than Persian ones, all in two slugs.
+  assert.equal(textDirection('وصل کردن shop-db به shop'), 'rtl');
+  assert.equal(textDirection('shop-db به shop وصل شد.'), 'rtl');
+});
+
+test('a tie goes to the first word, as the browser would decide it', () => {
+  assert.equal(textDirection('shop آماده'), 'ltr');
+  assert.equal(textDirection('آماده shop'), 'rtl');
+});
+
+test('an English sentence that mentions a Persian name still reads left to right', () => {
+  assert.equal(textDirection('Created the project فروشگاه with two environments.'), 'ltr');
+});
+
+test('inline code does not vote, and text with no letters is left to the browser', () => {
+  assert.equal(textDirection('حذف `harbora-svc-old-db-data-volume`'), 'rtl');
+  assert.equal(textDirection('42 · 17%'), 'auto');
+  assert.equal(textDirection(''), 'auto');
+  assert.equal(textDirection(null), 'auto');
+});
+
+test('a block\'s text for direction purposes is its prose, without its code', () => {
+  const [p, ul, pre] = formatMessage('یک `a` دو\nسه\n\n- x `y`\n\n```\ncode\n```');
+  assert.equal(blockText(p), 'یک  دو\nسه');
+  assert.equal(blockText(ul), 'x ');
+  assert.equal(blockText(pre), 'code');
 });
 
 test('result links are followed only to panel paths and http(s) addresses', () => {

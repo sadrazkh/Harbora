@@ -129,6 +129,8 @@ export function initAssistantDrawer(panel, mountIsland) {
   function toggleByPerson() {
     byPerson = true;
     try { drawer.toggle(); } finally { byPerson = false; }
+    // Closed with the keyboard focus still inside it: a hidden element must not keep the focus.
+    if (!drawer.isOpen() && panel.contains(document.activeElement)) topbarToggle?.focus?.();
   }
 
   for (const toggle of toggles) {

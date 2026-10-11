@@ -3,7 +3,7 @@ import { computed } from 'vue';
 import { Check, CircleHelp, ExternalLink, Minus, X } from 'lucide';
 import { AssistantIcon } from './assistantIcon';
 import { stepResultState, summarizeResult } from './assistantPlan.js';
-import { safeHref } from './assistantFormat.js';
+import { safeHref, textDirection } from './assistantFormat.js';
 
 // What a plan actually did (AgentPlanResultView), from approve or from an `executed` event. A step
 // is drawn as done only when its result says exactly "done" (stepResultState) — this card is the
@@ -62,14 +62,14 @@ const iconClass = (r: any) => ({ done: 'bg-ok-soft text-ok', failed: 'bg-danger-
           <AssistantIcon :icon="iconFor(r)" :size="12" />
         </span>
         <div class="min-w-0 flex-1 space-y-1">
-          <p class="text-sm font-medium text-ink" dir="auto">{{ title(r, i) }}</p>
-          <p v-if="note(r)" class="text-xs leading-5" :class="stepResultState(r) === 'failed' ? 'text-danger' : 'text-ink-muted'" dir="auto">{{ note(r) }}</p>
+          <p class="text-sm font-medium text-ink" :dir="textDirection(title(r, i))">{{ title(r, i) }}</p>
+          <p v-if="note(r)" class="text-sm leading-5" :class="stepResultState(r) === 'failed' ? 'text-danger' : 'text-ink-muted'" :dir="textDirection(note(r))">{{ note(r) }}</p>
           <div v-if="r.links?.length" class="flex flex-wrap gap-1.5 pt-0.5">
             <template v-for="(link, li) in r.links" :key="li">
-              <a v-if="safeHref(link.url)" :href="safeHref(link.url)!" class="inline-flex items-center gap-1 rounded-md bg-accent-soft px-2 py-1 text-[11px] font-medium text-accent-text hover:underline" dir="auto">
+              <a v-if="safeHref(link.url)" :href="safeHref(link.url)!" class="inline-flex items-center gap-1 rounded-md bg-accent-soft px-2 py-1 text-[11px] font-medium text-accent-text hover:underline" :dir="textDirection(link.label)">
                 {{ link.label }}<AssistantIcon :icon="ExternalLink" :size="11" />
               </a>
-              <span v-else class="rounded-md bg-surface-2 px-2 py-1 text-[11px] text-ink-muted" dir="auto">{{ link.label }}</span>
+              <span v-else class="rounded-md bg-surface-2 px-2 py-1 text-[11px] text-ink-muted" :dir="textDirection(link.label)">{{ link.label }}</span>
             </template>
           </div>
         </div>

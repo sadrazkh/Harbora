@@ -1,0 +1,177 @@
+<!doctype html>
+<!--
+  A browser harness for the assistant pane, for looking at it while the server (AssistantController,
+  agent D) is not on this branch: `npx vite --port 5183` in src/Harbora.Web, then open
+  /Scripts/tests/assistant-panel.preview.html. Same idea as deployment-logs.preview.html.
+
+  fetch is faked with the exact JSON shapes of AgentViews.cs and a scripted event stream, so what
+  this shows is the island's real code against the contract — not the server. Query string:
+    ?lang=en           English / LTR instead of Persian / RTL
+    ?scenario=cut      the stream stops before `done`
+    ?scenario=down     the assistant is unavailable
+    ?scenario=expired  the stored plan's 15 minutes are over (use with ?history)
+    ?scenario=locked   every request answers 403 feature_not_enabled
+    ?dark              dark theme
+-->
+<html lang="fa" dir="rtl" class="h-full">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Assistant pane preview</title></head>
+<body class="h-full bg-canvas text-ink antialiased">
+<div class="flex h-full">
+  <aside class="app-sidebar flex w-64 shrink-0 flex-col border-e border-line bg-surface"><div class="p-5 text-lg font-bold">Harbora</div></aside>
+  <div class="flex-1 flex flex-col min-w-0">
+    <header class="relative z-20 flex h-16 shrink-0 items-center gap-2 border-b border-line bg-surface/95 px-3 md:gap-3 md:px-5">
+      <div class="flex min-w-0 flex-1 justify-center px-1 md:px-3"><span class="w-full max-w-lg rounded-xl border border-line-strong bg-surface-2 px-3 py-2 text-sm text-ink-faint">…</span></div>
+      <button type="button" data-assistant-toggle data-assistant-state="enabled" aria-controls="assistant-panel" aria-expanded="false"
+              class="rounded-lg p-2 text-ink-muted hover:bg-surface-2 hover:text-accent-text aria-expanded:bg-accent-soft aria-expanded:text-accent-text" aria-label="assistant">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 3l1.9 5.8L20 10.7l-6.1 1.9L12 18.4l-1.9-5.8L4 10.7l6.1-1.9z"/></svg>
+      </button>
+    </header>
+    <div class="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div id="content-scroll" class="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <main class="min-w-0 flex-1 p-4 md:p-6">
+          <h1 class="text-2xl font-bold tracking-tight text-ink">shop</h1>
+          <p class="mt-2 text-sm text-ink-muted">Page content. The drawer overlays it; it does not push it aside.</p>
+          <div class="mt-6 grid gap-4 md:grid-cols-2"><div class="rail-panel h-40"></div><div class="rail-panel h-40"></div><div class="rail-panel h-40"></div><div class="rail-panel h-40"></div></div>
+        </main>
+      </div>
+      <aside id="assistant-panel" class="assistant-drawer" aria-hidden="true" data-csrf="preview-token" data-lang="fa"
+             data-assistant-context='{"path":null,"appId":"0199d0c4-6a1e-7000-8000-0000000000a1","serviceId":null,"projectId":null,"environmentId":"0199d0c4-6a1e-7000-8000-0000000000e1"}'>
+        <div data-assistant-host class="flex h-full min-h-0 flex-col">
+          <div class="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-sm text-ink-faint">
+            <p data-assistant-loading>Loading…</p>
+            <p data-assistant-load-failed hidden class="text-danger">Failed.</p>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+</div>
+<script type="module">
+import '../app.css';
+import { createApp } from 'vue';
+import { initAssistantDrawer } from '../assistantDrawer.js';
+
+const params = new URLSearchParams(location.search);
+const lang = params.get('lang') === 'en' ? 'en' : 'fa';
+const scenario = params.get('scenario') ?? '';
+document.documentElement.lang = lang;
+document.documentElement.dir = lang === 'fa' ? 'rtl' : 'ltr';
+document.documentElement.classList.toggle('dark', params.has('dark'));
+document.getElementById('assistant-panel').dataset.lang = lang;
+
+const fa = lang === 'fa';
+const PLAN_ID = '0199d0c4-6a1e-7000-8000-0000000000f1';
+const minutesFromNow = (m) => new Date(Date.now() + m * 60000).toISOString();
+
+const status = scenario === 'down'
+  ? { available: false, reasonEn: 'The assistant is switched off in Platform settings.', reasonFa: 'دستیار در تنظیمات پلتفرم خاموش است.', model: null, remainingToday: null }
+  : { available: true, reasonEn: null, reasonFa: null, model: 'meta-llama/llama-3.3-70b-instruct:free', remainingToday: 287 };
+
+const conversations = [
+  { id: '0199d0c4-6a1e-7000-8000-0000000000c1', title: fa ? 'دیتابیس برای shop' : 'A database for shop', updatedAt: minutesFromNow(-12) },
+  { id: '0199d0c4-6a1e-7000-8000-0000000000c2', title: fa ? 'چرا استقرار ناموفق بود؟' : 'Why did the deploy fail?', updatedAt: minutesFromNow(-60 * 26) },
+];
+
+const plan = {
+  id: PLAN_ID, status: 'pending', expiresAt: minutesFromNow(scenario === 'expired' ? -1 : 15),
+  steps: [
+    { index: 0, tool: 'create_database', kind: 'safe', titleEn: 'Create PostgreSQL 16 database shop-db', titleFa: 'ساخت دیتابیس PostgreSQL 16 به نام shop-db',
+      detailEn: 'Project shop · environment production · size small', detailFa: 'پروژهٔ shop · محیط production · اندازهٔ small',
+      warningsEn: [], warningsFa: [], confirmationPhrase: null, autoApproved: false, rememberable: true },
+    { index: 1, tool: 'attach_database', kind: 'safe', titleEn: 'Attach shop-db to shop', titleFa: 'وصل کردن shop-db به shop',
+      detailEn: 'Adds DATABASE_URL to shop', detailFa: 'متغیر DATABASE_URL به shop اضافه می‌شود',
+      warningsEn: [], warningsFa: [], confirmationPhrase: null, autoApproved: false, rememberable: true },
+    { index: 2, tool: 'restart_app', kind: 'dangerous', titleEn: 'Redeploy shop', titleFa: 'استقرار دوبارهٔ shop',
+      detailEn: null, detailFa: null, warningsEn: ['shop will be briefly unavailable while it restarts.'], warningsFa: ['shop هنگام راه‌اندازی دوباره، مدت کوتاهی در دسترس نیست.'],
+      confirmationPhrase: null, autoApproved: false, rememberable: false },
+    { index: 3, tool: 'delete_database', kind: 'destructive', titleEn: 'Delete database old-db', titleFa: 'حذف دیتابیس old-db',
+      detailEn: 'Its volume and backups are removed. This cannot be undone.', detailFa: 'حجم و پشتیبان‌هایش هم پاک می‌شوند. برگشت‌پذیر نیست.',
+      warningsEn: ['2 apps still read old-db.'], warningsFa: ['۲ اپ هنوز از old-db می‌خوانند.'], confirmationPhrase: 'old-db', autoApproved: false, rememberable: false },
+  ],
+};
+
+const conversation = {
+  id: conversations[0].id, title: conversations[0].title,
+  messages: [
+    { id: 'm1', role: 'user', text: fa ? 'برای shop یک دیتابیس Postgres بساز، وصلش کن و old-db را پاک کن' : 'Make a Postgres database for shop, attach it, and delete old-db', toolName: null, createdAt: minutesFromNow(-13) },
+    { id: 'm2', role: 'tool', text: '{"apps":[{"slug":"shop","status":"Running"}],"databases":[{"name":"old-db","engine":"postgres","version":"15"}]}', toolName: 'list_resources', createdAt: minutesFromNow(-13) },
+    { id: 'm3', role: 'assistant', text: fa
+        ? 'این برنامه را آماده کردم:\n- ساخت `shop-db` (PostgreSQL 16)\n- وصل کردنش به `shop`\n- حذف `old-db`\n\nتا تأیید نکنید چیزی اجرا نمی‌شود. <b>این متن HTML نیست</b>'
+        : 'I prepared this plan:\n- create `shop-db` (PostgreSQL 16)\n- attach it to `shop`\n- delete `old-db`\n\nNothing runs until you approve it. <b>This is not HTML</b>',
+      toolName: null, createdAt: minutesFromNow(-12) },
+  ],
+  pendingPlan: plan,
+};
+
+const result = {
+  planId: PLAN_ID, status: 'failed',
+  steps: [
+    { index: 0, state: 'done', summaryEn: 'Created shop-db; provisioning continues in the background.', summaryFa: 'shop-db ساخته شد؛ آماده‌سازی در پس‌زمینه ادامه دارد.', errorEn: null, errorFa: null,
+      links: [{ kind: 'database', id: '0199d0c4-6a1e-7000-8000-0000000000d1', label: 'shop-db', url: '/databases/0199d0c4-6a1e-7000-8000-0000000000d1' }] },
+    { index: 1, state: 'done', summaryEn: 'Attached shop-db to shop.', summaryFa: 'shop-db به shop وصل شد.', errorEn: null, errorFa: null, links: [] },
+    { index: 2, state: 'failed', summaryEn: null, summaryFa: null, errorEn: 'shop is already deploying; try again when it finishes.', errorFa: 'shop در حال استقرار است؛ پس از پایانش دوباره تلاش کنید.', links: [] },
+    { index: 3, state: 'skipped', summaryEn: null, summaryFa: null, errorEn: null, errorFa: null, links: [] },
+  ],
+};
+
+const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function stream(frames) {
+  const encoder = new TextEncoder();
+  return new Response(new ReadableStream({
+    async start(controller) {
+      for (const [delay, name, data] of frames) {
+        await sleep(delay);
+        const wire = `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
+        // Split every frame in two so the island's parser is exercised across reads here too.
+        const cut = Math.floor(wire.length / 2);
+        controller.enqueue(encoder.encode(wire.slice(0, cut)));
+        controller.enqueue(encoder.encode(wire.slice(cut)));
+      }
+      controller.close();
+    },
+  }), { headers: { 'content-type': 'text/event-stream' } });
+}
+
+window.fetch = async (url, init = {}) => {
+  const path = String(url);
+  const method = init.method ?? 'GET';
+  console.log('[preview fetch]', method, path, init.body ?? '');
+  await sleep(250);
+  if (scenario === 'locked') return json({ error: 'feature_not_enabled', feature: 'assistant', state: 'locked' }, 403);
+  if (path === '/assistant/status') return json(status);
+  if (path === '/assistant/conversations') return json(conversations);
+  if (path.startsWith('/assistant/conversations/') && method === 'GET') {
+    return path.endsWith(conversations[0].id) ? json(conversation) : json({ id: conversations[1].id, title: conversations[1].title, messages: [], pendingPlan: null });
+  }
+  if (path.endsWith('/approve')) return json(result);
+  if (path.endsWith('/reject')) return new Response(null, { status: 204 });
+  if (path.endsWith('/messages')) {
+    const frames = [
+      [100, 'started', { conversationId: '0199d0c4-6a1e-7000-8000-0000000000c3' }],
+      [300, 'tool', { name: 'get_app', kind: 'read', state: 'running', summaryEn: null, summaryFa: null }],
+      [900, 'tool', { name: 'get_app', kind: 'read', state: 'done', summaryEn: 'Read shop: running, 2 replicas', summaryFa: 'shop خوانده شد: در حال اجرا، ۲ نسخه' }],
+      [300, 'tool', { name: 'get_deployment', kind: 'read', state: 'running', summaryEn: null, summaryFa: null }],
+    ];
+    if (scenario === 'cut') return stream(frames);
+    return stream([...frames,
+      [900, 'tool', { name: 'get_deployment', kind: 'read', state: 'failed', summaryEn: 'No deployments yet', summaryFa: 'هنوز استقراری نیست' }],
+      [400, 'message', { id: 'm9', role: 'assistant', text: fa ? 'shop در حال اجراست و `2` نسخه دارد.\nهنوز استقراری ثبت نشده است.' : 'shop is running with `2` replicas.\nNo deployment has been recorded yet.', toolName: null, createdAt: new Date().toISOString() }],
+      [200, 'done', { conversationId: '0199d0c4-6a1e-7000-8000-0000000000c3', remainingToday: 286 }],
+    ]);
+  }
+  return json({}, 404);
+};
+
+if (!params.has('keep')) localStorage.removeItem('harbora-assistant-conversation');
+if (params.has('history')) localStorage.setItem('harbora-assistant-conversation', conversations[0].id);
+
+const panel = document.getElementById('assistant-panel');
+initAssistantDrawer(panel, (host, { close, focus }) =>
+  import('../islands/AssistantPanel.vue').then(({ default: AssistantPanel }) => {
+    createApp(AssistantPanel, { csrf: panel.dataset.csrf, lang, context: panel.dataset.assistantContext, autofocus: focus, onClose: close }).mount(host);
+  }));
+</script>
+</body>
+</html>

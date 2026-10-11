@@ -80,6 +80,44 @@ export function formatMessage(source) {
   return blocks;
 }
 
+const RTL_LETTER = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFC]/;
+const LTR_LETTER = /[A-Za-z\u00C0-\u024F]/;
+
+/**
+ * The direction a piece of text reads in: "rtl", "ltr", or "auto" when it has no letters at all.
+ *
+ * Decided by which script has more words, not by the first letter — which is what `dir="auto"`
+ * does, and why it gets this panel's sentences wrong: a Persian sentence that opens with a resource
+ * name ("shop-db ساخته شد.") would be laid out left to right, its full stop on the wrong side. Words,
+ * not letters, because a slug is one long Latin word inside a short Persian sentence ("وصل کردن
+ * shop-db به shop"). Inline code does not vote at all. A tie goes to the first word that has letters,
+ * the browser's own rule.
+ *
+ * @param {string | null | undefined} text
+ * @returns {'rtl' | 'ltr' | 'auto'}
+ */
+export function textDirection(text) {
+  if (!text) return 'auto';
+  let rtl = 0;
+  let ltr = 0;
+  let first = null;
+  for (const word of String(text).replace(/`[^`]*`/g, ' ').split(/\s+/)) {
+    const kind = RTL_LETTER.test(word) ? 'rtl' : LTR_LETTER.test(word) ? 'ltr' : null;
+    if (kind === 'rtl') rtl++;
+    else if (kind === 'ltr') ltr++;
+    first ??= kind;
+  }
+  if (rtl === ltr) return first ?? 'auto';
+  return rtl > ltr ? 'rtl' : 'ltr';
+}
+
+/** @param {Block} block */
+export function blockText(block) {
+  if (block.type === 'pre') return block.text;
+  const lines = block.type === 'p' ? block.lines : block.items;
+  return lines.map((line) => line.filter((n) => n.type === 'text').map((n) => n.text).join('')).join('\n');
+}
+
 /**
  * The href for a result link (AgentResourceLink.url), or null when it should not be followed. Panel
  * paths and http(s) addresses only: a `javascript:` or `data:` URL in a link is script with a label

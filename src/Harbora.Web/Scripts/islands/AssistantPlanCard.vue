@@ -5,6 +5,7 @@ import { AssistantIcon } from './assistantIcon';
 import {
   kindLabel, needsPhrase, isRememberable, planIsActionable, planIsExpired,
 } from './assistantPlan.js';
+import { textDirection } from './assistantFormat.js';
 
 // One plan waiting for the person's consent (AgentPlanView). Nothing on this card has run: that is
 // said on the card itself, because "create the database" in a list reads like a report unless
@@ -76,12 +77,12 @@ const rememberId = (s: any) => `assistant-remember-${plan.value.id}-${s.index}`;
           <span class="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-surface-2 text-[11px] font-semibold text-ink-muted" dir="ltr">{{ i + 1 }}</span>
           <div class="min-w-0 flex-1 space-y-1">
             <div class="flex flex-wrap items-center gap-1.5">
-              <span class="status-pill" :class="kindClass(step.kind)" data-step-kind-badge>{{ kindLabel(step.kind, fa) }}</span>
-              <span class="text-sm font-medium text-ink" dir="auto">{{ title(step) }}</span>
+              <span class="status-pill text-[11px]" :class="kindClass(step.kind)" data-step-kind-badge>{{ kindLabel(step.kind, fa) }}</span>
+              <span class="text-sm font-medium text-ink" :dir="textDirection(title(step))">{{ title(step) }}</span>
             </div>
-            <p v-if="detail(step)" class="text-xs leading-5 text-ink-muted" dir="auto">{{ detail(step) }}</p>
+            <p v-if="detail(step)" class="text-sm leading-5 text-ink-muted" :dir="textDirection(detail(step))">{{ detail(step) }}</p>
             <ul v-if="warnings(step).length" class="space-y-1">
-              <li v-for="(w, wi) in warnings(step)" :key="wi" class="flex items-start gap-1.5 text-xs leading-5 text-warn" dir="auto">
+              <li v-for="(w, wi) in warnings(step)" :key="wi" class="flex items-start gap-1.5 text-sm leading-5 text-warn" :dir="textDirection(w)">
                 <AssistantIcon :icon="TriangleAlert" :size="14" class="mt-0.5" /><span>{{ w }}</span>
               </li>
             </ul>
@@ -92,21 +93,21 @@ const rememberId = (s: any) => `assistant-remember-${plan.value.id}-${s.index}`;
           </div>
         </div>
 
-        <label v-if="actionable && isRememberable(step)" :for="rememberId(step)" class="flex cursor-pointer items-center gap-2 ps-7 text-xs text-ink-muted">
+        <label v-if="actionable && isRememberable(step)" :for="rememberId(step)" class="flex cursor-pointer items-center gap-2 ps-7 text-sm text-ink-muted">
           <input :id="rememberId(step)" v-model="item.form.remember[step.tool]" type="checkbox" class="h-4 w-4 rounded border-line-strong accent-[rgb(var(--brand))]" data-remember-tool />
           {{ t("Don't ask again for this", 'دیگر برای این کار نپرس') }}
         </label>
 
         <div v-if="actionable && needsPhrase(step)" class="space-y-1 ps-7">
-          <label :for="inputId(step)" class="block text-xs text-ink-muted">
+          <label :for="inputId(step)" class="block text-sm text-ink-muted">
             {{ t('To confirm, type', 'برای تأیید بنویسید') }}
             <code dir="ltr" class="rounded bg-danger-soft px-1 py-0.5 font-mono text-danger">{{ step.confirmationPhrase }}</code>
           </label>
-          <input :id="inputId(step)" v-model="item.form.phrases[step.index]" type="text" dir="auto" autocomplete="off" spellcheck="false"
-                 class="form-control py-1.5 font-mono text-xs" data-confirm-phrase
+          <input :id="inputId(step)" v-model="item.form.phrases[step.index]" type="text" :dir="textDirection(item.form.phrases[step.index])" autocomplete="off" spellcheck="false"
+                 class="form-control py-1.5 font-mono text-sm" data-confirm-phrase
                  :aria-invalid="item.mismatched.includes(step.index) ? 'true' : 'false'"
                  :aria-describedby="item.mismatched.includes(step.index) ? inputId(step) + '-error' : undefined" />
-          <p v-if="item.mismatched.includes(step.index)" :id="inputId(step) + '-error'" class="field-error" role="alert">
+          <p v-if="item.mismatched.includes(step.index)" :id="inputId(step) + '-error'" class="field-error text-sm" role="alert">
             <template v-if="step.confirmationPhrase">{{ t('That does not match. Type the name exactly as shown.', 'با نام نمایش‌داده‌شده یکی نیست. آن را دقیقاً همان‌طور بنویسید.') }}</template>
             <template v-else>{{ t('This step cannot be confirmed: no name to type was sent.', 'این گام قابل تأیید نیست: نامی برای نوشتن فرستاده نشده است.') }}</template>
           </p>
@@ -116,7 +117,7 @@ const rememberId = (s: any) => `assistant-remember-${plan.value.id}-${s.index}`;
 
     <footer v-if="actionable" class="space-y-2 border-t border-line px-3 py-2.5">
       <p class="text-[11px] text-ink-faint">{{ t('Nothing has run yet.', 'هنوز هیچ کاری اجرا نشده است.') }}</p>
-      <p v-if="item.error" class="alert-danger py-2 text-xs" role="alert" dir="auto">{{ fa ? item.error.messageFa : item.error.messageEn }}</p>
+      <p v-if="item.error" class="alert-danger py-2 text-sm" role="alert" :dir="textDirection(fa ? item.error.messageFa : item.error.messageEn)">{{ fa ? item.error.messageFa : item.error.messageEn }}</p>
       <div class="flex items-center gap-2">
         <button type="button" :disabled="item.busy" data-plan-run
                 :class="hasDestructive ? 'btn-danger inline-flex items-center gap-2 py-1.5' : 'btn-primary py-1.5'"
@@ -129,7 +130,7 @@ const rememberId = (s: any) => `assistant-remember-${plan.value.id}-${s.index}`;
         </button>
       </div>
     </footer>
-    <footer v-else-if="expired" class="border-t border-line px-3 py-2.5 text-xs text-ink-muted">
+    <footer v-else-if="expired" class="border-t border-line px-3 py-2.5 text-sm text-ink-muted">
       {{ t('Nothing ran. Ask again if you still want this.', 'هیچ کاری اجرا نشد. اگر هنوز این را می‌خواهید، دوباره بپرسید.') }}
     </footer>
   </section>
