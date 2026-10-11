@@ -2,7 +2,6 @@ using System.Text.Json;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Authorization;
-using Harbora.Domain.Billing;
 using Harbora.Domain.Common;
 using Harbora.Infrastructure.Billing;
 using Harbora.Infrastructure.Security;
@@ -14,15 +13,14 @@ namespace Harbora.Infrastructure.Agent.Tools;
 
 /// <summary>
 /// <c>start_database</c> — starts a stopped database, through <see cref="IManagedServiceEngine.StartAsync"/>,
-/// the call <c>DatabasesController.Start</c> makes after its <c>Guard</c>. The billing gate the engine asks is
-/// asked here first too (<see cref="IBillingGate"/> only reads), so a workspace that may not start anything is
-/// told so on the card's way in rather than after approval; the engine still asks again, and its refusal is
-/// mapped in both languages.
+/// the call <c>DatabasesController.Start</c> makes after its <c>Guard</c>. The billing gate is not asked here:
+/// <see cref="IBillingGate"/> is asked at the last place before a container runs — the engine — and never at
+/// the button, so a refusal for money arrives when the step runs, as the engine's
+/// <see cref="QuotaRefusedException"/>, and is told in both languages.
 /// </summary>
 public sealed class StartDatabaseTool(
     HarboraDbContext db,
     IManagedServiceEngine engine,
-    IBillingGate billingGate,
     ProjectAccessService access,
     AgentResourceResolver resolver,
     IOptions<BillingOptions> billing) : AgentWriteTool
@@ -68,8 +66,12 @@ public sealed class StartDatabaseTool(
             TitleFa: $"راه‌اندازی دیتابیس {service.Name}",
             DetailEn: $"{AgentResourceResolver.Lower(service.Type)} {service.Version} in {AgentResourceResolver.Place(service)}, with its data as it was.",
             DetailFa: $"{AgentResourceResolver.Lower(service.Type)} نسخهٔ {service.Version} در {AgentResourceResolver.Place(service)}، با همان داده‌های قبلی.",
-            WarningsEn: billed ? ["While it runs, its size is charged by the hour."] : null,
-            WarningsFa: billed ? ["تا وقتی روشن است، هزینهٔ اندازهٔ آن ساعتی کسر می‌شود."] : null);
+            WarningsEn: billed
+                ? ["While it runs, its size is charged by the hour. A workspace that may not start anything now (an empty wallet, a suspension) is refused when the step runs."]
+                : null,
+            WarningsFa: billed
+                ? ["تا وقتی روشن است، هزینهٔ اندازهٔ آن ساعتی کسر می‌شود. اگر فضای کاری اکنون اجازهٔ روشن کردن چیزی را نداشته باشد (کیف پول خالی، تعلیق)، هنگام اجرای مرحله رد می‌شود."]
+                : null);
     }
 
     public override async Task<AgentToolResult> ExecuteAsync(JsonElement args, AgentToolContext context, CancellationToken ct)
@@ -122,9 +124,6 @@ public sealed class StartDatabaseTool(
             return (null, AgentValidation.Refused(
                 $"{service.Name} is still being provisioned; it starts by itself when that finishes.",
                 $"{service.Name} هنوز در حال آماده‌سازی است؛ پس از پایان آن خودش روشن می‌شود."));
-
-        var mayStart = await billingGate.CanStartAsync(context.WorkspaceId, BilledResourceType.Service, service.Id, ct);
-        if (!mayStart.Allowed) return (null, QuotaRefused(mayStart));
 
         return (service, null);
     }

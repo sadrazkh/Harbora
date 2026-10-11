@@ -568,7 +568,7 @@ public class DatabaseToolsTests
     }
 
     [Fact]
-    public async Task Start_is_safe_refuses_one_running_and_maps_the_billing_gate_in_both_languages()
+    public async Task Start_is_safe_refuses_one_running_and_says_when_billing_may_still_refuse_it()
     {
         using var rig = new DatabaseToolRig();
         rig.SeedDatabase("idle", status: ServiceStatus.Stopped);
@@ -577,14 +577,12 @@ public class DatabaseToolsTests
 
         var verdict = await rig.ValidateAsync(rig.Start(), """{"database":"idle"}""");
         var running = await rig.ValidateAsync(rig.Start(), """{"database":"busy"}""");
-        rig.BillingGate.Check = QuotaCheck.Deny("The wallet is empty.", "کیف پول خالی است.");
-        var unpaid = await rig.ValidateAsync(rig.Start(), """{"database":"idle"}""");
 
         verdict.Ok.Should().BeTrue(verdict.Error);
         verdict.TitleFa.Should().Be("راه‌اندازی دیتابیس idle");
-        verdict.WarningsEn.Should().ContainSingle().Which.Should().Contain("charged by the hour");
-        running.Error.Should().Be("busy is already running.");
-        unpaid.Should().BeEquivalentTo(new { Ok = false, Error = "The wallet is empty.", ErrorFa = "کیف پول خالی است." });
+        verdict.WarningsEn.Should().ContainSingle().Which.Should().Contain("charged by the hour").And.Contain("refused when the step runs");
+        verdict.WarningsFa.Should().ContainSingle().Which.Should().Contain("کیف پول خالی");
+        running.Should().BeEquivalentTo(new { Ok = false, Error = "busy is already running.", ErrorFa = "busy از قبل روشن است." });
     }
 
     [Fact]

@@ -33,7 +33,6 @@ internal sealed class DatabaseToolRig : IDisposable
     public ToolEngine Engine { get; }
     public ToolQuota Quota { get; } = new();
     public ToolScheduler Scheduler { get; } = new();
-    public ToolBillingGate BillingGate { get; } = new();
     public DeletingAppOps AppOps { get; }
 
     /// <summary>One options object every tool and service reads, so a test can switch billing on mid-way.</summary>
@@ -82,7 +81,7 @@ internal sealed class DatabaseToolRig : IDisposable
     public DetachDatabaseTool Detach() => new(Db, Attachments, Resolver);
     public RotateDatabasePasswordTool Rotate() => new(Db, Engine, Access, Resolver, Usage, H.Protector);
     public StopDatabaseTool Stop(TimeSpan? timeout = null) => new(Db, Engine, Access, Resolver, Usage) { EngineTimeout = timeout ?? TimeSpan.FromMinutes(2) };
-    public StartDatabaseTool Start(TimeSpan? timeout = null) => new(Db, Engine, BillingGate, Access, Resolver, Options.Create(Billing)) { EngineTimeout = timeout ?? TimeSpan.FromMinutes(2) };
+    public StartDatabaseTool Start(TimeSpan? timeout = null) => new(Db, Engine, Access, Resolver, Options.Create(Billing)) { EngineTimeout = timeout ?? TimeSpan.FromMinutes(2) };
     public DeleteDatabaseTool DeleteDatabase() => new(Provisioning, Resolver);
 
     public DeleteProjectTool DeleteProject() => new(
@@ -343,13 +342,6 @@ internal sealed class ToolScheduler : ISchedulerService
 
     public Task<PlacementResult> CheckAsync(Guid serverId, long memoryBytes, double cpu, CancellationToken ct) =>
         Task.FromResult(new PlacementResult(true, serverId, null));
-}
-
-internal sealed class ToolBillingGate : IBillingGate
-{
-    public QuotaCheck Check { get; set; } = QuotaCheck.Ok;
-
-    public Task<QuotaCheck> CanStartAsync(Guid workspaceId, CancellationToken ct) => Task.FromResult(Check);
 }
 
 /// <summary>Deletes the app row the way the real operations eventually do, unless told it will not stop.</summary>
