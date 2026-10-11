@@ -76,3 +76,68 @@ grep -c "Harbora.Tests.dll" /tmp/test-r6-chat-client.log -> 2 (present)
 4. **For agent D:** text that precedes a tool call ("On it.") is streamed through the callback like any other text, because it cannot be known to be a non-final answer until the stream ends; the *returned* response is what says whether the call also carries tool calls. The brief's "deltas only for the final answer of a model call" therefore has to be decided by D from the response (or by buffering), not by this client. The callback is awaited inline, so a slow callback slows the read.
 5. If the callback throws, `CompleteAsync` throws (it is not a provider failure). D's `emit` should swallow a gone client itself, as the brief already says.
 6. `Harbora.Postgres.Tests` skipped (108, no Postgres here); nothing in this change touches the database.
+
+---
+
+## Fixes after review
+
+Commit `d6da4bd`. Review found two Important issues and four minors; all are fixed, each with a named test.
+
+**Important 1 — the callback's own exceptions were reported as provider failures.** The callback ran inside the `try` whose
+handlers turn an `OperationCanceledException` into "stopped sending for 45 seconds" and an `IOException` into "the AI
+provider's connection dropped" — exactly what a closed browser tab produces. Now every call to `onTextDelta` goes through
+`Deliver(...)`, which wraps whatever it throws in a private `CallbackFault`; no handler filter can match that type, and the
+outer `catch (CallbackFault)` rethrows the original exception with `ExceptionDispatchInfo` (same instance, same type). Covered at
+all three call sites: the streamed read, the provider-ignored-`stream` JSON reply, and the fallback (which was already outside the
+`try`).
+Tests (each runs for OCE, `TaskCanceledException`, `IOException`, `HttpRequestException`, `TimeoutException`, `InvalidOperationException`):
+`Whatever_the_callback_throws_reaches_the_caller_as_itself_and_never_as_a_provider_failure` (also asserts the stream is
+abandoned after the first fault), `A_callback_that_fails_asynchronously_is_the_same`,
+`A_callback_fault_is_also_the_callers_when_the_provider_answered_with_plain_json_or_the_fallback_ran`.
+
+**Important 2 — the fallback heuristic matched "upstream" and quoted requests.** `RefusesStreaming` now parses the body and
+looks for the word `(?<![a-z_])stream` (case-insensitive) only in the error text: `ErrorDetail(...)` (message plus
+`metadata.raw`), else a bare top-level `message` or `detail` (vLLM- and FastAPI-style bodies), else — only when the body is not JSON
+at all — the plain text itself. A JSON body with no error text (for example one that just echoes `"stream":true`) never falls back.
+Test: `Only_an_error_that_talks_about_streaming_as_a_word_makes_a_4xx_a_refusal_to_stream` (12 cases): must NOT fall back —
+`Upstream provider returned error`, `downstream service`, an error plus a quoted `"stream":true` request, a bare echo
+`{"stream":true,...}`, `metadata.raw: "upstream said no"`, an HTML 400 mentioning "upstream"; must fall back — `Streaming is not
+supported`, `stream_options` rejected, `{"object":"error","message":"stream mode …"}`, `{"detail":"Streaming responses …"}`,
+`metadata.raw: "stream=true is not allowed"`, plain text `streaming is not supported`. (`ErrorDetail` keeps 300 characters, so a
+refusal whose only mention of streaming is past that point would not fall back; none of the real shapes seen does that.)
+
+**Minors**
+- *Parallel calls on one wire index.* Tool calls are now keyed by creation order, with a map of the newest call per wire index, so an
+  id-less argument fragment goes to the newest call under its index, and a repeated id goes back to the call it names. Tests:
+  `Fragments_with_no_id_go_to_the_newest_call_under_their_wire_index` (fails on the old code), `A_repeated_id_under_a_shared_wire_index_returns_to_the_call_it_names`.
+- *Callback time is not silence.* The idle timer used to be armed before the read and keep running through the callback; a read
+  that then needed the network failed at once with an already-cancelled token. It is now a fresh timer created inside `NextLineAsync`
+  around the read alone. Test: `The_time_the_callback_takes_is_never_counted_as_the_providers_silence` (callback takes 350 ms against a
+  150 ms limit; fails on the old code). To make the fake faithful the scripted stream now throws on a read asked for with an
+  already-cancelled token, as a socket stream does.
+- *Fallback shares the call's budget.* `SendWholeAsync` takes an optional `within`; `StreamAsync` passes `RequestTimeout` minus the
+  time the refused attempt took (and returns a timeout if none is left). Test: `The_fallback_gets_what_is_left_of_the_budget_not_a_second_one`
+  (1 s budget, refusal after 0.6 s, hanging retry: the call ends in about 1 s, asserted under 1.4 s; fails on the old code).
+- *A cancellation that is neither our budget nor our silence timer is a timeout.* The silence verdict is now only given by
+  `NextLineAsync` when its own timer fired and the overall budget did not; every other cancellation reaching `TryStreamAsync` is
+  `TimedOut`. Test: `A_cancellation_that_is_neither_our_budget_nor_our_silence_timer_is_a_timeout_not_a_silence` (fails on the old code).
+
+Checked against the old code: with the fixed tests and the previous `src/` restored, 21 of the 81 streaming tests failed (the callback
+faults, the five false-positive fallbacks, the parallel-call fragments, the stray cancellation, the shared budget); after the
+silence-timer test was made to need a second network read it failed there too. Then `git stash pop` brought the fixes back.
+
+**Output**
+```
+dotnet build Harbora.slnx -p:UseSharedCompilation=false -> BUILD_EXIT=0 (NU1900/NU1903 NuGet warnings only; no compiler warnings)
+dotnet test  Harbora.slnx --no-build                    -> EXIT=0
+Passed!  - Failed:     0, Passed:  6909, Skipped:     0, Total:  6909 - Harbora.Tests.dll (net10.0)
+Passed!  - Failed:     0, Passed:   500, Skipped:    17, Total:   517 - Harbora.NodeAgent.Tests.dll
+Passed!  - Failed:     0, Passed:    15, Skipped:     0, Total:    15 - Harbora.NodeIngress.Tests.dll
+Skipped! - Failed:     0, Passed:     0, Skipped:   108, Total:   108 - Harbora.Postgres.Tests.dll
+```
+`Harbora.Tests` 6909 = 6874 + 35 new; `AgentChatClientStreamingTests` is now 81 tests (was 46). Logs `/tmp/test-r6-chat-client.log{,.build,.exit}`.
+
+**Concerns that remain:** unchanged from the first report (never run against a real provider; the 90 s ceiling also bounds a long
+answer; a refusing provider costs an extra request per model call). One new note for D: because a callback fault is now the caller's
+exception, `emit` must swallow a gone browser itself, or the turn's model call is abandoned by that exception — which is what the
+brief already asks of it.
