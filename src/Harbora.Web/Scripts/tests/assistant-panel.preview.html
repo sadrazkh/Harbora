@@ -146,10 +146,16 @@ function stream(frames) {
 window.fetch = async (url, init = {}) => {
   const path = String(url);
   const method = init.method ?? 'GET';
-  console.log('[preview fetch]', method, path, init.body ?? '');
+  console.log('[preview fetch]', method, path, path.endsWith('/secrets') ? '(body withheld: it holds the secret)' : (init.body ?? ''));
   await sleep(250);
   if (scenario === 'locked') return json({ error: 'feature_not_enabled', feature: 'assistant', state: 'locked' }, 403);
   if (path === '/assistant/status') return json(status);
+  // The lock button: the value is posted here and only here; the handle comes back (AgentSecretView).
+  if (path === '/assistant/secrets' && method === 'POST') {
+    const body = JSON.parse(init.body);
+    console.log('[preview] secret held:', body.name, '(value length', body.value.length + ')');
+    return json({ handle: '{{secret:' + crypto.randomUUID().replace(/-/g, '').slice(0, 22) + '}}', name: body.name, expiresAt: new Date(Date.now() + 1800000).toISOString() });
+  }
   if (path === '/assistant/conversations' && method === 'POST') {
     if (scenario === 'nocreate') return new Response('', { status: 405 });
     return json({ id: CREATED_ID, title: '', updatedAt: new Date().toISOString() });

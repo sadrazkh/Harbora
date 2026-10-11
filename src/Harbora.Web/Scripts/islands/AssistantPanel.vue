@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue';
 import {
   ArrowUp, Check, ChevronLeft, ChevronRight, CircleHelp, History, Info, LoaderCircle, MessageSquare,
-  Plus, Sparkles, TriangleAlert, Wrench, X,
+  Plus, Sparkles, TriangleAlert, Wrench, X, Lock, Eye, EyeOff,
 } from 'lucide';
 import { AssistantIcon } from './assistantIcon';
 import AssistantText from './AssistantText.vue';
@@ -15,6 +15,8 @@ import {
 } from './assistantTimeline.js';
 import { checkPlanForm, buildApproveBody } from './assistantPlan.js';
 import { createAssistantSession } from './assistantSession.js';
+import { createSecretBook, createSecretForm, looksLikeSecret } from './assistantSecrets.js';
+import AssistantSecretText from './AssistantSecretText.vue';
 import { createAssistantPrefs } from '../assistantDrawer.js';
 
 // The assistant pane: status, conversations, the message stream, plan and result cards.
@@ -62,6 +64,42 @@ const conversationsLoading = ref(false);
 const conversationsError = ref<{ messageEn: string; messageFa: string } | null>(null);
 
 const draft = ref('');
+
+// ---- secrets (the lock button) -------------------------------------------------------------------
+// The value is typed into this form only, posted once, and forgotten; the draft gets a placeholder
+// naming it, which becomes the handle when the message is sent (assistantSecrets.js).
+const secrets = createSecretBook();
+const secretForm = createSecretForm({ api, book: secrets, wrap: reactive });
+const secretName = ref<HTMLInputElement | null>(null);
+let secretCursor: number | null = null;
+
+function openSecretForm() {
+  secretCursor = composer.value?.selectionStart ?? null;
+  secretForm.open();
+  nextTick(() => secretName.value?.focus());
+}
+
+function closeSecretForm() {
+  secretForm.close();
+  focusComposer();
+}
+
+async function holdSecret() {
+  const placeholder = await secretForm.submit();
+  if (!placeholder) return;
+  const { draft: next, cursor } = secrets.insert(draft.value, secretCursor ?? draft.value.length, placeholder);
+  draft.value = next;
+  nextTick(() => {
+    resizeComposer();
+    composer.value?.focus();
+    composer.value?.setSelectionRange(cursor, cursor);
+  });
+}
+
+// A draft that seems to carry a password or key in plain text: a gentle warning offering the lock
+// button. The first Send of such a draft is held so the warning is seen; Send again sends it as typed.
+const secretWarning = computed(() => looksLikeSecret(secrets.expand(draft.value)));
+const warnedDraft = ref('');
 const composer = ref<HTMLTextAreaElement | null>(null);
 const scroller = ref<HTMLElement | null>(null);
 
@@ -140,7 +178,8 @@ function newConversation() {
 /** Words that were not taken go back in the composer — unless the person has started typing again. */
 function restoreDraft(text?: string | null) {
   if (!text || draft.value.trim()) return;
-  draft.value = text;
+  // Handles this pane holds become their placeholders again; others stay as handles, still valid.
+  draft.value = secrets.collapse(text);
   nextTick(resizeComposer);
 }
 
@@ -153,11 +192,16 @@ function formatDate(value: string) {
 // ---- sending -----------------------------------------------------------------------------------
 
 async function send() {
-  const text = draft.value.trim();
-  if (!canSend.value || !text) return;
+  const typed = draft.value.trim();
+  if (!canSend.value || !typed) return;
+  if (secretWarning.value && warnedDraft.value !== typed) {
+    warnedDraft.value = typed;
+    return;
+  }
+  warnedDraft.value = '';
   draft.value = '';
   resizeComposer();
-  const outcome = await session.send(text);
+  const outcome = await session.send(secrets.expand(typed));
   restoreDraft(outcome.restoreDraft);
   scrollToEnd();
   focusComposer();
@@ -393,14 +437,14 @@ const Back = fa ? ChevronRight : ChevronLeft;
         <div v-if="item.kind === 'user'" class="flex flex-col items-end gap-1" data-assistant-message="user" :data-unsent="item.unsent ? 'true' : undefined">
           <div class="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-ee-md px-3 py-2 text-sm leading-6"
                :class="item.unsent ? 'border border-dashed border-line-strong bg-surface-2 text-ink' : 'bg-accent text-white'"
-               :dir="textDirection(item.text)">{{ item.text }}</div>
+               :dir="textDirection(item.text)"><AssistantSecretText :text="item.text" :name-of="secrets.nameOf" :fa="fa" :inverse="!item.unsent" /></div>
           <span v-if="item.unsent === 'unsure'" class="text-[11px] text-ink-muted">{{ t('May not have been sent', 'شاید فرستاده نشده باشد') }}</span>
           <span v-else-if="item.unsent" class="text-[11px] text-ink-muted">{{ t('Not sent', 'فرستاده نشد') }}</span>
         </div>
 
         <!-- The model's text — the bubble being written while deltas arrive, then the whole answer. -->
         <div v-else-if="item.kind === 'assistant'" class="text-sm text-ink" data-assistant-message="assistant" :data-live="item.live ? 'true' : undefined">
-          <AssistantText :text="item.text" :steady="item.streamed === true" />
+          <AssistantText :text="item.text" :steady="item.streamed === true" :name-of="secrets.nameOf" :fa="fa" />
           <p v-if="item.cut" class="mt-1 text-[11px] text-ink-muted" data-assistant-cut>{{ t('The rest of this answer did not arrive.', 'بقیهٔ این پاسخ نرسید.') }}</p>
         </div>
 
@@ -444,8 +488,47 @@ const Back = fa ? ChevronRight : ChevronLeft;
          when the dots appear. -->
     <p class="sr-only" role="status" aria-live="polite" data-assistant-thinking-status>{{ thinking ? t('Thinking…', 'در حال فکر کردن…') : '' }}</p>
 
+    <!-- The lock button's form: a secret goes to the panel, and only a placeholder into the message. Its
+         own <form>, so Enter in it adds the secret rather than sending the message. -->
+    <form v-if="secretForm.state.open" class="space-y-2 border-t border-line bg-surface-2 p-3" data-assistant-secret-form
+          autocomplete="off" @submit.prevent="holdSecret">
+      <p class="flex items-start gap-2 text-sm leading-5 text-ink-muted">
+        <AssistantIcon :icon="Lock" :size="14" class="mt-0.5 shrink-0" />
+        <span>{{ t('The value goes to the panel only — the AI sees a placeholder, never the secret. It is kept for 30 minutes.', 'مقدار فقط به پنل می‌رود — هوش مصنوعی فقط یک جای‌نگهدار می‌بیند، نه خود رمز را. تا ۳۰ دقیقه نگه داشته می‌شود.') }}</span>
+      </p>
+      <label class="block text-sm text-ink-muted" for="assistant-secret-name">{{ t('Name', 'نام') }}</label>
+      <input id="assistant-secret-name" ref="secretName" v-model="secretForm.state.name" type="text" dir="ltr" maxlength="100"
+             class="form-control py-1.5 font-mono text-sm" :placeholder="t('e.g. DATABASE_PASSWORD', 'مثلاً DATABASE_PASSWORD')" data-secret-name />
+      <label class="block text-sm text-ink-muted" for="assistant-secret-value">{{ t('Secret', 'مقدار') }}</label>
+      <div class="flex items-center gap-2">
+        <input id="assistant-secret-value" v-model="secretForm.state.value" :type="secretForm.state.reveal ? 'text' : 'password'" dir="ltr"
+               autocomplete="new-password" spellcheck="false" class="form-control py-1.5 font-mono text-sm" data-secret-value />
+        <button type="button" class="btn-secondary px-2 py-1.5" :aria-pressed="secretForm.state.reveal"
+                :aria-label="secretForm.state.reveal ? t('Hide the secret', 'پنهان کردن') : t('Show the secret', 'نمایش')"
+                @click="secretForm.state.reveal = !secretForm.state.reveal">
+          <AssistantIcon :icon="secretForm.state.reveal ? EyeOff : Eye" :size="14" />
+        </button>
+      </div>
+      <p v-if="secretForm.state.error" class="field-error text-sm" role="alert" :dir="textDirection(say(secretForm.state.error))">{{ say(secretForm.state.error) }}</p>
+      <div class="flex gap-2">
+        <button type="submit" class="btn-primary py-1.5" :disabled="secretForm.state.busy" data-secret-add>
+          <AssistantIcon v-if="secretForm.state.busy" :icon="LoaderCircle" spin />{{ t('Add to message', 'افزودن به پیام') }}
+        </button>
+        <button type="button" class="btn-secondary py-1.5" @click="closeSecretForm">{{ t('Cancel', 'لغو') }}</button>
+      </div>
+    </form>
+
     <!-- Composer -->
     <form class="border-t border-line p-3" @submit.prevent="send">
+      <!-- A password or key typed into the message: the AI would see it. Offered, never forced. -->
+      <p v-if="secretWarning" class="mb-2 flex items-start gap-2 rounded-lg border border-warn/20 bg-warn-soft px-3 py-2 text-sm leading-5 text-warn" role="status" data-assistant-secret-warning>
+        <AssistantIcon :icon="TriangleAlert" :size="14" class="mt-0.5 shrink-0" />
+        <span class="flex-1">
+          {{ t('This looks like a password or key. Messages go to the AI — give it with the lock button so only the panel sees it.', 'این شبیه رمز یا کلید است. پیام‌ها به هوش مصنوعی می‌رسند — با دکمهٔ قفل بدهید تا فقط پنل آن را ببیند.') }}
+          <template v-if="warnedDraft && warnedDraft === draft.trim()">{{ t(' Press Send again to send it as it is.', ' برای فرستادن همین متن، دوباره «ارسال» را بزنید.') }}</template>
+          <button type="button" class="ms-1 font-semibold underline" @click="openSecretForm">{{ t('Use the lock button', 'استفاده از دکمهٔ قفل') }}</button>
+        </span>
+      </p>
       <!-- Information, not a failure: "still answering", "your last message is back in the box". -->
       <p v-if="timeline.notice" class="mb-2 flex items-start gap-2 rounded-lg bg-surface-2 px-3 py-2 text-sm leading-5 text-ink-muted" role="status" data-assistant-notice
          :dir="textDirection(say(timeline.notice))">
@@ -458,6 +541,12 @@ const Back = fa ? ChevronRight : ChevronLeft;
                   :placeholder="t('Ask the assistant…', 'از دستیار بپرسید…')"
                   class="max-h-40 min-h-[2.25rem] flex-1 resize-none bg-transparent px-1 py-1.5 text-sm text-ink outline-none placeholder:text-ink-faint focus-visible:outline-none disabled:cursor-not-allowed"
                   data-assistant-composer @keydown="onComposerKey" @input="resizeComposer"></textarea>
+        <button type="button" class="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-ink-muted hover:bg-surface-2 hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+                :disabled="unavailable || outOfRequests" :aria-pressed="secretForm.state.open"
+                :aria-label="t('Add a secret privately', 'افزودن رمز به‌صورت خصوصی')" :title="t('Add a secret — the AI never sees it', 'افزودن رمز — هوش مصنوعی آن را نمی‌بیند')"
+                data-assistant-lock @click="secretForm.state.open ? closeSecretForm() : openSecretForm()">
+          <AssistantIcon :icon="Lock" />
+        </button>
         <button type="submit" class="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-accent text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
                 :disabled="!canSend" :aria-label="t('Send', 'ارسال')" :title="t('Send', 'ارسال')" data-assistant-send>
           <AssistantIcon :icon="answering ? LoaderCircle : ArrowUp" :spin="answering" />

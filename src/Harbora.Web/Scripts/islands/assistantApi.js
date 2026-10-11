@@ -271,6 +271,12 @@ export function createAssistantApi({ fetch: fetchImpl = globalThis.fetch?.bind(g
      * sent. A reload at any moment after that finds the conversation again.
      */
     createConversation: () => json('POST', '/conversations'),
+    /**
+     * `POST /assistant/secrets` (AgentSecretRequest) → AgentSecretView: the panel holds the value and
+     * answers with the handle the message carries instead. The only request that ever contains a
+     * secret value, and only from the lock button's form.
+     */
+    holdSecret: ({ name, value }) => json('POST', '/secrets', { name, value }),
     conversation: (id) => json('GET', `/conversations/${encodeURIComponent(id)}`),
     approve: (planId, body) => json('POST', `/plans/${encodeURIComponent(planId)}/approve`, body),
     reject: (planId) => json('POST', `/plans/${encodeURIComponent(planId)}/reject`),
