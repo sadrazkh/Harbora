@@ -31,6 +31,12 @@ public sealed class AgentTurnClaimTests(PostgresLane lane)
         public DateTimeOffset UtcNow => new DateTimeOffset(2026, 10, 11, 12, 0, 0, 123, TimeSpan.Zero).AddTicks(4567);
     }
 
+    /// <summary>Nobody here holds a lock-button secret.</summary>
+    private sealed class NoSecrets : IAgentSecretValues
+    {
+        public IReadOnlyList<string> LiveValues(Guid workspaceId, Guid userId) => [];
+    }
+
     private sealed class Everyone : IAgentCapabilityCheck
     {
         public Task<bool> AllowsAsync(ClaimsPrincipal user, string capability, CancellationToken ct) => Task.FromResult(true);
@@ -71,9 +77,9 @@ public sealed class AgentTurnClaimTests(PostgresLane lane)
         var access = new ProjectAccessService(db, new Caller(userId, workspaceId));
         var registry = new AgentToolRegistry([], new Everyone());
         return new AgentConversationService(db, chat, registry,
-            new AgentPlanService(db, registry, new NoAudit(), clock, NullLogger<AgentPlanService>.Instance),
+            new AgentPlanService(db, registry, new NoAudit(), clock, NullLogger<AgentPlanService>.Instance, new NoSecrets()),
             new AgentUsageMeter(db, clock), new AgentWorkspaceSnapshot(db, new AgentResourceResolver(db, access), access),
-            new FeatureGate(db), new Everyone(), clock, NullLogger<AgentConversationService>.Instance);
+            new FeatureGate(db), new Everyone(), clock, NullLogger<AgentConversationService>.Instance, new NoSecrets());
     }
 
     [PostgresFact]

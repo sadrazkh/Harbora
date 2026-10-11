@@ -49,8 +49,8 @@ public sealed class AgentConversationService(
     IAgentCapabilityCheck capabilities,
     ISystemClock clock,
     ILogger<AgentConversationService> logger,
-    IHostApplicationLifetime? lifetime = null,
-    IAgentSecretValues? secretValues = null)
+    IAgentSecretValues secretValues,
+    IHostApplicationLifetime? lifetime = null)
 {
     /// <summary>The most model calls one message may cause — reads included.</summary>
     public const int MaxModelCallsPerMessage = 8;
@@ -452,12 +452,18 @@ public sealed class AgentConversationService(
             persianInterface);
 
         var messages = new List<AgentChatMessage> { new(AgentRole.System, system) };
-        messages.AddRange(await HistoryAsync(actor, conversation.Id, ct));
+        // The values this person holds in the lock-button vault. The stored history is scrubbed of them by
+        // value only before it goes back to the model — someone who locked a value and also typed it plainly
+        // must not send it to the provider — and only by value, so a handle in the same message survives
+        // intact for the model to pass on.
+        var known = secretValues.LiveValues(actor.WorkspaceId, actor.UserId);
+        messages.AddRange((await HistoryAsync(actor, conversation.Id, ct))
+            .Select(m => m.Role == AgentRole.User ? m with { Content = AgentSecretScrub.ByValue(m.Content, known) } : m));
 
         var allowed = await registry.AllowedForAsync(actor.User, ct);
         var specs = allowed.Select(AgentToolRegistry.SpecOf).ToList();
         var turn = new Turn(actor, context, await plans.RememberedToolsAsync(actor, ct), allowed,
-            secretValues?.LiveValues(actor.WorkspaceId, actor.UserId) ?? []);
+            known);
 
         var finished = false;
         var stoppedEarly = false;
@@ -516,24 +522,24 @@ public sealed class AgentConversationService(
             // at this very moment, and losing text that was already shown is the one outcome the deltas
             // must never cause. If the save itself fails, the bubble is still closed with the text before
             // the failure goes on to become the turn's error.
-            AgentMessage assistant;
+            var assistant = new AgentMessage
+            {
+                Role = AgentMessageRole.Assistant,
+                Text = string.IsNullOrWhiteSpace(reply.Content) ? null : reply.Content,
+                ToolCallsJson = toolCalls.Count > 0 ? AgentJson.Serialize(toolCalls) : null,
+                Model = Truncate(response.Model, AgentMessage.MaxModelLength),
+                InputTokens = response.Usage?.InputTokens ?? 0,
+                OutputTokens = response.Usage?.OutputTokens ?? 0
+            };
             try
             {
-                assistant = await AppendAsync(conversation, new AgentMessage
-                {
-                    Role = AgentMessageRole.Assistant,
-                    Text = string.IsNullOrWhiteSpace(reply.Content) ? null : reply.Content,
-                    ToolCallsJson = toolCalls.Count > 0 ? AgentJson.Serialize(toolCalls) : null,
-                    Model = Truncate(response.Model, AgentMessage.MaxModelLength),
-                    InputTokens = response.Usage?.InputTokens ?? 0,
-                    OutputTokens = response.Usage?.OutputTokens ?? 0
-                }, streamed.Length > 0 ? CancellationToken.None : ct);
+                await AppendAsync(conversation, assistant, streamed.Length > 0 ? CancellationToken.None : ct);
             }
             catch (Exception) when (streamed.Length > 0)
             {
+                Forget(assistant);
                 await emit(new AgentStreamEvent(AgentStreamEvents.Message, new AgentMessageView(
-                    Guid.CreateVersion7(), "assistant", string.IsNullOrWhiteSpace(reply.Content) ? null : reply.Content,
-                    null, clock.UtcNow)), CancellationToken.None);
+                    assistant.Id, "assistant", assistant.Text, null, assistant.CreatedAt)), CancellationToken.None);
                 throw;
             }
             messages.Add(new AgentChatMessage(AgentRole.Assistant, reply.Content, toolCalls.Count > 0 ? toolCalls : null));
@@ -594,17 +600,36 @@ public sealed class AgentConversationService(
     /// What a person already watched being written, when the call that was writing it never finished:
     /// saved as the model's message, so a reload shows what was shown, and sent as the message event
     /// that finalizes the bubble. Runs on no token — the turn's own may be the one that just ran out.
+    ///
+    /// <para>
+    /// Never throws. It runs while another failure is on its way out — the provider's, the deadline's, a
+    /// shutdown's — and that failure is the one the person must be told; a save that fails here is logged,
+    /// its row dropped from the tracker so nothing retries it, and the bubble is closed all the same.
+    /// </para>
     /// </summary>
     private async Task FinalizePartialAsync(
         AgentConversation conversation, string text, Func<AgentStreamEvent, CancellationToken, Task> emit)
     {
-        var partial = await AppendAsync(conversation, new AgentMessage
+        var partial = new AgentMessage { Role = AgentMessageRole.Assistant, Text = string.IsNullOrWhiteSpace(text) ? null : text };
+        try
         {
-            Role = AgentMessageRole.Assistant,
-            Text = string.IsNullOrWhiteSpace(text) ? null : text
-        }, CancellationToken.None);
+            await AppendAsync(conversation, partial, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The partial answer in conversation {Conversation} could not be saved.", conversation.Id);
+            Forget(partial);
+        }
+
         await emit(new AgentStreamEvent(AgentStreamEvents.Message,
             new AgentMessageView(partial.Id, "assistant", partial.Text, null, partial.CreatedAt)), CancellationToken.None);
+    }
+
+    /// <summary>Drops a message whose save failed from the tracker, so no later save retries it.</summary>
+    private void Forget(AgentMessage message)
+    {
+        var entry = db.Entry(message);
+        if (entry.State != EntityState.Detached) entry.State = EntityState.Detached;
     }
 
     /// <summary>Why this message cannot be answered at all right now, or null: no reachable model, or
@@ -644,9 +669,10 @@ public sealed class AgentConversationService(
     /// to size — <see cref="AgentJson.ForModel"/> with the turn's <see cref="Turn.Known"/>.</summary>
     private static string ForModel(Turn turn, string? text) => AgentJson.ForModel(text, turn.Known);
 
-    /// <summary>A line for the person, scrubbed of held values — it is stored with the conversation.</summary>
+    /// <summary>A line for the person, scrubbed of held values — by value only, never by shape, so a handle
+    /// in it stays a handle. It is stored with the conversation.</summary>
     private static string? Scrub(Turn turn, string? text) =>
-        text is null || turn.Known.Count == 0 ? text : Assistant.AssistantRedaction.Redact(text, turn.Known).Text;
+        AgentSecretScrub.ByValue(text, turn.Known);
 
     private async Task<ToolAnswer> AnswerToolCallAsync(
         AgentToolCall call, Turn turn, Func<AgentStreamEvent, CancellationToken, Task> emit, CancellationToken ct)
@@ -743,13 +769,17 @@ public sealed class AgentConversationService(
         // and the model, read it as "step Index + 1".
         var index = turn.Draft.Count;
         var number = index + 1;
-        var titleEn = string.IsNullOrWhiteSpace(validation.TitleEn) ? tool.Name : validation.TitleEn;
-        var titleFa = string.IsNullOrWhiteSpace(validation.TitleFa) ? titleEn : validation.TitleFa;
+        // The card's words pass the held-value scrub too: a tool is not meant to put a value it checked
+        // into its title or warnings, and if one does, the card, the stored plan and the summary must
+        // still not show it. By value only, like every line a person reads.
+        var titleEn = Scrub(turn, string.IsNullOrWhiteSpace(validation.TitleEn) ? tool.Name : validation.TitleEn)!;
+        var titleFa = Scrub(turn, string.IsNullOrWhiteSpace(validation.TitleFa) ? titleEn : validation.TitleFa)!;
 
         turn.Draft.Add(new AgentPlanStep(
             index, tool.Name, tool.Kind, args.GetRawText(), call.Id,
-            titleEn, titleFa, validation.DetailEn, validation.DetailFa,
-            validation.WarningsEn ?? [], validation.WarningsFa ?? [],
+            titleEn, titleFa, Scrub(turn, validation.DetailEn), Scrub(turn, validation.DetailFa),
+            (validation.WarningsEn ?? []).Select(w => Scrub(turn, w)!).ToList(),
+            (validation.WarningsFa ?? []).Select(w => Scrub(turn, w)!).ToList(),
             AgentConsentPolicy.NeedsTypedConfirmation(tool.Kind) ? validation.ConfirmationPhrase!.Trim() : null,
             AgentConsentPolicy.IsAutoApproved(tool.Kind, turn.Remembered.Contains(tool.Name))));
 

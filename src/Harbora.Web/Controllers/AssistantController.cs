@@ -84,16 +84,19 @@ public sealed class AssistantController(
     /// </summary>
     [HttpPost("secrets")]
     [ValidateAntiForgeryToken]
+    // A name of at most 100 characters and a value of at most 8,000, in JSON: 32 KB is generous for that
+    // and refuses a body nobody's lock button would send before it is read into memory.
+    [RequestSizeLimit(32 * 1024)]
     public async Task<IActionResult> HoldSecret(
-        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] AgentSecretRequest? request, CancellationToken ct)
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] AssistantSecretBody? body, CancellationToken ct)
     {
-        var outcome = await secrets.HoldAsync(Actor, request, ct);
+        var outcome = await secrets.HoldAsync(Actor, body?.ToRequest(), ct);
         if (outcome.Ok) return Json(outcome.View);
 
-        var body = new { error = outcome.Code, messageEn = outcome.MessageEn, messageFa = outcome.MessageFa };
+        var refusal = new { error = outcome.Code, messageEn = outcome.MessageEn, messageFa = outcome.MessageFa };
         return outcome.Code == "feature_not_enabled"
-            ? new ObjectResult(body) { StatusCode = StatusCodes.Status403Forbidden }
-            : BadRequest(body);
+            ? new ObjectResult(refusal) { StatusCode = StatusCodes.Status403Forbidden }
+            : BadRequest(refusal);
     }
 
     private NotFoundObjectResult NoSuchConversation() => NotFound(new
@@ -259,4 +262,20 @@ public sealed class AssistantController(
             _ => StatusCodes.Status409Conflict
         }
     };
+}
+
+/// <summary>
+/// The body of <c>POST /assistant/secrets</c> as the controller binds it — deliberately not the contract
+/// record <see cref="AgentSecretRequest"/>, whose compiler-generated <c>ToString</c> prints every property.
+/// A bound model can end up in a log line, a debugger watch or an exception message; this one says the
+/// value is there without saying what it is.
+/// </summary>
+public sealed class AssistantSecretBody
+{
+    public string? Name { get; set; }
+    public string? Value { get; set; }
+
+    public AgentSecretRequest ToRequest() => new(Name!, Value!);
+
+    public override string ToString() => $"AssistantSecretBody {{ Name = {Name}, Value = {AgentSecretHandles.Masked} }}";
 }

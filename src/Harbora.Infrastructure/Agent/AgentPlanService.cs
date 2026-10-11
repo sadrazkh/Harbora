@@ -39,7 +39,7 @@ public sealed class AgentPlanService(
     IAuditLogger audit,
     ISystemClock clock,
     ILogger<AgentPlanService> logger,
-    IAgentSecretValues? secretValues = null)
+    IAgentSecretValues secretValues)
 {
     public const string StepExecutedAction = "assistant.step_executed";
     public const string PlanRejectedAction = "assistant.plan_rejected";
@@ -292,6 +292,10 @@ public sealed class AgentPlanService(
         /// <summary>Whether any step's tool was entered at all.</summary>
         public bool AnyRan { get; set; }
 
+        /// <summary>The person's held values when the run began — a handle a step resolves may expire or be
+        /// evicted before the run ends, and its value must still be scrubbed from what that step said.</summary>
+        public IReadOnlyList<string> KnownAtStart { get; init; } = [];
+
         /// <summary>Set when re-validation refused a step: the approval's answer, whatever happens after.</summary>
         public AgentPlanRefusal? Refusal { get; set; }
     }
@@ -311,7 +315,7 @@ public sealed class AgentPlanService(
     private async Task<ClaimedRun> RunClaimedAsync(
         AgentActor actor, AgentPlan plan, IReadOnlyList<AgentPlanStep> steps, IReadOnlyList<string>? rememberTools)
     {
-        var ledger = new RunLedger(steps.Count);
+        var ledger = new RunLedger(steps.Count) { KnownAtStart = KnownSecrets(plan) };
         try
         {
             return await RunClaimedCoreAsync(actor, plan, steps, rememberTools, ledger);
@@ -516,7 +520,7 @@ public sealed class AgentPlanService(
             logger.LogError(again, "Plan {Plan} could not be recorded either; it stays executing.", plan.Id);
             db.ChangeTracker.Clear();
             return new ClaimedRun(new AgentPlanResultView(plan.Id, StatusName(status),
-                ledger.Results.Select(x => Scrub(x!, KnownSecrets(plan))).ToList()), ledger.Refusal);
+                ledger.Results.Select(x => Scrub(x!, KnownSecrets(plan, ledger))).ToList()), ledger.Refusal);
         }
     }
 
@@ -615,7 +619,7 @@ public sealed class AgentPlanService(
     private async Task<List<AgentPlanStepResultView>> FinishAsync(
         AgentPlan plan, AgentPlanStatus status, RunLedger ledger, DateTimeOffset? executedAt, CancellationToken ct)
     {
-        var known = KnownSecrets(plan);
+        var known = KnownSecrets(plan, ledger);
         var results = ledger.Results.Select(r => Scrub(r!, known)).ToList();
 
         // Plain tracked write: this call owns the plan since it won the claim, so there is no race left.
@@ -623,7 +627,7 @@ public sealed class AgentPlanService(
         tracked.Status = status;
         tracked.ResultsJson = AgentJson.Serialize(results);
         tracked.ExecutedAt = executedAt;
-        await AddOutcomeMessagesAsync(plan, ledger.Outcomes.Select(o => o!).ToList(), clock.UtcNow, ct);
+        await AddOutcomeMessagesAsync(plan, ledger.Outcomes.Select(o => o!).ToList(), known, clock.UtcNow, ct);
         await db.SaveChangesAsync(ct);
 
         plan.Status = status;
@@ -784,16 +788,16 @@ public sealed class AgentPlanService(
     private async Task RecordOutcomeAsync(AgentPlan plan, IReadOnlyList<StepOutcome> outcomes, DateTimeOffset now, CancellationToken ct)
     {
         if (outcomes.Count == 0) return;
-        await AddOutcomeMessagesAsync(plan, outcomes, now, ct);
+        await AddOutcomeMessagesAsync(plan, outcomes, KnownSecrets(plan), now, ct);
         await db.SaveChangesAsync(ct);
     }
 
     /// <summary><see cref="RecordOutcomeAsync"/>'s messages, added to the context but not saved — so
     /// <see cref="FinishAsync"/> can write them in the same save as the plan's own result.</summary>
-    private async Task AddOutcomeMessagesAsync(AgentPlan plan, IReadOnlyList<StepOutcome> outcomes, DateTimeOffset now, CancellationToken ct)
+    private async Task AddOutcomeMessagesAsync(
+        AgentPlan plan, IReadOnlyList<StepOutcome> outcomes, IReadOnlyList<string> known, DateTimeOffset now, CancellationToken ct)
     {
         if (outcomes.Count == 0) return;
-        var known = KnownSecrets(plan);
 
         var sequence = await AgentConversationLog.NextSequenceAsync(db, plan.ConversationId, ct);
         var calls = outcomes.Select(o => new AgentToolCall(CallId(plan, o.Step), o.Step.Tool, o.Step.ArgumentsJson)).ToList();
@@ -848,11 +852,16 @@ public sealed class AgentPlanService(
     /// and applies the value; if its result or error then echoes it, it is scrubbed here by value before
     /// it reaches the plan's results, the conversation or the model.
     /// </summary>
-    private IReadOnlyList<string> KnownSecrets(AgentPlan plan) =>
-        secretValues?.LiveValues(plan.WorkspaceId, plan.UserId) ?? [];
+    private IReadOnlyList<string> KnownSecrets(AgentPlan plan) => secretValues.LiveValues(plan.WorkspaceId, plan.UserId);
 
-    private static string? Scrub(string? text, IReadOnlyList<string> known) =>
-        text is null || known.Count == 0 ? text : Assistant.AssistantRedaction.Redact(text, known).Text;
+    /// <summary>For a claimed run: the values held when it began, together with those held now — so a
+    /// handle that expired or was evicted while its step ran is still scrubbed from what the step said.</summary>
+    private IReadOnlyList<string> KnownSecrets(AgentPlan plan, RunLedger ledger) =>
+        ledger.KnownAtStart.Union(KnownSecrets(plan), StringComparer.Ordinal).ToList();
+
+    /// <summary>By value only: these lines are shown to a person, and a shape rule would turn a handle in
+    /// them into something that is neither the handle nor its mask.</summary>
+    private static string? Scrub(string? text, IReadOnlyList<string> known) => AgentSecretScrub.ByValue(text, known);
 
     private static AgentPlanStepResultView Scrub(AgentPlanStepResultView result, IReadOnlyList<string> known) =>
         known.Count == 0 ? result : result with

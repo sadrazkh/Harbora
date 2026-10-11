@@ -35,6 +35,12 @@ public sealed class AgentPlanApprovalRaceTests(PostgresLane lane)
         public DateTimeOffset UtcNow { get; set; } = now;
     }
 
+    /// <summary>Nobody here holds a lock-button secret.</summary>
+    private sealed class NoSecrets : IAgentSecretValues
+    {
+        public IReadOnlyList<string> LiveValues(Guid workspaceId, Guid userId) => [];
+    }
+
     private sealed class Everyone : IAgentCapabilityCheck
     {
         public Task<bool> AllowsAsync(ClaimsPrincipal user, string capability, CancellationToken ct) => Task.FromResult(true);
@@ -70,7 +76,7 @@ public sealed class AgentPlanApprovalRaceTests(PostgresLane lane)
     }
 
     private static AgentPlanService ServiceOver(HarboraDbContext db, IAgentTool tool, Clock clock) =>
-        new(db, new AgentToolRegistry([tool], new Everyone()), new NoAudit(), clock, NullLogger<AgentPlanService>.Instance);
+        new(db, new AgentToolRegistry([tool], new Everyone()), new NoAudit(), clock, NullLogger<AgentPlanService>.Instance, new NoSecrets());
 
     private static async Task<(AgentActor Actor, Guid PlanId)> SeedPlanAsync(string connectionString, IAgentTool tool, Clock clock)
     {

@@ -239,6 +239,27 @@ public class AgentTurnTests
         logger.Entries.Should().ContainSingle(e => e.Text.Contains("listener")).Which.Level.Should().Be(level);
     }
 
+    [Fact]
+    public async Task A_partial_answer_whose_save_fails_still_closes_its_bubble_and_the_deadline_is_what_the_person_is_told()
+    {
+        using var h = new AgentHarness();
+        using var failing = new HarboraDbContext(
+            new DbContextOptionsBuilder<HarboraDbContext>().UseInMemoryDatabase(h.DatabaseName)
+                .AddInterceptors(new FailAssistantSave("Working on ")).Options,
+            new Harbora.Application.Abstractions.FixedWorkspaceScope(h.WorkspaceId));
+        h.Chat.ThenStreamed(new AgentChatResponse(true, new AgentChatMessage(AgentRole.Assistant, "never"), "m", null, "stop", null, null),
+            ["Working on "], after: ct => Task.Delay(Timeout.Infinite, ct));
+
+        var (_, events) = await Send(h.ServiceOver(db: failing, turnDeadline: TimeSpan.FromSeconds(2)), h, "slow");
+
+        events.Names().Should().Equal("started", "delta", "message", "error", "done");
+        events.Single<AgentMessageView>("message").Text.Should().Be("Working on ");
+        events.Single<AgentErrorData>("error").MessageEn.Should().StartWith("This answer took longer than",
+            "the deadline is the failure the person must hear about, not the save that failed on the way out");
+        using var other = h.NewContext();
+        (await other.AgentConversations.SingleAsync()).TurnStartedAt.Should().BeNull("the failed row was dropped, so the mark could be cleared");
+    }
+
     private sealed class FailAssistantSave(string text) : Microsoft.EntityFrameworkCore.Diagnostics.SaveChangesInterceptor
     {
         public override ValueTask<Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int>> SavingChangesAsync(

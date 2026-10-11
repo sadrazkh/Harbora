@@ -107,6 +107,28 @@ public sealed class InMemoryAgentSecretVault(ISecretProtector protector, ISystem
     }
 }
 
+/// <summary>
+/// Scrubbing held values out of text by value only — no shape rules. Used for every line a person reads
+/// and for the stored history going back to the model: a shape rule would turn a <c>{{secret:…}}</c>
+/// handle in the same text into <c>{{secret:[redacted]</c>, which is neither the handle the model must pass
+/// on nor a mask a person recognises. Tool results bound for the model keep the shape rules on top
+/// (<see cref="AgentJson.ForModel"/>), as before.
+/// </summary>
+public static class AgentSecretScrub
+{
+    /// <summary>Shorter than this a value is not replaced — the same floor <c>AssistantRedaction</c> keeps
+    /// for every known secret: masking every "abc" in a text turns it into nonsense.</summary>
+    public const int ShortestReplaceable = 4;
+
+    public static string? ByValue(string? text, IReadOnlyList<string> values)
+    {
+        if (string.IsNullOrEmpty(text) || values.Count == 0) return text;
+        foreach (var value in values.Where(v => v.Length >= ShortestReplaceable).OrderByDescending(v => v.Length))
+            text = text.Replace(value, Assistant.AssistantRedaction.Mask, StringComparison.Ordinal);
+        return text;
+    }
+}
+
 /// <summary>What holding a secret produced: its handle, or why it was refused.</summary>
 /// <param name="Code">"invalid" or "feature_not_enabled" when refused.</param>
 public sealed record AgentSecretOutcome(AgentSecretView? View, string? Code = null, string? MessageEn = null, string? MessageFa = null)

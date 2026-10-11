@@ -221,5 +221,112 @@ public class AgentSecretTests
                                                || (m.SummaryEn != null && m.SummaryEn.Contains(Value)))).Should().BeFalse();
     }
 
+    // ---- hardening pass ------------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_value_whose_handle_expires_while_its_step_runs_is_still_scrubbed_from_what_the_step_said()
+    {
+        AgentHarness? harness = null;
+        var setEnv = new FakeTool("set_env", AgentToolKind.SafeWrite)
+        {
+            OnExecute = (args, context) =>
+            {
+                var value = harness!.Vault.Resolve(context.WorkspaceId, context.UserId, AgentArgsOf(args));
+                // The step takes long enough for the handle to lapse before the plan is finished.
+                harness.Clock.UtcNow += AgentSecretHandles.Lifetime + TimeSpan.FromMinutes(1);
+                return AgentToolResult.Failed($"The node rejected {value}.", $"نود {value} را نپذیرفت.");
+            }
+        };
+        using var h = new AgentHarness([setEnv]);
+        harness = h;
+        var handle = h.Vault.Put(h.WorkspaceId, h.UserId, "DB_PASSWORD", Value).Handle;
+        h.Chat.ThenCall("set_env", JsonSerializer.Serialize(new { value = handle })).ThenText("Approve it?");
+        var (_, events) = await h.SendAsync($"set DB_PASSWORD to {handle}");
+
+        var outcome = await h.Plans.ApproveAsync(h.Actor, events.Single<AgentPlanView>("plan").Id, new AgentApproveRequest(null, null), default);
+
+        h.Vault.LiveValues(h.WorkspaceId, h.UserId).Should().BeEmpty("the handle lapsed during the step");
+        JsonSerializer.Serialize(outcome).Should().NotContain(Value);
+        (await h.Db.AgentPlans.AsNoTracking().SingleAsync()).ResultsJson.Should().NotContain(Value);
+        (await h.Db.AgentMessages.AnyAsync(m => m.Text != null && m.Text.Contains(Value))).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_value_typed_plainly_beside_its_handle_never_reaches_the_model_and_the_handle_survives_intact()
+    {
+        using var h = new AgentHarness();
+        var handle = h.Vault.Put(h.WorkspaceId, h.UserId, "API_TOKEN", Value).Handle;
+        h.Chat.ThenText("ok");
+
+        await h.SendAsync($"use {handle} — it is {Value} by the way");
+
+        var userMessage = h.Chat.Requests[0].Messages.Last(m => m.Role == AgentRole.User).Content!;
+        userMessage.Should().Contain(handle, "a handle is not a value: it reaches the model exactly as written");
+        userMessage.Should().NotContain(Value).And.NotContain("{{secret:[redacted]");
+        h.Chat.EverythingSent().Should().NotContain(Value);
+    }
+
+    [Fact]
+    public async Task Lines_a_person_reads_are_scrubbed_by_value_only_so_a_handle_in_them_stays_a_handle()
+    {
+        var held = "";
+        var reader = new FakeTool("peek", AgentToolKind.Read)
+        {
+            OnExecute = (_, _) => new AgentToolResult(true, "{}", $"Uses {held}, which is {Value}", $"از {held} استفاده می‌کند")
+        };
+        using var h = new AgentHarness([reader]);
+        held = h.Vault.Put(h.WorkspaceId, h.UserId, "API_TOKEN", Value).Handle;
+        h.Chat.ThenCall("peek").ThenText("ok");
+
+        var (_, events) = await h.SendAsync("peek");
+
+        var summary = events.Where(e => e.Name == "tool").Select(e => ((AgentToolEventData)e.Data).SummaryEn).Last()!;
+        summary.Should().Be($"Uses {held}, which is [redacted]", "the value is masked and the handle is left exactly as it was");
+        (await h.Db.AgentMessages.SingleAsync(m => m.Role == AgentMessageRole.Tool)).SummaryEn.Should().Be(summary);
+    }
+
+    [Fact]
+    public async Task A_card_and_its_summary_never_show_a_held_value_a_validation_put_in_them()
+    {
+        var careless = new FakeTool("set_env", AgentToolKind.SafeWrite)
+        {
+            OnValidate = (_, _, _) => new AgentValidation(true, TitleEn: $"Set TOKEN to {Value}", TitleFa: $"تنظیم {Value}",
+                DetailEn: $"was {Value}", WarningsEn: [$"{Value} will be visible"], WarningsFa: [$"{Value} دیده می‌شود"])
+        };
+        using var h = new AgentHarness([careless]);
+        h.Vault.Put(h.WorkspaceId, h.UserId, "TOKEN", Value);
+        h.Chat.ThenCall("set_env").ThenText("Approve it?");
+
+        var (_, events) = await h.SendAsync("set the token");
+
+        var step = events.Single<AgentPlanView>("plan").Steps.Single();
+        JsonSerializer.Serialize(step).Should().NotContain(Value);
+        step.TitleEn.Should().Be("Set TOKEN to [redacted]");
+        (await h.Db.AgentPlans.AsNoTracking().SingleAsync()).StepsJson.Should().NotContain(Value);
+        (await h.Db.AgentMessages.AnyAsync(m => (m.SummaryEn != null && m.SummaryEn.Contains(Value))
+                                               || (m.Text != null && m.Text.Contains(Value)))).Should().BeFalse();
+        h.Chat.EverythingSent().Should().NotContain(Value);
+    }
+
+    [Fact]
+    public void The_bound_request_body_never_prints_its_value()
+    {
+        var body = new Harbora.Web.Controllers.AssistantSecretBody { Name = "STRIPE_KEY", Value = Value };
+
+        body.ToString().Should().Contain("STRIPE_KEY").And.NotContain(Value).And.Contain(AgentSecretHandles.Masked);
+        body.ToRequest().Should().Be(new AgentSecretRequest("STRIPE_KEY", Value));
+    }
+
+    [Fact]
+    public void The_secrets_endpoint_caps_its_request_body_at_32_kilobytes()
+    {
+        // TestServer does not implement IHttpMaxRequestBodySizeFeature, so the limit cannot be exercised
+        // over HTTP here; this pins the attribute Kestrel enforces in production.
+        var method = typeof(Harbora.Web.Controllers.AssistantController).GetMethod("HoldSecret")!;
+        var limit = method.GetCustomAttributes(typeof(Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute), false)
+            .Cast<Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute>().Single();
+        ((Microsoft.AspNetCore.Http.Metadata.IRequestSizeLimitMetadata)limit).MaxRequestBodySize.Should().Be(32L * 1024);
+    }
+
     private static string AgentArgsOf(JsonElement args) => args.GetProperty("value").GetString()!;
 }
