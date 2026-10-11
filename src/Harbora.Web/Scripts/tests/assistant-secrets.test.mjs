@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
-  SECRET_HANDLE, isHandle, splitSecrets, looksLikeSecret, createSecretBook, createSecretForm,
+  SECRET_HANDLE, isHandle, splitSecrets, looksLikeSecret, createSecretBook, createSecretForm, withoutSecrets,
 } from '../islands/assistantSecrets.js';
 import { createAssistantApi } from '../islands/assistantApi.js';
 import { createAssistantSession } from '../islands/assistantSession.js';
@@ -216,6 +217,94 @@ test('a placeholder in the draft does not set off the warning: it is checked as 
   const book = createSecretBook();
   const placeholder = book.add({ handle: HANDLE, name: 'DB_PASSWORD' });
   const draft = `DB_PASSWORD=${placeholder}`;
-  assert.equal(looksLikeSecret(draft), true, 'read raw, the placeholder looks like a value');
+  assert.equal(looksLikeSecret(draft), false, 'read raw, the placeholder is not a value');
   assert.equal(looksLikeSecret(book.expand(draft)), false, 'read as it will be sent, it is a handle');
+});
+
+test('the safe form stays quiet even with words after the placeholder or the handle', () => {
+  const book = createSecretBook();
+  const placeholder = book.add({ handle: HANDLE, name: 'DB_PASSWORD' });
+  for (const draft of [
+    `password for shop-db: ${placeholder} please`,
+    `password for shop-db: ${placeholder} and restart it`,
+    `رمز دیتابیس: ${placeholder} را تنظیم کن`,
+    `token = ${placeholder}, thanks`,
+  ]) {
+    assert.equal(looksLikeSecret(draft), false, draft);
+    assert.equal(looksLikeSecret(book.expand(draft)), false, book.expand(draft));
+  }
+  // A real value after the key still counts, even with a placeholder elsewhere in the draft.
+  assert.equal(looksLikeSecret(`set ${placeholder} and password: hunter22`), true);
+});
+
+test('a name with a bracket is refused, since it would end its placeholder early', async () => {
+  const api = fakeApi();
+  const form = createSecretForm({ api, book: createSecretBook() });
+  form.open();
+  form.state.name = 'DB]PASS';
+  form.state.value = VALUE;
+  assert.equal(await form.submit(), null);
+  assert.match(form.state.error.messageEn, /\[ or \]/);
+  assert.equal(api.calls.length, 0);
+});
+
+test('secrets with related names each expand to their own handle', () => {
+  const book = createSecretBook();
+  book.add({ handle: HANDLE, name: 'A' });
+  book.add({ handle: HANDLE2, name: 'A 2' });
+  assert.equal(book.expand('[🔒 A] [🔒 A 2]'), `${HANDLE} ${HANDLE2}`);
+});
+
+test('cancelling while the post is in flight inserts nothing and leaves a reopened form alone', async () => {
+  let release;
+  const api = { calls: [], holdSecret(body) { this.calls.push(body); return new Promise((resolve) => { release = resolve; }); } };
+  const book = createSecretBook();
+  const form = createSecretForm({ api, book });
+  form.open();
+  form.state.name = 'DB';
+  form.state.value = VALUE;
+  const posting = form.submit();
+  form.close();
+  form.open();
+  form.state.name = 'TYPING_AGAIN';
+  release({ handle: HANDLE, name: 'DB' });
+  assert.equal(await posting, null, 'no placeholder after a cancel');
+  assert.equal(book.nameOf(HANDLE), null);
+  assert.equal(form.state.open, true);
+  assert.equal(form.state.name, 'TYPING_AGAIN', 'the reopened form is not wiped');
+});
+
+test('the text without its secrets, for direction: placeholders and handles drop out', () => {
+  assert.equal(withoutSecrets(`[🔒 DB_PASSWORD] را تنظیم کن`).trim(), 'را تنظیم کن');
+  assert.equal(withoutSecrets(`${HANDLE} است`).trim(), 'است');
+});
+
+test('the lock form is not a login form: no password field, no form submit, password managers told to stay out', () => {
+  // Chrome and Edge offered to save "DB_PASSWORD" + the secret as a Harbora login once the form went
+  // away after a successful post — and then filled it into the real sign-in page. A text field masked
+  // by CSS, outside any <form>, with autocomplete off and the managers' opt-outs, is not offered.
+  const source = readFileSync(new URL('../islands/AssistantPanel.vue', import.meta.url), 'utf8');
+  const start = source.indexOf('data-assistant-secret-form');
+  const end = source.indexOf('<!-- Composer -->', start);
+  assert.ok(start > 0 && end > start, 'the lock form is found in the island');
+  const form = source.slice(source.lastIndexOf('<', start), end);
+  assert.equal(/type="password"/.test(form) || /'password'/.test(form), false, 'no password-type field');
+  assert.equal(/<form\b/.test(form), false, 'not a <form>: Enter is handled by the island');
+  assert.equal(/new-password|current-password/.test(form), false);
+  const inputs = form.match(/<input\b[^>]*>/g) ?? [];
+  assert.equal(inputs.length, 2);
+  for (const input of inputs) {
+    for (const attr of ['autocomplete="off"', 'data-1p-ignore', 'data-lpignore="true"', 'data-bwignore', 'data-form-type="other"']) {
+      assert.ok(input.includes(attr), `${attr} on ${input.slice(0, 60)}…`);
+    }
+    assert.ok(input.includes('type="text"'), 'a text field');
+  }
+  assert.ok(/assistant-secret-mask/.test(form), 'masked with CSS');
+});
+
+test('a draft that opens with a placeholder takes the direction of the words around it', async () => {
+  const { firstStrongDirection } = await import('../islands/assistantFormat.js');
+  assert.equal(firstStrongDirection('[🔒 DB_PASSWORD] را تنظیم کن', 'rtl'), 'ltr', 'raw, the name decides — wrongly');
+  assert.equal(firstStrongDirection(withoutSecrets('[🔒 DB_PASSWORD] را تنظیم کن'), 'rtl'), 'rtl');
+  assert.equal(firstStrongDirection(withoutSecrets('[🔒 DB_PASSWORD]'), 'rtl'), 'rtl', 'only a placeholder: the panel\'s side');
 });

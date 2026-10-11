@@ -7,13 +7,19 @@ import AssistantSecretText from './AssistantSecretText.vue';
 // text node: the formatter decides where paragraphs, lists and code go, and nothing the model wrote
 // is ever parsed as markup. See assistantFormat.js.
 //
-// `steady`: text written as it arrives (delta events). Each paragraph's direction is decided once and
-// held (createSteadyDirection), so the bubble does not flip sides while it is being written.
-// A secret's handle in the text is drawn as a lock chip (AssistantSecretText), named by `nameOf`.
-const props = defineProps<{ text: string; steady?: boolean; nameOf?: (handle: string) => string | null; fa?: boolean }>();
+// `live`: text still being written by delta events — each paragraph's direction is decided once and held
+// (createSteadyDirection), so the bubble does not flip sides as words arrive. `streamed`: such a bubble
+// after its message arrived — decided paragraphs keep their side, short ones are settled by the whole
+// text. A secret's handle in the text is drawn as a lock chip (AssistantSecretText), named by `nameOf`.
+const props = defineProps<{ text: string; live?: boolean; streamed?: boolean; nameOf?: (handle: string) => string | null; fa?: boolean }>();
 const blocks = computed(() => formatMessage(props.text));
 const steadyDirection = createSteadyDirection();
-const dirOf = (block: any, index: number) => (props.steady ? steadyDirection(blockText(block), index) : textDirection(blockText(block)));
+const dirOf = (block: any, index: number) => {
+  const text = blockText(block);
+  if (props.live) return steadyDirection(text, index);
+  if (props.streamed) return steadyDirection.settle(text, index);
+  return textDirection(text);
+};
 </script>
 
 <template>

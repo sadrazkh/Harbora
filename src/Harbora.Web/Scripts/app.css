@@ -172,6 +172,14 @@ html[dir] .assistant-drawer.is-open { visibility: visible; transform: none; tran
   .assistant-drawer, html[dir] .assistant-drawer.is-open { transition: none; }
 }
 
+/* The lock button's secret field (AssistantPanel.vue) is a text field, not a password field — a password
+   field makes browsers treat the form as a login and offer to save it. The characters are hidden here
+   instead: discs where text-security is supported, and blurred beyond reading where it is not. */
+.assistant-secret-mask { -webkit-text-security: disc; text-security: disc; }
+@supports not (-webkit-text-security: disc) {
+  .assistant-secret-mask { color: transparent; text-shadow: 0 0 .5em rgb(var(--text)); }
+}
+
 /* The assistant's "thinking" dots (AssistantPanel.vue): three dots rising in turn, the way chat apps
    show someone typing. With reduced motion they stand still at three shades, which still reads as
    "…" without anything moving. */

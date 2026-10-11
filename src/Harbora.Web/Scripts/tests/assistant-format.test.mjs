@@ -180,3 +180,25 @@ test('each paragraph of a streamed bubble keeps its own direction', () => {
   assert.equal(dir('export A=1 and then B=2', 1), 'ltr');
   assert.equal(dir('این برنامه را آماده کردم', 0), 'rtl');
 });
+
+test('a secret handle does not vote on direction', () => {
+  const handle = '{{secret:AbCdEfGhIjKlMnOpQrStUv}}';
+  assert.equal(textDirection(`رمز را ${handle} بگذار`), 'rtl');
+  assert.equal(textDirection(`${handle} را بگذار`), 'rtl', 'without the handle the sentence is Persian');
+  assert.equal(firstStrongDirection(`${handle} را بگذار`, 'ltr'), 'rtl');
+  const dir = createSteadyDirection();
+  assert.equal(dir(`${handle} ${handle} ${handle} را`, 0), 'rtl', 'handles are not words towards the latch');
+});
+
+test('a short streamed paragraph is settled by its whole text once the message arrives', () => {
+  const dir = createSteadyDirection();
+  assert.equal(dir('shop آماده', 0), 'ltr', 'while live, first letter');
+  assert.equal(dir.settle('shop آماده است.', 0), 'rtl', 'final: decided by the whole text');
+  assert.equal(dir.settle('shop آماده است.', 0), 'rtl', 'and held');
+});
+
+test('settling keeps the side a long paragraph was already given while it was written', () => {
+  const dir = createSteadyDirection();
+  assert.equal(dir('این برنامه را آماده کردم', 0), 'rtl');
+  assert.equal(dir.settle('این برنامه را آماده کردم with a lot of English words added at the very end of it', 0), 'rtl', 'no flip at the end');
+});

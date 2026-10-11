@@ -160,9 +160,18 @@ export function createAssistantSession({
   }
 
   function resumeIfAnswering(view) {
-    if (view?.inProgress === true && timeline.conversationId) follow(timeline.conversationId);
-    else timeline.resuming = false;
+    if (view?.inProgress === true && timeline.conversationId) {
+      follow(timeline.conversationId);
+    } else {
+      // Not being answered: nothing to re-read — including a poller some earlier open started.
+      poller.stop();
+      timeline.resuming = false;
+    }
   }
+
+  // Each open() takes a number; a read that comes back after a later open() began is stale and is
+  // dropped, so a slow read of one conversation cannot draw over the conversation opened after it.
+  let opening = 0;
 
   /** The person's latest message in a conversation, as the server has it. */
   function lastUserText(view) {
@@ -208,6 +217,7 @@ export function createAssistantSession({
      */
     async open(id, { quietIfGone = false, holdOnFailure = false } = {}) {
       if (!isGuid(id)) { prefs.setConversationId(null); return {}; }
+      const mine = ++opening;
       const previousId = timeline.conversationId;
       const wasResuming = timeline.resuming;
       const abandoned = abandonTurn();
@@ -216,6 +226,7 @@ export function createAssistantSession({
       timeline.loading = true;
       try {
         const view = await api.conversation(id);
+        if (mine !== opening) return {};
         timeline.loadError = null;
         loadConversation(timeline, view);
         prefs.setConversationId(id);
@@ -225,6 +236,7 @@ export function createAssistantSession({
         onChange('opened');
         return { restoreDraft };
       } catch (error) {
+        if (mine !== opening) return {};
         // The remembered conversation may belong to another workspace or user on this browser, or have
         // been removed: start fresh rather than greet the person with an error they did not cause.
         if (quietIfGone && (error?.status === 404 || error?.status === 403)) {
@@ -246,7 +258,7 @@ export function createAssistantSession({
         else timeline.resuming = false;
         return { error };
       } finally {
-        timeline.loading = false;
+        if (mine === opening) timeline.loading = false;
       }
     },
 
@@ -294,7 +306,8 @@ export function createAssistantSession({
 
       // 1. Keep the words until the server has them — from the very first moment, so a reload during
       //    the create below loses nothing either.
-      prefs.setOutbox({ conversationId: timeline.conversationId, text: message, at: now() });
+      const box = { conversationId: timeline.conversationId, text: message, at: now() };
+      prefs.setOutbox(box);
 
       // 2. Know the conversation before sending anything, so a reload from here on finds it.
       if (!timeline.conversationId) {
@@ -306,8 +319,10 @@ export function createAssistantSession({
         }
         if (!turn.isCurrent()) {
           // Abandoned while the conversation was being created (a new one started, another opened):
-          // nothing was sent, so the words go back in the composer of whatever is on screen now.
-          prefs.clearOutbox(null);
+          // nothing was sent, so the words go back in the composer of whatever is on screen now. The
+          // "new" entry is dropped only if it is still this message's — a later send may own it now.
+          const waiting = prefs.outbox(null);
+          if (waiting && waiting.text === box.text && waiting.at === box.at) prefs.clearOutbox(null);
           return { sent: false, restoreDraft: message };
         }
         if (isGuid(created?.id)) {

@@ -111,21 +111,24 @@ function liveBubble(state) {
   return null;
 }
 
-/** Same text, or the bubble holds the start of it (it was cut short before its message). */
-function sameText(shown, whole) {
-  const a = String(shown ?? '').trim();
-  const b = String(whole ?? '').trim();
-  return a !== '' && (a === b || b.startsWith(a));
-}
-
-/** An unconfirmed bubble of this turn, written by deltas, that holds this text. */
+/**
+ * The unconfirmed bubble of this turn, written by deltas, that this message completes. Newest first —
+ * the live bubble, if any, is the newest — and an exact match before a prefix: the model may write
+ * "Let me check", call a tool, then write "Let me check the logs: …", and the message for the second
+ * bubble starts with the first bubble's text without being its message. A prefix match covers a
+ * bubble cut short before its message arrived.
+ */
 function streamedBubbleFor(state, text) {
+  const whole = String(text ?? '').trim();
   const from = currentTurnStart(state);
-  for (let i = from + 1; i < state.items.length; i++) {
+  const candidates = [];
+  for (let i = state.items.length - 1; i > from; i--) {
     const item = state.items[i];
-    if (item.kind === 'assistant' && item.streamed && !item.confirmed && sameText(item.text, text)) return item;
+    if (item.kind === 'assistant' && item.streamed && !item.confirmed && item.text.trim() !== '') candidates.push(item);
   }
-  return null;
+  return candidates.find((c) => c.text.trim() === whole)
+    ?? candidates.find((c) => whole.startsWith(c.text.trim()))
+    ?? null;
 }
 
 /**

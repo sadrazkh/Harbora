@@ -447,3 +447,29 @@ test('a result card after streamed text keeps the text above it', () => {
   assert.deepEqual(state.items.map((i) => i.kind), ['user', 'assistant', 'result']);
   assert.equal(state.items[1].live, false);
 });
+
+test('a message completing the newer bubble is not taken by an older bubble that shares its start', () => {
+  // The probe the review ran: "Let me check" → tool → "Let me check the logs: shop is running." → message.
+  const state = createTimeline();
+  addUserMessage(state, 'x');
+  applyStreamEvent(state, 'delta', { text: 'Let me check' });
+  applyStreamEvent(state, 'tool', { name: 'get_deployment', state: 'done' });
+  applyStreamEvent(state, 'delta', { text: 'Let me check the logs: shop is running.' });
+  applyStreamEvent(state, 'message', { id: 'm2', role: 'assistant', text: 'Let me check the logs: shop is running.' });
+  assert.deepEqual(state.items.filter((i) => i.kind === 'assistant').map((b) => [b.text, b.live]), [
+    ['Let me check', false], ['Let me check the logs: shop is running.', false],
+  ]);
+  // And the first bubble's own message, arriving late, still finds it.
+  applyStreamEvent(state, 'message', { id: 'm1', role: 'assistant', text: 'Let me check' });
+  assert.equal(state.items.filter((i) => i.kind === 'assistant').length, 2);
+});
+
+test('when only a prefix matches, the newest bubble that it starts is the one completed', () => {
+  const state = createTimeline();
+  addUserMessage(state, 'x');
+  applyStreamEvent(state, 'delta', { text: 'shop' });
+  applyStreamEvent(state, 'tool', { name: 'get_app', state: 'done' });
+  applyStreamEvent(state, 'delta', { text: 'shop is' });
+  applyStreamEvent(state, 'message', { id: 'm', role: 'assistant', text: 'shop is running.' });
+  assert.deepEqual(state.items.filter((i) => i.kind === 'assistant').map((b) => b.text), ['shop', 'shop is running.']);
+});

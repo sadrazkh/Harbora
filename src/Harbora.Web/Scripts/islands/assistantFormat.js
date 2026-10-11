@@ -7,6 +7,8 @@
 // Vue writes as text nodes. "<script>" in a message is therefore shown as eight characters. There is
 // no escaping step to forget, because nothing here produces HTML in the first place.
 
+import { SECRET_HANDLE } from './assistantSecrets.js';
+
 /**
  * @typedef {{ type: 'text' | 'code', text: string }} InlineNode
  * @typedef {{ type: 'p', lines: InlineNode[][] } | { type: 'ul', items: InlineNode[][] } | { type: 'pre', text: string }} Block
@@ -101,7 +103,8 @@ export function textDirection(text) {
   let rtl = 0;
   let ltr = 0;
   let first = null;
-  for (const word of String(text).replace(/`[^`]*`/g, ' ').split(/\s+/)) {
+  // A secret's handle ({{secret:…}}) is Latin letters that say nothing about the sentence around it.
+  for (const word of String(text).replace(/`[^`]*`/g, ' ').replace(SECRET_HANDLE, ' ').split(/\s+/)) {
     const kind = RTL_LETTER.test(word) ? 'rtl' : LTR_LETTER.test(word) ? 'ltr' : null;
     if (kind === 'rtl') rtl++;
     else if (kind === 'ltr') ltr++;
@@ -125,7 +128,7 @@ export function textDirection(text) {
  * @returns {'rtl' | 'ltr' | 'auto'}
  */
 export function firstStrongDirection(text, fallback = 'auto') {
-  for (const ch of String(text ?? '')) {
+  for (const ch of String(text ?? '').replace(SECRET_HANDLE, ' ')) {
     if (RTL_LETTER.test(ch)) return 'rtl';
     if (LTR_LETTER.test(ch)) return 'ltr';
   }
@@ -141,14 +144,27 @@ export function firstStrongDirection(text, fallback = 'auto') {
  */
 export function createSteadyDirection(latchWords = 4) {
   const held = new Map();
-  return (text, index) => {
+  const steady = (text, index) => {
     if (held.has(index)) return held.get(index);
-    const words = String(text ?? '').split(/\s+/).filter((w) => RTL_LETTER.test(w) || LTR_LETTER.test(w)).length;
+    const words = String(text ?? '').replace(SECRET_HANDLE, ' ').split(/\s+/)
+      .filter((w) => RTL_LETTER.test(w) || LTR_LETTER.test(w)).length;
     if (words < latchWords) return firstStrongDirection(text);
     const decided = textDirection(text);
     held.set(index, decided);
     return decided;
   };
+  /**
+   * The bubble is final (its `message` arrived): a paragraph that was decided keeps that direction —
+   * no flip at the very end — and one that never reached `latchWords` words is decided now, by the
+   * whole text, rather than staying with its first letter for good.
+   */
+  steady.settle = (text, index) => {
+    if (held.has(index)) return held.get(index);
+    const decided = textDirection(text);
+    held.set(index, decided);
+    return decided;
+  };
+  return steady;
 }
 
 /** @param {Block} block */

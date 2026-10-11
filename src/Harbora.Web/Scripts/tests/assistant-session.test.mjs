@@ -471,3 +471,46 @@ test('a drawer closed while the remembered conversation was being read does not 
   s.session.wake();
   assert.equal(s.session.polling, true);
 });
+
+test('a slow read of one conversation cannot draw over the conversation opened after it', async () => {
+  const s = setup();
+  const pending = {};
+  s.api.conversation = (id) => new Promise((resolve) => { pending[id] = resolve; });
+  const first = s.session.open(CONVO);
+  const second = s.session.open(OTHER);
+  pending[OTHER]({ id: OTHER, title: 'b', messages: [userMessage('in B', 'b1')], pendingPlan: null, inProgress: false });
+  await second;
+  pending[CONVO](view({ messages: [userMessage('in A')], inProgress: true }));
+  assert.deepEqual(await first, {});
+  assert.equal(s.timeline.conversationId, OTHER);
+  assert.deepEqual(s.timeline.items.map((i) => i.text), ['in B']);
+  assert.equal(s.timeline.resuming, false);
+  assert.equal(s.session.polling, false, 'the stale read did not start following A');
+  assert.equal(s.timeline.loading, false);
+});
+
+test('opening a conversation that is not being answered stops the re-reading of the one before', async () => {
+  const s = setup({ stored: { [STORAGE_CONVERSATION]: CONVO }, script: { views: [view({ inProgress: true }), { id: OTHER, title: 'b', messages: [], pendingPlan: null, inProgress: false }] } });
+  await s.session.restore();
+  assert.equal(s.session.polling, true);
+  await s.session.open(OTHER);
+  assert.equal(s.session.polling, false);
+  assert.equal(s.timeline.resuming, false);
+  assert.equal(s.timers.queue.length, 0);
+});
+
+test('an abandoned create leaves a later message\'s waiting words alone', async () => {
+  const s = setup({ script: { send: async () => new Promise(() => {}) } });
+  const releases = [];
+  s.api.createConversation = () => new Promise((resolve) => { releases.push(resolve); });
+  let clock = 1000;
+  s.session = createAssistantSession({ api: s.api, prefs: s.prefs, timeline: s.timeline, timers: s.timers, now: () => clock++ });
+  const first = s.session.send('first words');
+  await settle();
+  s.session.startNew();
+  s.session.send('second words');
+  await settle();
+  releases[0]({ id: CONVO });
+  assert.deepEqual(await first, { sent: false, restoreDraft: 'first words' });
+  assert.equal(s.prefs.outbox(null).text, 'second words', 'the second message still waits under "new"');
+});
