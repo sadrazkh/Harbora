@@ -358,6 +358,8 @@ public sealed class SettingsController(
     HarboraDbContext db,
     ITokenService tokens,
     Harbora.Infrastructure.Assistant.AssistantService assistant,
+    Harbora.Infrastructure.Agent.AgentSettingsService agentSettings,
+    Harbora.Infrastructure.Agent.AgentModelBench agentBench,
     Harbora.Application.Abstractions.ISecretProtector protector,
     Harbora.Application.Abstractions.ISystemClock clock,
     IAuditLogger audit,
@@ -371,6 +373,17 @@ public sealed class SettingsController(
         System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
 
     public async Task<IActionResult> Index(CancellationToken ct)
+    {
+        await PrepareIndexAsync(ct);
+        return View();
+    }
+
+    /// <summary>
+    /// Everything the settings page reads. Its own method because "test the agent model" answers its
+    /// POST with this same page (the results table does not fit in TempData's cookie) rather than
+    /// redirecting to it.
+    /// </summary>
+    private async Task PrepareIndexAsync(CancellationToken ct)
     {
         ViewData["Title"] = "Settings";
         ViewBag.Tokens = await db.ApiTokens
@@ -399,6 +412,7 @@ public sealed class SettingsController(
         ViewBag.AssistantHasKey = !string.IsNullOrWhiteSpace(assistantConfig.ApiKey);
         var assistantUnavailable = Harbora.Infrastructure.Assistant.AssistantAvailability.Check(assistantConfig);
         ViewBag.AssistantUnavailable = IsFa ? assistantUnavailable?.ReasonFa : assistantUnavailable?.Reason;
+        ViewBag.AgentSettings = IsProvider ? await agentSettings.GetAsync(ct) : null;
 
         var me = await db.Users.IgnoreQueryFilters()
             .Where(u => u.Id == currentUser.UserId)
@@ -415,8 +429,6 @@ public sealed class SettingsController(
         ViewBag.Sessions = await db.UserSessions.AsNoTracking()
             .Where(s => s.UserId == currentUser.UserId && s.RevokedAt == null && s.ExpiresAt > clock.UtcNow)
             .OrderByDescending(s => s.LastSeenAt).ToListAsync(ct);
-
-        return View();
     }
 
     /// <summary>
@@ -609,10 +621,22 @@ public sealed class SettingsController(
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.PlatformManage)]
     public async Task<IActionResult> UpdateAssistant(
-        bool enabled, string? provider, string? model, string? apiKey, string? baseUrl, CancellationToken ct)
+        bool enabled, string? provider, string? model, string? apiKey, string? baseUrl,
+        string? agentModel, string? agentFallbackModels, string? agentDailyRequestLimit, CancellationToken ct)
     {
+        // The agent's values are checked before anything is stored: a refused limit must not leave
+        // the provider and key half-saved behind an error message.
+        var agent = Harbora.Infrastructure.Agent.AgentSettingsService.Validate(
+            agentModel, agentFallbackModels, agentDailyRequestLimit);
+        if (!agent.Ok)
+        {
+            TempData["Error"] = IsFa ? agent.ErrorFa : agent.Error;
+            return RedirectToAction(nameof(Index));
+        }
+
         await assistant.SaveConfigAsync(enabled, provider, model, apiKey, baseUrl, ct);
-        TempData["Message"] = "Settings saved.";
+        await agentSettings.SaveAsync(agent.Input!, ct);
+        TempData["Message"] = IsFa ? "تنظیمات ذخیره شد." : "Settings saved.";
         return RedirectToAction(nameof(Index));
     }
 
@@ -632,6 +656,38 @@ public sealed class SettingsController(
         else TempData["Error"] = answer.Text;
 
         return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>
+    /// Provider-only: ask the configured agent model six canned Persian and English requests against
+    /// fake tools and show what it asked for. Nothing is executed — see <see cref="Harbora.Infrastructure.Agent.AgentModelBench"/>.
+    /// Answers with the settings page itself, results attached, because six rows of prompts and
+    /// answers do not fit in the cookie TempData rides in.
+    /// </summary>
+    [HttpPost("/settings/assistant/agent-test")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.PlatformManage)]
+    public async Task<IActionResult> TestAgent(CancellationToken ct)
+    {
+        var report = await agentBench.RunAsync(ct);
+
+        // Only when something was actually asked of the provider: a refusal because the agent is not
+        // configured spent nothing and tested nothing.
+        if (report.Ran)
+            await audit.LogAsync("assistant.agent_tested", "assistant", null,
+                HttpContext.Connection.RemoteIpAddress?.ToString(),
+                metadataJson: System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    model = report.Model,
+                    prompts = report.Total,
+                    passed = report.Passed,
+                    failed = report.Failed,
+                    noAnswer = report.NoAnswer
+                }), ct: ct);
+
+        await PrepareIndexAsync(ct);
+        ViewBag.AgentBench = report;
+        return View(nameof(Index));
     }
 
     /// <summary>Provider-only: forget the stored API key. Its own action because it cannot be undone.</summary>

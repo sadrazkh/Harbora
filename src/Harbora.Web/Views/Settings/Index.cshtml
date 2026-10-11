@@ -5,12 +5,16 @@
     var tokens = ViewBag.Tokens as List<Harbora.Domain.Identity.ApiToken> ?? new();
     var newToken = TempData["NewToken"] as string;
     var msg = TempData["Message"] as string;
+    var error = TempData["Error"] as string;
     var sessions = ViewBag.Sessions as List<Harbora.Domain.Identity.UserSession> ?? new();
     var currentSession = ViewBag.CurrentSessionId as string;
 }
 <h1 class="text-2xl font-bold tracking-tight text-ink mb-6">@T["Settings"]</h1>
 
 @if (msg is not null){<div class="mb-4 rounded-lg bg-ok-soft border border-ok text-ok px-4 py-2 text-sm">@msg</div>}
+@* A refusal (a daily limit that is not a number, a failed connection test) used to be set in
+   TempData["Error"] and never drawn on this page, so it vanished. *@
+@if (error is not null){<div class="mb-4 rounded-lg border border-danger bg-danger-soft px-4 py-2 text-sm text-danger" data-settings-error>@error</div>}
 
 <div class="grid lg:grid-cols-2 gap-6">
     @* ---- Platform ---- *@
@@ -54,6 +58,8 @@
     {
         var assistant = ViewBag.Assistant as Harbora.Infrastructure.Assistant.AssistantConfig;
         var hasKey = (bool)(ViewBag.AssistantHasKey ?? false);
+        var agent = ViewBag.AgentSettings as Harbora.Infrastructure.Agent.AgentSettings;
+        var bench = ViewBag.AgentBench as Harbora.Infrastructure.Agent.AgentBenchReport;
         var unavailable = ViewBag.AssistantUnavailable as string;
     <section class="rounded-xl border border-line bg-surface p-5">
         <h2 class="font-semibold mb-1">@(isFa ? "دستیار هوش مصنوعی" : "AI assistant")</h2>
@@ -111,6 +117,57 @@
                 </p>
             </div>
 
+            @* ---- the in-panel agent ----
+               Shares the provider, base URL and key above; only the model, its fallbacks and the
+               daily cap are its own. *@
+            <div class="border-t border-line pt-3 space-y-3" data-agent-settings>
+                <h3 class="text-sm font-semibold text-ink">@(isFa ? "عامل هوش مصنوعی پنل" : "In-panel AI agent")</h3>
+                <p class="text-xs text-ink-muted">
+                    @if (isFa)
+                    {
+                        <text>عاملی که در گفتگو کارها را برایتان انجام می‌دهد. به ارائه‌دهندهٔ سازگار با OpenAI نیاز دارد: بالا «OpenAI-compatible» را انتخاب کنید. برای OpenRouter آدرس سرویس را <code dir="ltr">https://openrouter.ai/api</code> بگذارید و شناسهٔ مدل‌ها را به شکل <code dir="ltr">vendor/model:free</code> بنویسید. ارائه‌دهنده، آدرس و کلید با توضیح‌دهندهٔ استقرار مشترک است.</text>
+                    }
+                    else
+                    {
+                        <text>The agent that does things for you in chat. It needs an OpenAI-compatible provider: choose "OpenAI-compatible" above. For OpenRouter, set the base URL to <code dir="ltr">https://openrouter.ai/api</code> and write model ids like <code dir="ltr">vendor/model:free</code>. The provider, base URL and key are shared with the deployment explainer.</text>
+                    }
+                </p>
+
+                <div>
+                    <label class="block text-sm text-ink-muted mb-1">@(isFa ? "مدل عامل" : "Agent model")</label>
+                    <input name="agentModel" value="@agent?.Model" dir="ltr" placeholder="vendor/model:free" @(isProvider ? "" : "disabled")
+                           class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm disabled:opacity-60" />
+                    <p class="mt-1 text-[11px] text-ink-faint">
+                        @(isFa ? "خالی باشد، مدل بالا به کار می‌رود." : "Blank uses the model above.")
+                    </p>
+                </div>
+
+                <div>
+                    <label class="block text-sm text-ink-muted mb-1">@(isFa ? "مدل‌های جایگزین" : "Fallback models")</label>
+                    <input name="agentFallbackModels" value="@agent?.FallbackModels" dir="ltr"
+                           placeholder="vendor/model-a:free, vendor/model-b:free" @(isProvider ? "" : "disabled")
+                           class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm disabled:opacity-60" />
+                    <p class="mt-1 text-[11px] text-ink-faint">
+                        @(isFa
+                            ? "با ویرگول جدا کنید. اگر مدل اول جواب ندهد، به همین ترتیب امتحان می‌شوند (جایگزین‌های OpenRouter)."
+                            : "Comma-separated. Tried in this order when the first model fails (OpenRouter's fallbacks).")
+                    </p>
+                </div>
+
+                <div>
+                    <label class="block text-sm text-ink-muted mb-1">@(isFa ? "سقف درخواست روزانه" : "Daily request limit")</label>
+                    @* Text, not number: a number box refuses Persian digits, and the server reads both. *@
+                    <input name="agentDailyRequestLimit" value="@agent?.DailyRequestLimitText" inputmode="numeric" dir="ltr"
+                           placeholder="@Harbora.Infrastructure.Agent.AgentSettingKeys.DefaultDailyRequestLimit" @(isProvider ? "" : "disabled")
+                           class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm disabled:opacity-60" />
+                    <p class="mt-1 text-[11px] text-ink-faint">
+                        @(isFa
+                            ? $"تعداد درخواست به مدل برای هر فضای کار در هر روز (UTC). خالی یعنی {Harbora.Infrastructure.Agent.AgentSettingKeys.DefaultDailyRequestLimit}؛ ۰ یعنی نامحدود."
+                            : $"Model calls per workspace per day (UTC). Blank means {Harbora.Infrastructure.Agent.AgentSettingKeys.DefaultDailyRequestLimit}; 0 means unlimited.")
+                    </p>
+                </div>
+            </div>
+
             @if (isProvider)
             {
                 <button class="rounded-lg bg-accent hover:bg-accent-hover text-white px-4 py-2 text-sm font-semibold">@T["Save"]</button>
@@ -124,6 +181,79 @@
                 @(isFa ? "تست اتصال" : "Test connection")
             </button>
         </form>
+
+        @* Asks the agent model for a few canned tool calls and shows what it answered. Nothing is run. *@
+        <form asp-controller="Settings" asp-action="TestAgent" method="post" class="mt-2 flex flex-wrap items-center gap-2">
+            @Html.AntiForgeryToken()
+            <button class="rounded-lg border border-line px-3 py-1.5 text-xs text-ink hover:border-accent" data-agent-bench-run>
+                @(isFa ? "تست مدل عامل" : "Test the agent model")
+            </button>
+            <span class="text-[11px] text-ink-faint">
+                @(isFa
+                    ? $"{Harbora.Infrastructure.Agent.AgentModelBench.Cases.Count} پرسش فارسی و انگلیسی می‌فرستد؛ ممکن است یک دقیقه یا بیشتر طول بکشد. چیزی اجرا نمی‌شود."
+                    : $"Sends {Harbora.Infrastructure.Agent.AgentModelBench.Cases.Count} Persian and English requests; it can take a minute or more. Nothing is executed.")
+            </span>
+        </form>
+
+        @if (bench is not null)
+        {
+            var state = !bench.Ran ? "not-run"
+                : bench.Passed == bench.Total ? "passed"
+                : bench.Passed == 0 ? "failed"
+                : "partial";
+            <div id="agent-bench" class="mt-3 rounded-lg border border-line bg-surface-2 p-3" data-agent-bench-state="@state">
+                <p class="text-sm text-ink" data-agent-bench-verdict>@(isFa ? bench.VerdictFa : bench.Verdict)</p>
+
+                @if (bench.Ran)
+                {
+                    <p class="mt-1 text-[11px] text-ink-faint">
+                        @(isFa ? "مدل درخواست‌شده:" : "Model asked for:")
+                        <code dir="ltr">@bench.Model</code>
+                    </p>
+
+                    <div class="mt-2 overflow-x-auto">
+                        <table class="w-full text-xs">
+                            <thead class="text-ink-faint">
+                                <tr class="border-b border-line">
+                                    <th class="py-1.5 pe-2 text-start font-medium">@(isFa ? "پرسش" : "Prompt")</th>
+                                    <th class="py-1.5 pe-2 text-start font-medium">@(isFa ? "انتظار" : "Expected")</th>
+                                    <th class="py-1.5 pe-2 text-start font-medium">@(isFa ? "کار مدل" : "What the model did")</th>
+                                    <th class="py-1.5 pe-2 text-start font-medium">@(isFa ? "نتیجه" : "Result")</th>
+                                    <th class="py-1.5 pe-2 text-start font-medium">@(isFa ? "زمان" : "Latency")</th>
+                                    <th class="py-1.5 text-start font-medium">@(isFa ? "مدل پاسخ‌دهنده" : "Answered by")</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-line">
+                                @foreach (var row in bench.Rows)
+                                {
+                                    <tr data-agent-bench-row data-outcome="@row.Outcome.ToString().ToLowerInvariant()">
+                                        <td class="py-1.5 pe-2 align-top text-ink" dir="auto">@row.Prompt</td>
+                                        <td class="py-1.5 pe-2 align-top text-ink-muted"><code dir="ltr">@row.Expected</code></td>
+                                        <td class="py-1.5 pe-2 align-top text-ink-muted" dir="auto">@(isFa ? row.ObservedFa : row.Observed)</td>
+                                        <td class="py-1.5 pe-2 align-top">
+                                            @switch (row.Outcome)
+                                            {
+                                                case Harbora.Infrastructure.Agent.AgentBenchOutcome.Passed:
+                                                    <span class="status-pill bg-ok-soft text-ok">@(isFa ? "درست" : "pass")</span>
+                                                    break;
+                                                case Harbora.Infrastructure.Agent.AgentBenchOutcome.Failed:
+                                                    <span class="status-pill bg-danger-soft text-danger">@(isFa ? "نادرست" : "fail")</span>
+                                                    break;
+                                                default:
+                                                    <span class="status-pill bg-surface text-ink-faint">@(isFa ? "بی‌پاسخ" : "no answer")</span>
+                                                    break;
+                                            }
+                                        </td>
+                                        <td class="py-1.5 pe-2 align-top text-ink-muted" dir="ltr">@row.LatencyMs ms</td>
+                                        <td class="py-1.5 align-top text-ink-muted" dir="ltr">@(row.Model ?? "—")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </div>
+        }
 
         @if (isProvider && hasKey)
         {

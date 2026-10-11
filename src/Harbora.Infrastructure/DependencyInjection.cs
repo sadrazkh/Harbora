@@ -268,6 +268,15 @@ public static class DependencyInjection
         services.AddScoped<Assistant.AssistantClient>();
         services.AddScoped<Assistant.AssistantService>();
 
+        // Round six, phase 1 (in-panel agent): the tool-capable chat client the agent loop calls, the
+        // agent's own platform settings, and the "test the agent model" bench. The client shares the
+        // explainer's provider, base URL and key (AssistantService) and has a named HttpClient of its
+        // own, so a proxy or a recording handler can sit behind the agent alone.
+        services.AddHttpClient(Agent.OpenAiCompatibleAgentChatClient.HttpClientName);
+        services.AddScoped<Agent.AgentSettingsService>();
+        services.AddScoped<Agent.IAgentChatClient, Agent.OpenAiCompatibleAgentChatClient>();
+        services.AddScoped<Agent.AgentModelBench>();
+
         // Turns the stored cumulative counters into a rate — see NetworkThroughput for why a
         // restart has to read as a gap rather than a spike.
         services.AddScoped<Monitoring.NetworkHistory>();
