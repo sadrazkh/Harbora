@@ -112,3 +112,23 @@ floored at 0. Master = 9a99c4a, 6828 Harbora.Tests + 133 node, bundle builds.
 - 17 containers before and after (same names). `/assistant/status` anonymous → 302 to login.
 - Next for the owner: Settings → assistant (OpenRouter base `https://openrouter.ai/api`, key, agent model),
   run the agent-model test, then open the drawer. Write tools arrive with wave B.
+
+## Paused by the owner — 2026-10-11 (resume from here)
+
+Owner: «هرجا هستی نگه دار بهت بگم ادامه بدی». Every running agent was stopped; every worktree is clean
+(work committed). Master = d20cd0c (contracts for streaming/in-progress + u-brief), deployed = 9a99c4a.
+
+| Work | Branch (worktree) | Head | State |
+|---|---|---|---|
+| F app tools | r6/app-tools (Harbora-r6-f) | dd6c408 | stopped mid-task (was replacing slug prediction with exact-slug refusals); no report yet — resume F |
+| G db tools | r6/db-tools (Harbora-r6-g) | f839ede | DONE, 6947 tests; review was stopped — re-dispatch review (package /tmp/r6-review-g.diff, base d41247d) |
+| H docs | r6/assistant-docs (Harbora-r6-h) | e919153 | DONE + coordinator correction; re-check against F/G tools before merge |
+| U-C streaming client | r6/chat-client (Harbora-r6-c) | 1cfbd2f | DONE, 6874 tests; review was stopped — re-dispatch (package /tmp/r6-review-uc.diff, base d20cd0c) |
+| U-D resilient turns | r6/agent-core (Harbora-r6-d) | 108bd36 | stopped mid-task (was writing turn tests); resume D |
+| U-E typing/resume | r6/chat-pane (Harbora-r6-e) | e10dec6 | stopped before its full-suite run; resume E |
+
+Owner's model settings on prod: model nvidia/nemotron-3-super-120b-a12b:free (bench 6/6); advised
+fallbacks google/gemma-4-31b-it:free, google/gemma-4-26b-a4b-it:free.
+Found by G, not changed (for the task table): ManagedServiceEngine.StartAsync marks a database Running
+when it found no container; DatabaseProvisioningService.CreateAsync clears the shared change tracker on a
+billing refusal. Pane has no UI to revoke "don't ask again" (API only).
