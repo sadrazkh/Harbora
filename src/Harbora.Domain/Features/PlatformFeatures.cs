@@ -42,12 +42,20 @@ public static class PlatformFeatures
     /// <summary>Code written in the panel that runs without a repository or a Dockerfile.</summary>
     public const string Functions = "functions";
 
+    /// <summary>The in-panel AI agent: a chat pane that reads and changes resources on request.</summary>
+    public const string Assistant = "assistant";
+
     public static readonly IReadOnlyList<PlatformFeature> All =
     [
         new(Functions,
             "Functions", "فانکشن‌ها",
             "Write code in the panel — HTTP endpoints, scheduled jobs and event handlers — with no repository, no Dockerfile and no git push.",
             "کد را در همین پنل بنویسید — اندپوینت HTTP، کار زمان‌بندی‌شده و هندلر رویداد — بدون ریپازیتوری، بدون Dockerfile و بدون git push.",
+            FeatureState.Locked),
+        new(Assistant,
+            "AI assistant", "دستیار هوشمند",
+            "Ask in plain Persian or English — \"create a Postgres database and attach it to my app\" — and the assistant prepares it, shows you the plan, and does it.",
+            "به فارسی یا انگلیسی بگویید — «یک دیتابیس Postgres بساز و به اپم وصلش کن» — دستیار آماده‌اش می‌کند، برنامه را نشانتان می‌دهد و انجامش می‌دهد.",
             FeatureState.Locked)
     ];
 

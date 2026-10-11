@@ -53,6 +53,7 @@ public static class StatusLabel
         DeploymentTrigger.Cli => "CLI",
         DeploymentTrigger.Rollback => isFa ? "بازگردانی" : "Rollback",
         DeploymentTrigger.Schedule => isFa ? "زمان‌بندی" : "Schedule",
+        DeploymentTrigger.Assistant => isFa ? "دستیار" : "Assistant",
         _ => Fallback(trigger.ToString(), isFa)
     };
 

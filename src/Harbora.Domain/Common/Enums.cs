@@ -105,7 +105,9 @@ public enum DeploymentTrigger
     Webhook = 3,
     Cli = 4,
     Rollback = 5,
-    Schedule = 6
+    Schedule = 6,
+    /// <summary>Queued by the in-panel AI agent, from a plan the user approved (or remembered).</summary>
+    Assistant = 7
 }
 
 public enum GitProviderType
