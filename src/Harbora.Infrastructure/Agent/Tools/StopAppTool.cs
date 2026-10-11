@@ -45,7 +45,7 @@ public sealed class StopAppTool(
         if (target.Refused) return AgentValidation.Refused(target.Error!, target.ErrorFa!);
         var app = target.App!;
 
-        if (app.Status == AppStatus.Stopped) return AlreadyStopped(app.Slug);
+        if (NotRunning(app) is { } notRunning) return notRunning;
 
         return new AgentValidation(true,
             TitleEn: $"Stop {app.Slug}",
@@ -62,11 +62,7 @@ public sealed class StopAppTool(
         if (target.Refused) return NotPossible(target.Error!, target.ErrorFa!);
         var app = target.App!;
 
-        if (app.Status == AppStatus.Stopped)
-        {
-            var already = AlreadyStopped(app.Slug);
-            return NotPossible(already.Error!, already.ErrorFa!);
-        }
+        if (NotRunning(app) is { } notRunning) return NotPossible(notRunning.Error!, notRunning.ErrorFa!);
 
         await operations.StopAsync(app.Id, ct);
 
@@ -77,6 +73,17 @@ public sealed class StopAppTool(
             Links: [AppLink(app)]);
     }
 
-    private static AgentValidation AlreadyStopped(string slug) => AgentValidation.Refused(
-        $"App '{slug}' is already stopped.", $"اپ «{slug}» از قبل متوقف است.");
+    /// <summary>
+    /// Nothing to stop: already stopped, or never deployed — <c>StopAsync</c> would find no container
+    /// for the second, stop nothing and still write it down as stopped, and "stopped, no longer serving"
+    /// is not something to say about an app that never served.
+    /// </summary>
+    private static AgentValidation? NotRunning(Domain.Apps.App app) =>
+        app.Status == AppStatus.Stopped
+            ? AgentValidation.Refused($"App '{app.Slug}' is already stopped.", $"اپ «{app.Slug}» از قبل متوقف است.")
+            : app.ActiveDeploymentId is null
+                ? AgentValidation.Refused(
+                    $"App '{app.Slug}' has not been deployed yet, so there is nothing running to stop.",
+                    $"اپ «{app.Slug}» هنوز مستقر نشده است، پس چیزی در حال اجرا نیست که متوقف شود.")
+                : null;
 }

@@ -228,6 +228,18 @@ public class AppLifecycleToolsTests
         h.Operations.Calls.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task An_app_never_deployed_has_nothing_running_to_stop()
+    {
+        using var h = new AppToolsHarness();
+        h.SeedApp("web", deployed: false);
+
+        var verdict = await h.ValidateAsync(h.StopApp(), new { app = "web" });
+
+        verdict.Error.Should().Contain("has not been deployed yet");
+        verdict.ErrorFa.Should().Contain("هنوز مستقر نشده است");
+    }
+
     // ---- rollback_app ---------------------------------------------------------------------------
 
     [Fact]
@@ -293,6 +305,30 @@ public class AppLifecycleToolsTests
         var verdict = await h.ValidateAsync(h.RollbackApp(), new { app = "web" });
 
         verdict.Error.Should().Contain("has no earlier successful deployment");
+    }
+
+    [Fact]
+    public async Task A_rollback_is_refused_while_a_deployment_is_in_flight_rather_than_joined_to_it()
+    {
+        using var h = new AppToolsHarness();
+        var app = h.SeedApp("web");
+        var first = await h.Db.Deployments.AsNoTracking().SingleAsync(d => d.AppId == app.Id && d.Number == 1);
+        // A rollback already running — the engine would join a second one onto it, whatever it restores.
+        h.Db.Deployments.Add(new Deployment
+        {
+            AppId = app.Id, WorkspaceId = h.WorkspaceId, Number = 3, Status = DeploymentStatus.Deploying, RolledBackFromId = first.Id
+        });
+        await h.Db.SaveChangesAsync();
+        h.Db.ChangeTracker.Clear();
+
+        var verdict = await h.ValidateAsync(h.RollbackApp(), new { app = "web", number = 1 });
+        var result = await h.ExecuteAsync(h.RollbackApp(), new { app = "web", number = 1 });
+
+        verdict.Ok.Should().BeFalse();
+        verdict.Error.Should().Be("Deployment #3 of 'web' is still deploying. Wait for it to finish (or cancel it), then roll back.");
+        verdict.ErrorFa.Should().MatchRegex("[؀-ۿ]");
+        result.Ok.Should().BeFalse();
+        h.Deployments.Queued.Should().BeEmpty();
     }
 
     [Fact]

@@ -117,7 +117,7 @@ public sealed class RollbackAppTool(
         }
         catch (Exception ex) when (DeployRefusal(ex) is { } refusal)
         {
-            // A rollback is never coalesced onto a deploy in flight — the engine says so, and so does this.
+            // A deploy that started between the check above and now: the engine refuses to merge them.
             return NotPossible(refusal.En, refusal.Fa);
         }
 
@@ -151,6 +151,14 @@ public sealed class RollbackAppTool(
     private async Task<(int Number, Prepared? Plan, (string En, string Fa)? Error)> PrepareAsync(
         App app, int? number, CancellationToken ct)
     {
+        // Refused outright while anything is in flight. The engine would refuse a rollback onto a deploy,
+        // but join it onto a rollback already running — to whatever version that one restores, which is
+        // not necessarily the one this card names.
+        if (await UnsettledDeploymentAsync(db, app.Id, ct) is { } inFlight)
+            return (0, null, (
+                $"Deployment #{inFlight.Number} of '{app.Slug}' is still {AgentResourceResolver.Lower(inFlight.Status)}. Wait for it to finish (or cancel it), then roll back.",
+                $"استقرار شمارهٔ {inFlight.Number} از «{app.Slug}» هنوز تمام نشده است ({AgentResourceResolver.Lower(inFlight.Status)}). صبر کنید تمام شود (یا لغوش کنید)، بعد بازگردانی کنید."));
+
         var history = db.Deployments.AsNoTracking().Where(d => d.AppId == app.Id && d.WorkspaceId == app.WorkspaceId);
 
         Guid? targetId;
