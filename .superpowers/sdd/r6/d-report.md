@@ -407,3 +407,108 @@ Every build/test used `export MSBUILDDISABLENODEREUSE=1` and `-p:UseSharedCompil
     ```
     `grep -c "Harbora.Tests.dll"` → 2 (present). No `[FAIL]` lines. 6793 = this branch's 103 agent tests +
     6690, the count agent A's report gives for master after A, B and C landed (not re-run separately here).
+
+## 11. Fixes after review
+
+Rebased onto master `a6c4b48` (agent E's chat pane) first — no conflicts. All fixes are in `038b03f`; the
+sections above still describe the design, with the changes below on top.
+
+### Important 1 — every claimed plan ends `executed` or `failed`
+
+- `AgentPlanService.RunClaimedAsync` now takes **no** cancellation token and catches **every** exception from
+  a tool after the claim — `OperationCanceledException` included, since nothing post-claim is the caller's
+  cancellation (an `HttpClient.Timeout` throws `TaskCanceledException`). The same in re-validation.
+- After a step fails or throws, the tracked changes that are not agent rows are detached
+  (`AgentTracker.DetachForeignChanges`, new `src/Harbora.Infrastructure/Agent/AgentTracker.cs`) before the
+  audit entry and the plan are saved, so an entity left `Added` by a save that threw (a unique-slug race) is not
+  retried by the agent's own saves.
+- Per-step results live in a `RunLedger` outside the work. Anything that still escapes goes to
+  `FinishBrokenRunAsync`: every unsaved change is detached (`DetachAllChanges`), the running step fails, steps
+  without a result are skipped, and the plan is finished. Status, `ResultsJson` and the conversation's tool
+  messages are now written in **one** save (`FinishAsync` + `AddOutcomeMessagesAsync`). If even that save
+  fails it is logged and the plan stays `executing`, the one state that claims nothing.
+- `TryMoveAsync` refreshes the tracked plan with `CancellationToken.None` once the move has committed.
+- On the auto-run path the person now gets an `executed` event with the failed step, not "nothing further was
+  done".
+
+### Important 2 — tool results fit the 4,000-character cut
+
+- `list_resources` answers in pages (`page` argument, from 1). Each page is packed greedily to serialise under
+  `ListResourcesTool.PageBudget` (3,600 chars), with the paging facts first:
+  `{"page":1,"pages":4,"nextPage":2,"totalApps":230,"totalDatabases":1,"projects":[{"project","name","environments":[{"environment","protected"?,"apps":["slug (status, kind)"],"databases":["name (engine version, status)"]}]}]}`.
+  A page past the end is refused ("There are only N pages."). The snapshot's "…and N more" line now says the
+  tool answers in pages, and the person's summary names the page and what is on it.
+- `get_deployment` redacts each line, clips it to 200 chars (`MaxLineLength`), then drops the **oldest**
+  lines until the whole result serialises under `ResultBudget` (3,700); `earlierLinesLeftOut` says how many.
+- `get_app` (not flagged, same hazard): environment variables moved to the end of the payload and values
+  clipped to 120, so a long variable list loses its own tail rather than the deployments.
+
+### Important 3 — every secret that reaches the app is redacted by value
+
+`AgentSecrets.ForAppAsync` now also collects the secret entries of attached config groups
+(`AppConfigGroups → ConfigGroupEntry.IsSecret`) and, in the same spirit, the attached storage buckets'
+`EncryptedSecretKey`, email providers' `EncryptedPassword` and error trackers' `EncryptedDsn`. New:
+`AgentSecrets.ForDatabaseAsync(db, protector, service, ct)` — the database's and its logical databases'
+passwords.
+
+### Minors
+
+- **Expiry at approval** is now told to the conversation (`ExpireAsync`, shared with superseding).
+- **Superseding runs after the gates:** `SendAsync` asks availability and the cap first (`GateAsync`); only
+  a message that will be answered withdraws a pending card, so a refused message leaves the card approvable.
+- **Validation must change nothing:** after `ValidateAsync` — in the loop and at re-validation — any new
+  unsaved change outside the agent's rows is logged, detached and the step refused ("This step was refused:
+  checking it tried to change data…"). `AgentPlanService.ValidationLeftChanges` (internal) is the shared
+  check. A read tool that leaves changes has them detached and logged.
+- **A read tool's own timeout** is a failed read for the model, not the end of the turn; only the request's
+  own cancellation ends it.
+- **`NormalizeCalls`** first reserves every usable id the reply carries, then generates ids
+  (`call_r{round}_{n}`, suffixed `_2`, `_3`… until unique).
+- **`get_database`** redacts its error by value (its own passwords) and by shape **before** clipping. Its
+  constructor is now `GetDatabaseTool(HarboraDbContext, AgentResourceResolver, ProjectAccessService, ISecretProtector)`.
+- **Resolver `AppAsync`** only considers visible apps, so an invisible slug match no longer hides a visible
+  app carrying that display name.
+- **Remembered tools when re-validation refuses — decided:** a plan refused at the re-check remembers
+  **nothing**. "Don't ask again" is recorded only once re-validation has passed and the steps are about to
+  run; like every other refusal, a 409 `revalidation_refused` changes nothing but the plan's own status.
+- `get_usage` stays open to members (no change).
+
+### Tests added (17), by file
+
+| File | New tests |
+|---|---|
+| `tests/Harbora.Tests/Agent/AgentPlanServiceTests.cs` | a step throwing `TaskCanceledException` leaves a failed plan with results done/failed/skipped in the plan, the conversation and the audit; a step whose own save throws `DbUpdateException` (asserted to be that type) leaves a failed plan, nothing half-written saved, a clean tracker; an auto-run whose tool times out reports `executed`/failed; a validation that changes data is refused at the re-check and never saved; expiry at approval recorded in the conversation; a re-validation refusal remembers nothing |
+| `tests/Harbora.Tests/Agent/AgentConversationServiceTests.cs` | a read tool timing out is a failed read and the turn continues; a write whose validation changes data is refused and nothing is saved; a message refused by the gates leaves the card approvable; a failed model call still spends its share of the cap; a generated call id never collides with a real one |
+| `tests/Harbora.Tests/Agent/AgentReadToolsTests.cs` | through the real `AgentJson.ForModel`: all 231 resources (230 apps and a database; the snapshot shows 60) reachable across `list_resources` pages, each page at most 4,000 chars, untruncated, paging facts first; the last log line survives and lines are at most 201 chars; config-group, storage, mail and error-tracking secrets redacted by value in `get_deployment` and `get_app`; a database error redacted before clipping; an invisible slug does not hide a visible display name |
+| `tests/Harbora.Tests/Http/AssistantHttpTests.cs` | approve, reject and revoke each refuse a POST without the antiforgery header (400), and the plan stays pending |
+
+Mutation check: with both the post-failure detach and the broken-run fallback disabled,
+`A_step_whose_save_throws_leaves_nothing_half_written_and_the_plan_still_finishes` failed; restored and
+rebuilt before the runs below.
+
+### Commands and output
+
+All with `MSBUILDDISABLENODEREUSE=1`, `-p:UseSharedCompilation=false`, `LOG=/tmp/test-r6-agent-core.log`.
+
+- `dotnet build Harbora.slnx --nologo -v q -p:UseSharedCompilation=false` → `BUILD_EXIT=0`, `28 Warning(s)`,
+  `0 Error(s)` (the baseline's package warnings; no compiler warnings).
+- Focused: `dotnet test tests/Harbora.Tests --no-build --filter "FullyQualifiedName~Harbora.Tests.Agent.|FullyQualifiedName~AssistantHttpTests|FullyQualifiedName~MigrationConsistencyTests"`
+  → `Passed!  - Failed:     0, Passed:   122, Skipped:     0, Total:   122 - Harbora.Tests.dll`.
+- Full: `dotnet test Harbora.slnx --nologo -v q --no-build` → `EXIT=0`:
+  ```
+  Skipped! - Failed:     0, Passed:     0, Skipped:   108, Total:   108 - Harbora.Postgres.Tests.dll (net10.0)
+  Passed!  - Failed:     0, Passed:   500, Skipped:    17, Total:   517 - Harbora.NodeAgent.Tests.dll (net10.0)
+  Passed!  - Failed:     0, Passed:    15, Skipped:     0, Total:    15 - Harbora.NodeIngress.Tests.dll (net10.0)
+  Passed!  - Failed:     0, Passed:  6819, Skipped:     0, Total:  6819 - Harbora.Tests.dll (net10.0)
+  ```
+  `grep -c "Harbora.Tests.dll"` → 2. 6819 = the coordinator's 6802 for master plus this branch, plus the 17
+  new tests.
+
+### Still unverified, and remaining concerns
+
+- The Postgres lane (the migration and the four race tests) is still unverified locally — no Docker.
+- `FinishBrokenRunAsync` cannot help when the database itself is unreachable: the plan then stays
+  `executing` and the failure is only in the log. No reconciler exists for that case.
+- Detaching what a failed step left behind assumes tools save their own work. A tool that returns
+  **success** without saving still has its changes written by the agent's next save — deliberately not
+  detached, since dropping them would make "done" untrue. Wave-B tools should save before returning.
