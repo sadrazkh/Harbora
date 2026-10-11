@@ -632,3 +632,143 @@ All runs used `MSBUILDDISABLENODEREUSE=1` and `-p:UseSharedCompilation=false`.
   - the first-hour heuristic;
   - the "Assistant" label on rollbacks.
 - **Concern 5 (the rollback target moving) is fixed by item 3.**
+
+## Re-review fixes, and the rebase onto D's vault
+
+These are the commits on top of master `3f1d0c9`. The branch was rebased there after D's vault landed; the
+rebase had no conflicts.
+
+```
+3100115 deploy_template refuses a lock-button value for a variable the template stores as plain configuration, and a secret that looks like a template reference; refusals are scrubbed of resolved secrets
+55a247f set_env_vars and deploy_template take the secret vault as a required dependency now that it is registered, and their tests use the real in-memory vault on the harness clock
+```
+
+### Important: a handle for a plain template variable is now refused (no conversion afterwards)
+
+`deploy_template` no longer converts a plain variable to a secret after the template is deployed.
+
+**Why the conversion was unsafe.** `TemplateDeploymentService` commits every variable in plain text before
+anything after it can run. If provisioning threw after that commit, or the conversion itself failed, the value
+was left in plain text. `get_app` could then show it to the model.
+
+**What happens now.** A handle for a variable the template does not mark secret is refused. This applies both
+when the card is drawn and when the step runs. The refusal is in both languages:
+
+> "Template 'Ghost' stores url as plain configuration, so a value entered with the lock button cannot go there —
+> it would be saved as plain text. Deploy with a plain value for url (or ask the user for one), then set it as a
+> secret afterwards with set_env_vars, using the lock button."
+
+**What was removed:**
+- the `IAppConfigurationService` dependency;
+- the conversion step and its summary line;
+- the unused `Secrets` field.
+
+`deploy_template` never offered `generate`, so there was nothing to refuse there.
+
+### Minor: no template reference substitution for secrets, and refusals are scrubbed
+
+**References inside a secret.** At execution, a resolved handle value containing `${{` is refused before the
+service sees it. Otherwise the service would treat it as a reference to one of its services. The refusal says:
+
+> "The secret entered for SMTP_PASSWORD contains "${{", which this template would read as a reference to one of
+> its services, so it cannot be used here. Nothing was created."
+
+It repeats no part of the value. The service's own unknown-reference refusal quotes the reference, so that
+refusal can no longer be reached with a secret.
+
+**Scrubbing refusals.** Some refusals could quote a value. These are now scrubbed so that every resolved secret
+value is replaced with `••••••` before the message reaches `Error`, `ErrorFa` or `ResultJson`:
+- the template service's own refusals, in `deploy_template`;
+- the configuration service's refusals, in `set_env_vars`, which also scrubs generated values.
+
+### Minor: "contradictory", not "downgrade"
+
+In `set_env_vars`, a handle or `generate: true` together with an explicit `secret: false`, on a variable that is
+already secret, is refused with:
+
+> "API_KEY: secret: false contradicts the value — one entered with the lock button is always a secret. Leave secret
+> out (or pass true) and call again."
+
+For `generate` it says "a generated one". It no longer mentions turning a secret into plain text.
+
+On a variable that is not yet secret, a handle with `secret: false` still makes the variable secret, as the brief
+says.
+
+### Coordinator: the vault is required now
+
+D's `InMemoryAgentSecretVault` is registered on master.
+- Both tools take `IAgentSecretVault vault` with no default.
+- Unknown, foreign and expired handles are still refused, both when the card is drawn and when the step runs.
+- The tests use the harness's real vault, `AgentHarness.Vault`, which is the same one the core redacts by.
+- Expiry is tested by moving the harness clock past `AgentSecretHandles.Lifetime`; the fake vault is gone.
+- The "no vault on the host" test was removed, because that case can no longer occur.
+- No test of mine constructs `AgentPlanService` or `AgentConversationService` directly; they come from D's
+  `AgentHarness`, which supplies the new `IAgentSecretValues` argument.
+
+### Tests
+
+There are 224 app-tool tests. Since the last report, one test was replaced, four were added and one was removed.
+
+**Replaced.** "A handle for a variable the template left plain is stored as a secret" became:
+- `A_handle_for_a_variable_the_template_stores_as_plain_configuration_is_refused_and_nothing_is_created`
+  - Validation and execution are both refused, with the guidance quoted above.
+  - The value is never echoed.
+  - The snapshot is unchanged.
+
+**Added:**
+- `A_secret_that_looks_like_a_template_reference_is_refused_at_execution_without_repeating_it`
+  - Validation passes, because the value cannot be seen then.
+  - Execution is refused, and neither `mysql.password` nor any part of the value appears in the error or the
+    result.
+  - The snapshot is unchanged.
+- `Secret_false_beside_a_handle_or_generate_on_an_existing_secret_is_called_contradictory` (×2)
+- `A_refusal_that_quotes_a_secret_value_reaches_the_result_masked`
+  - Uses a configuration service whose refusal quotes every value.
+  - The result shows `STRIPE_KEY=••••••` and still shows the plain `DATABASE_URL` value.
+  - The secret appears nowhere.
+
+**Removed:**
+- `Without_a_vault_on_the_host_every_handle_is_refused` (the vault is required now)
+
+**Mutation check.** I disabled the two new template guards (the plain-variable refusal and the `${{` refusal).
+- The two new template tests failed, and only those.
+- I restored the guards by reverting exactly those two edits, rebuilt, and the suite was green again.
+
+### Commands and output
+
+All runs used `MSBUILDDISABLENODEREUSE=1` and `-p:UseSharedCompilation=false`.
+
+- **Before the rebase:**
+  - filter `Harbora.Tests.Agent.|QuotaRefusal|AssistantHttpTests` gave `Passed! 478/478`;
+  - app tools alone gave 225/225.
+- **After the rebase onto `3f1d0c9`:**
+  - filter `Harbora.Tests.Agent.|QuotaRefusal|Assistant` gave `Passed! 570/570`;
+  - app tools alone gave `Passed! 224/224`.
+- **Full run:**
+  - `dotnet build Harbora.slnx --nologo -v q -p:UseSharedCompilation=false` gave `BUILD_EXIT=0`, `28 Warning(s)`
+    (package warnings) and 0 `warning CS`.
+  - `dotnet test Harbora.slnx --nologo -v q --no-build` gave `EXIT=0`:
+    ```
+    Skipped! - Failed:     0, Passed:     0, Skipped:   109, Total:   109 - Harbora.Postgres.Tests.dll (net10.0)
+    Passed!  - Failed:     0, Passed:   500, Skipped:    17, Total:   517 - Harbora.NodeAgent.Tests.dll (net10.0)
+    Passed!  - Failed:     0, Passed:    15, Skipped:     0, Total:    15 - Harbora.NodeIngress.Tests.dll (net10.0)
+    Passed!  - Failed:     0, Passed:  7301, Skipped:     0, Total:  7301 - Harbora.Tests.dll (net10.0)
+    ```
+  - `grep -c "Harbora.Tests.dll"` gave 2.
+  - 7301 = the 224 app-tool tests plus 7077 from master `3f1d0c9`. The master figure is inferred; I did not run
+    master separately.
+
+### Concerns now
+
+- **Templates whose authors forgot to mark a credential secret.** Such a variable cannot be filled with a
+  lock-button value through `deploy_template`. The person deploys with a plain value and then sets the real
+  secret with `set_env_vars`. Until then a placeholder sits in plain configuration.
+- **Unchanged from §10:**
+  - `AgentTracker` detaches in tracker order, which can throw on a staged graph; my tools avoid it with
+    `DropStaged`.
+  - The operations service writes the app's status even when no container is found.
+  - The template service has no validate method.
+  - No client IP reaches audit entries written by tools.
+  - A planned `add_domain` skips the reserved-host check until execution.
+  - The first-hour warning is a heuristic.
+  - Rollbacks queued by the assistant show "Assistant" as their trigger.
