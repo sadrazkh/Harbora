@@ -125,6 +125,23 @@ test('readEventStream delivers frames as they arrive, not only at the end', asyn
   assert.deepEqual(seen, ['tool', 'done']);
 });
 
+test('a frame handler that throws cancels the body instead of leaving it downloading', async () => {
+  const encoder = new TextEncoder();
+  let cancelledWith = null;
+  let pulls = 0;
+  const body = new ReadableStream({
+    pull(controller) {
+      pulls++;
+      controller.enqueue(encoder.encode('event: message\ndata: {}\n\n'));
+    },
+    cancel(reason) { cancelledWith = reason; },
+  });
+  const boom = new Error('handler bug');
+  await assert.rejects(readEventStream(body, () => { throw boom; }), (err) => err === boom);
+  assert.equal(cancelledWith, boom, 'the stream must be cancelled with the error');
+  assert.ok(pulls <= 2, `stopped reading (pulled ${pulls} times)`);
+});
+
 test('parseAssistantFrame returns the parsed JSON for every event the contract names', () => {
   for (const name of ASSISTANT_EVENTS) {
     const parsed = parseAssistantFrame({ event: name, data: '{"a":1}', id: '' });

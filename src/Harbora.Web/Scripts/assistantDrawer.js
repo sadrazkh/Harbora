@@ -38,9 +38,11 @@ export function createAssistantPrefs(storage) {
  *   toggles?: Array<{ setAttribute(name: string, value: string): void }>,
  *   prefs: ReturnType<typeof createAssistantPrefs>,
  *   onOpen?: () => void,
+ *   isCompact?: () => boolean,
  * }} deps
+ *   `isCompact`: whether the drawer is the whole screen right now (a phone; below 640 px).
  */
-export function createAssistantDrawer({ panel, toggles = [], prefs, onOpen }) {
+export function createAssistantDrawer({ panel, toggles = [], prefs, onOpen, isCompact = () => false }) {
   let open = false;
 
   function paint() {
@@ -62,11 +64,22 @@ export function createAssistantDrawer({ panel, toggles = [], prefs, onOpen }) {
     close: () => set(false),
     toggle: () => set(!open),
     isOpen: () => open,
-    /** Paints the remembered state on page load; opening it there counts as an open. */
+    /**
+     * Paints the remembered state on page load; opening it there counts as an open. Not on a phone:
+     * there the drawer is the whole screen, and reopening it on every load would put it over every
+     * page the person goes to — including the one a result card's link just took them to.
+     */
     restore() {
-      open = prefs.isOpen();
+      open = prefs.isOpen() && !isCompact();
       paint();
       if (open) onOpen?.();
+    },
+    /**
+     * A link inside the drawer was followed. On a phone the drawer closes, and stays closed, so the
+     * page the link leads to is what the person sees. On a wide screen it stays open beside it.
+     */
+    followedLink() {
+      if (isCompact()) set(false);
     },
   };
 }
@@ -86,9 +99,16 @@ export function isAssistantShortcut(event) {
  * @param {HTMLElement} panel  `#assistant-panel`
  * @param {(host: HTMLElement, options: { close: () => void, focus: boolean }) => Promise<void>} mountIsland
  *   imports and mounts the Vue island into `host`; called on the first open (again only if that failed).
+ * @param {{ document?: Document, storage?: Storage, matchMedia?: (query: string) => { matches: boolean } }} [env]
+ *   the browser globals, injectable so `node --test` can drive the wiring with fakes.
  */
-export function initAssistantDrawer(panel, mountIsland) {
-  const toggles = Array.from(document.querySelectorAll('[data-assistant-toggle]'));
+export function initAssistantDrawer(panel, mountIsland, env = {}) {
+  const doc = env.document ?? globalThis.document;
+  const storage = 'storage' in env ? env.storage : globalThis.localStorage;
+  const matchMedia = env.matchMedia ?? globalThis.matchMedia?.bind(globalThis);
+  const isCompact = () => matchMedia?.('(max-width: 639px)')?.matches === true;
+
+  const toggles = Array.from(doc.querySelectorAll('[data-assistant-toggle]'));
   const host = panel.querySelector('[data-assistant-host]');
   const topbarToggle = toggles.find((t) => !panel.contains(t));
   let lastToggle = null;
@@ -97,15 +117,21 @@ export function initAssistantDrawer(panel, mountIsland) {
   // take the keyboard focus away from the page they just navigated to.
   let byPerson = false;
 
-  function close() {
-    drawer.close();
+  function returnFocus() {
     // Back to where the person was, not to the top of the page.
     (lastToggle && !panel.contains(lastToggle) ? lastToggle : topbarToggle)?.focus?.();
+  }
+
+  function close() {
+    drawer.close();
+    returnFocus();
   }
 
   function onOpen() {
     const focus = byPerson;
     if (!mounted) {
+      panel.querySelector('[data-assistant-loading]')?.removeAttribute('hidden');
+      panel.querySelector('[data-assistant-load-failed]')?.setAttribute('hidden', '');
       mounted = mountIsland(host ?? panel, { close, focus }).catch(() => {
         // The chunk did not load (offline, a bad deploy). Say so in the drawer instead of leaving
         // "Loading…" up for ever, and let the next open try again.
@@ -116,21 +142,22 @@ export function initAssistantDrawer(panel, mountIsland) {
       return;
     }
     // Already mounted: the island refreshes its status (and focuses the composer) on this signal.
-    mounted.then(() => document.dispatchEvent(new CustomEvent('harbora:assistant-opened', { detail: { focus } })));
+    mounted.then(() => doc.dispatchEvent(new CustomEvent('harbora:assistant-opened', { detail: { focus } })));
   }
 
   const drawer = createAssistantDrawer({
     panel,
     toggles,
-    prefs: createAssistantPrefs(globalThis.localStorage),
+    prefs: createAssistantPrefs(storage),
     onOpen,
+    isCompact,
   });
 
   function toggleByPerson() {
     byPerson = true;
     try { drawer.toggle(); } finally { byPerson = false; }
     // Closed with the keyboard focus still inside it: a hidden element must not keep the focus.
-    if (!drawer.isOpen() && panel.contains(document.activeElement)) topbarToggle?.focus?.();
+    if (!drawer.isOpen() && panel.contains(doc.activeElement)) returnFocus();
   }
 
   for (const toggle of toggles) {
@@ -140,13 +167,22 @@ export function initAssistantDrawer(panel, mountIsland) {
     });
   }
 
-  document.addEventListener('keydown', (event) => {
+  // A plain left click on a link in the drawer (a result card's "open the database"): on a phone,
+  // close before the navigation, so the next page is not covered. Modified clicks open elsewhere.
+  panel.addEventListener('click', (event) => {
+    const link = event.target?.closest?.('a[href]');
+    if (!link || event.defaultPrevented || event.button > 0) return;
+    if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || link.target === '_blank') return;
+    drawer.followedLink();
+  });
+
+  doc.addEventListener('keydown', (event) => {
     if (isAssistantShortcut(event)) {
       event.preventDefault();
       toggleByPerson();
       return;
     }
-    if (event.key === 'Escape' && drawer.isOpen() && panel.contains(document.activeElement)) close();
+    if (event.key === 'Escape' && drawer.isOpen() && panel.contains(doc.activeElement)) close();
   });
 
   drawer.restore();

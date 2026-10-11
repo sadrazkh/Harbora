@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { Check, Clock, LoaderCircle, TriangleAlert } from 'lucide';
+import { Ban, Check, CircleCheck, Clock, ListChecks, LoaderCircle, ShieldAlert, TriangleAlert } from 'lucide';
 import { AssistantIcon } from './assistantIcon';
 import {
   kindLabel, needsPhrase, isRememberable, planIsActionable, planIsExpired,
@@ -11,6 +11,9 @@ import { textDirection } from './assistantFormat.js';
 // said on the card itself, because "create the database" in a list reads like a report unless
 // something says otherwise. The rules — who needs a typed name, what may be remembered, what the
 // approve body contains — live in assistantPlan.js; this file only draws them.
+//
+// Whether the plan is still open is the server's word (its status), never this browser's clock: a
+// late approve is refused by the server, and its refusal — with the step it names — is shown here.
 
 interface PlanItem {
   plan: any;
@@ -18,30 +21,53 @@ interface PlanItem {
   mismatched: number[];
   busy: boolean;
   error: { messageEn: string; messageFa: string } | null;
+  errorStep: number | null;
+  superseded: boolean;
+  resulted: boolean;
 }
 
-const props = defineProps<{ item: PlanItem; fa: boolean; now: number }>();
+// `locked`: a turn is streaming. The server expires a waiting plan when it receives a new message,
+// so Run is held until it has answered rather than racing that.
+const props = defineProps<{ item: PlanItem; fa: boolean; locked?: boolean }>();
 const emit = defineEmits<{ (e: 'run'): void; (e: 'cancel'): void }>();
 const t = (en: string, persian: string) => (props.fa ? persian : en);
 
 const plan = computed(() => props.item.plan);
-const actionable = computed(() => planIsActionable(plan.value, props.now));
-const expired = computed(() => planIsExpired(plan.value, props.now));
+const actionable = computed(() => planIsActionable(plan.value));
+const expired = computed(() => planIsExpired(plan.value));
 const hasDestructive = computed(() => (plan.value.steps ?? []).some((s: any) => s.kind === 'destructive'));
-const minutesLeft = computed(() => {
-  const ms = Date.parse(plan.value.expiresAt) - props.now;
-  return Number.isFinite(ms) ? Math.max(1, Math.ceil(ms / 60000)) : null;
+
+// The server's expiry, shown as a time of day — information, not a countdown this card enforces.
+const validUntil = computed(() => {
+  const at = new Date(plan.value.expiresAt);
+  return Number.isNaN(at.getTime()) ? null : new Intl.DateTimeFormat(props.fa ? 'fa-IR' : 'en-GB', { timeStyle: 'short' }).format(at);
 });
 
 const heading = computed(() => {
+  const resulted = props.item.resulted;
   switch (plan.value.status) {
-    case 'pending': return expired.value ? t('This plan expired', 'این برنامه منقضی شد') : t('Plan — waiting for your approval', 'برنامه — منتظر تأیید شما');
+    case 'pending': return t('Plan — waiting for your approval', 'برنامه — منتظر تأیید شما');
     case 'executing': return t('Running…', 'در حال اجرا…');
-    case 'executed': return t('Plan ran — see the result below', 'برنامه اجرا شد — نتیجه در پایین');
-    case 'failed': return t('Plan stopped — see the result below', 'برنامه متوقف شد — نتیجه در پایین');
+    case 'executed': return resulted ? t('Plan ran — see the result below', 'برنامه اجرا شد — نتیجه در پایین') : t('This plan has already run', 'این برنامه قبلاً اجرا شده است');
+    case 'failed': return resulted ? t('Plan stopped — see the result below', 'برنامه متوقف شد — نتیجه در پایین') : t('This plan has already run and stopped', 'این برنامه قبلاً اجرا شده و متوقف شده است');
     case 'rejected': return t('Cancelled — nothing ran', 'لغو شد — هیچ کاری اجرا نشد');
-    case 'expired': return t('This plan expired', 'این برنامه منقضی شد');
+    case 'expired': return props.item.superseded ? t('Not run — you sent a new message', 'اجرا نشد — پیام تازه‌ای فرستادید') : t('This plan expired — nothing ran', 'این برنامه منقضی شد — هیچ کاری اجرا نشد');
     default: return t('Plan', 'برنامه');
+  }
+});
+
+// The heading is a band of its own — tint, icon and weight — so it never reads as one more step.
+const band = computed(() => {
+  switch (plan.value.status) {
+    case 'pending': return hasDestructive.value
+      ? { cls: 'bg-danger-soft text-danger', icon: ShieldAlert }
+      : { cls: 'bg-accent-soft text-accent-text', icon: ListChecks };
+    case 'executing': return { cls: 'bg-accent-soft text-accent-text', icon: LoaderCircle };
+    case 'executed': return { cls: 'bg-ok-soft text-ok', icon: CircleCheck };
+    case 'failed': return { cls: 'bg-danger-soft text-danger', icon: TriangleAlert };
+    case 'rejected': return { cls: 'bg-surface-2 text-ink-muted', icon: Ban };
+    case 'expired': return { cls: 'bg-surface-2 text-ink-muted', icon: Clock };
+    default: return { cls: 'bg-surface-2 text-ink', icon: ListChecks };
   }
 });
 
@@ -56,29 +82,33 @@ const detail = (s: any) => (props.fa ? s.detailFa || s.detailEn : s.detailEn || 
 const warnings = (s: any): string[] => (props.fa ? (s.warningsFa?.length ? s.warningsFa : s.warningsEn) : (s.warningsEn?.length ? s.warningsEn : s.warningsFa)) ?? [];
 const inputId = (s: any) => `assistant-phrase-${plan.value.id}-${s.index}`;
 const rememberId = (s: any) => `assistant-remember-${plan.value.id}-${s.index}`;
+const errorId = computed(() => `assistant-plan-error-${plan.value.id}`);
+const errorText = computed(() => (props.item.error ? (props.fa ? props.item.error.messageFa || props.item.error.messageEn : props.item.error.messageEn || props.item.error.messageFa) : ''));
+const refused = (s: any) => props.item.errorStep !== null && props.item.errorStep === s.index;
 </script>
 
 <template>
-  <section class="rounded-xl border bg-surface shadow-panel"
+  <section class="overflow-hidden rounded-xl border bg-surface shadow-panel"
            :class="actionable && hasDestructive ? 'border-danger/30' : 'border-line'"
-           data-assistant-plan :data-plan-status="expired ? 'expired' : plan.status"
+           data-assistant-plan :data-plan-status="plan.status" :data-superseded="item.superseded ? 'true' : undefined"
            role="group" :aria-label="heading">
-    <header class="flex items-center gap-2 border-b border-line px-3 py-2.5">
-      <AssistantIcon v-if="expired" :icon="Clock" class="text-ink-faint" />
-      <strong class="flex-1 text-sm font-semibold text-ink">{{ heading }}</strong>
-      <span v-if="actionable && minutesLeft !== null" class="text-[11px] text-ink-faint">
-        {{ t(`expires in ${minutesLeft} min`, `تا ${minutesLeft} دقیقهٔ دیگر معتبر است`) }}
-      </span>
+    <header class="flex items-center gap-2 px-3 py-2.5" :class="band.cls" data-plan-heading>
+      <AssistantIcon :icon="band.icon" :spin="plan.status === 'executing'" />
+      <h3 class="flex-1 text-sm font-semibold">{{ heading }}</h3>
+      <span v-if="actionable && validUntil" class="text-[11px]">{{ t(`valid until ${validUntil}`, `معتبر تا ${validUntil}`) }}</span>
     </header>
 
-    <ol class="divide-y divide-line">
-      <li v-for="(step, i) in plan.steps" :key="step.index" class="space-y-2 px-3 py-3" :data-step-kind="step.kind">
+    <ol class="divide-y divide-line border-t border-line">
+      <li v-for="(step, i) in plan.steps" :key="step.index" class="space-y-2 px-3 py-3"
+          :class="refused(step) ? 'bg-danger-soft/50 ring-2 ring-inset ring-danger/40' : ''"
+          :data-step-kind="step.kind" :data-step-refused="refused(step) ? 'true' : undefined"
+          :aria-describedby="refused(step) ? errorId : undefined">
         <div class="flex items-start gap-2.5">
           <span class="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-surface-2 text-[11px] font-semibold text-ink-muted" dir="ltr">{{ i + 1 }}</span>
           <div class="min-w-0 flex-1 space-y-1">
             <div class="flex flex-wrap items-center gap-1.5">
               <span class="status-pill text-[11px]" :class="kindClass(step.kind)" data-step-kind-badge>{{ kindLabel(step.kind, fa) }}</span>
-              <span class="text-sm font-medium text-ink" :dir="textDirection(title(step))">{{ title(step) }}</span>
+              <span class="text-sm text-ink" :dir="textDirection(title(step))">{{ title(step) }}</span>
             </div>
             <p v-if="detail(step)" class="text-sm leading-5 text-ink-muted" :dir="textDirection(detail(step))">{{ detail(step) }}</p>
             <ul v-if="warnings(step).length" class="space-y-1">
@@ -86,7 +116,7 @@ const rememberId = (s: any) => `assistant-remember-${plan.value.id}-${s.index}`;
                 <AssistantIcon :icon="TriangleAlert" :size="14" class="mt-0.5" /><span>{{ w }}</span>
               </li>
             </ul>
-            <p v-if="step.autoApproved" class="flex items-center gap-1.5 text-[11px] text-ink-faint">
+            <p v-if="step.autoApproved" class="flex items-center gap-1.5 text-[11px] text-ink-muted">
               <AssistantIcon :icon="Check" :size="12" />
               {{ t('You said not to ask again for this.', 'گفته بودید برای این کار دوباره نپرسم.') }}
             </p>
@@ -115,23 +145,27 @@ const rememberId = (s: any) => `assistant-remember-${plan.value.id}-${s.index}`;
       </li>
     </ol>
 
-    <footer v-if="actionable" class="space-y-2 border-t border-line px-3 py-2.5">
-      <p class="text-[11px] text-ink-faint">{{ t('Nothing has run yet.', 'هنوز هیچ کاری اجرا نشده است.') }}</p>
-      <p v-if="item.error" class="alert-danger py-2 text-sm" role="alert" :dir="textDirection(fa ? item.error.messageFa : item.error.messageEn)">{{ fa ? item.error.messageFa : item.error.messageEn }}</p>
+    <!-- The server's refusal, whatever the card's state now: "expired" is shown in its own words. -->
+    <p v-if="item.error" :id="errorId" class="alert-danger mx-3 mb-0 mt-2.5 py-2 text-sm" role="alert" :dir="textDirection(errorText)" data-plan-error>{{ errorText }}</p>
+
+    <footer v-if="actionable" class="space-y-2 border-t border-line px-3 py-2.5" :class="item.error ? 'mt-2.5' : ''">
+      <p class="text-sm font-medium text-ink-muted" data-plan-safety>{{ t('Nothing has run yet.', 'هنوز هیچ کاری اجرا نشده است.') }}</p>
       <div class="flex items-center gap-2">
-        <button type="button" :disabled="item.busy" data-plan-run
-                :class="hasDestructive ? 'btn-danger inline-flex items-center gap-2 py-1.5' : 'btn-primary py-1.5'"
+        <button type="button" :disabled="item.busy || locked" data-plan-run
+                :class="hasDestructive ? 'btn-danger inline-flex items-center gap-2 py-1.5 disabled:opacity-50' : 'btn-primary py-1.5 disabled:opacity-50'"
                 @click="emit('run')">
           <AssistantIcon v-if="item.busy" :icon="LoaderCircle" spin />
           {{ t('Run', 'اجرا') }}
         </button>
-        <button type="button" class="btn-secondary py-1.5" :disabled="item.busy" data-plan-cancel @click="emit('cancel')">
+        <button type="button" class="btn-secondary py-1.5 disabled:opacity-50" :disabled="item.busy || locked" data-plan-cancel @click="emit('cancel')">
           {{ t('Cancel', 'لغو') }}
         </button>
       </div>
     </footer>
-    <footer v-else-if="expired" class="border-t border-line px-3 py-2.5 text-sm text-ink-muted">
-      {{ t('Nothing ran. Ask again if you still want this.', 'هیچ کاری اجرا نشد. اگر هنوز این را می‌خواهید، دوباره بپرسید.') }}
+    <footer v-else-if="expired" class="border-t border-line px-3 py-2.5 text-sm text-ink-muted" :class="item.error ? 'mt-2.5' : ''">
+      <template v-if="item.superseded">{{ t('Nothing ran. The assistant was told this plan was not carried out.', 'هیچ کاری اجرا نشد. به دستیار گفته شد که این برنامه انجام نشده است.') }}</template>
+      <template v-else>{{ t('Nothing ran. Ask again if you still want this.', 'هیچ کاری اجرا نشد. اگر هنوز این را می‌خواهید، دوباره بپرسید.') }}</template>
     </footer>
+    <div v-else-if="item.error" class="h-2.5"></div>
   </section>
 </template>

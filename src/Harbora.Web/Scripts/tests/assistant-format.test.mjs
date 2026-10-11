@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
-import { formatMessage, safeHref, textDirection, blockText } from '../islands/assistantFormat.js';
+import { formatMessage, safeHref, textDirection, blockText, firstStrongDirection } from '../islands/assistantFormat.js';
 
 // Model text is untrusted: it can repeat back anything a user, a resource name or a log line put in
 // front of the model. The pane formats it into a tree of plain-text nodes that the template renders
@@ -128,6 +128,20 @@ test('a block\'s text for direction purposes is its prose, without its code', ()
   assert.equal(blockText(p), 'یک  دو\nسه');
   assert.equal(blockText(ul), 'x ');
   assert.equal(blockText(pre), 'code');
+});
+
+test('the composer keeps the direction of the first letter while the sentence grows', () => {
+  // Typed one keystroke at a time: textDirection would flip to ltr at the third step and back.
+  const typing = ['و', 'وصل shop-db', 'وصل shop-db to shop-app please', 'وصل shop-db to shop-app please کن'];
+  assert.deepEqual(typing.map((t) => firstStrongDirection(t, 'rtl')), ['rtl', 'rtl', 'rtl', 'rtl']);
+  assert.deepEqual(['s', 'shop-db را بساز'].map((t) => firstStrongDirection(t, 'rtl')), ['ltr', 'ltr']);
+});
+
+test('before the first letter the composer sits on the panel\'s own side', () => {
+  assert.equal(firstStrongDirection('', 'rtl'), 'rtl');
+  assert.equal(firstStrongDirection('  42 ', 'ltr'), 'ltr');
+  assert.equal(firstStrongDirection(null), 'auto');
+  assert.equal(firstStrongDirection('`', 'rtl'), 'rtl');
 });
 
 test('result links are followed only to panel paths and http(s) addresses', () => {

@@ -122,20 +122,20 @@ test('a plan with nothing to confirm sends empty collections, which the server b
   assert.deepEqual(buildApproveBody(simple, createPlanForm(simple)), { confirmations: {}, rememberTools: [] });
 });
 
-test('a pending plan past its expiry is expired, and so is one the server already called expired', () => {
-  const before = Date.parse('2026-10-11T10:14:59Z');
-  const after = Date.parse('2026-10-11T10:15:00Z');
-  assert.equal(planIsExpired(plan, before), false);
-  assert.equal(planIsActionable(plan, before), true);
-  assert.equal(planIsExpired(plan, after), true);
-  assert.equal(planIsActionable(plan, after), false);
-  assert.equal(planIsExpired({ ...plan, status: 'expired' }, before), true);
+test('the browser clock never expires a plan — only the server status does', () => {
+  // expiresAt is in the past by any clock, and the card still offers Run: the server decides, and
+  // refuses a late approve with its own words (see applyApproveRefusal in the timeline tests).
+  const stale = { ...plan, expiresAt: '2000-01-01T00:00:00Z' };
+  assert.equal(planIsExpired(stale), false);
+  assert.equal(planIsActionable(stale), true);
+  assert.equal(planIsExpired({ ...plan, status: 'expired' }), true);
+  // And a far-future expiry does not keep an expired plan alive.
+  assert.equal(planIsActionable({ ...plan, status: 'expired', expiresAt: '3000-01-01T00:00:00Z' }), false);
 });
 
 test('only a pending plan can be run or cancelled', () => {
-  const now = Date.parse('2026-10-11T10:00:00Z');
   for (const status of ['executing', 'executed', 'failed', 'rejected', 'expired']) {
-    assert.equal(planIsActionable({ ...plan, status }, now), false, status);
+    assert.equal(planIsActionable({ ...plan, status }), false, status);
   }
 });
 

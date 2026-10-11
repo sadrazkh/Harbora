@@ -111,6 +111,27 @@ export function textDirection(text) {
   return rtl > ltr ? 'rtl' : 'ltr';
 }
 
+/**
+ * The direction of the first letter, "rtl" or "ltr", or `fallback` when there is none yet.
+ *
+ * For the composer, where textDirection() would be wrong in a different way: recomputed on every
+ * keystroke it flips the field — and the caret — the moment a Persian sentence gains one Latin word
+ * too many. The first letter typed is the person saying which way they are writing, and it does not
+ * change while the rest of the sentence is typed. The fallback is the panel's own direction, so an
+ * empty field and its placeholder sit on the side the person reads from.
+ *
+ * @param {string | null | undefined} text
+ * @param {'rtl' | 'ltr' | 'auto'} [fallback]
+ * @returns {'rtl' | 'ltr' | 'auto'}
+ */
+export function firstStrongDirection(text, fallback = 'auto') {
+  for (const ch of String(text ?? '')) {
+    if (RTL_LETTER.test(ch)) return 'rtl';
+    if (LTR_LETTER.test(ch)) return 'ltr';
+  }
+  return fallback;
+}
+
 /** @param {Block} block */
 export function blockText(block) {
   if (block.type === 'pre') return block.text;

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createTimeline, loadConversation, addUserMessage, applyStreamEvent, applyPlanResult,
-  markPlanRejected, settleTurn,
+  markPlanRejected, settleTurn, applyApproveRefusal,
 } from '../islands/assistantTimeline.js';
 
 // The conversation as the pane draws it: one list of items fed by GET /assistant/conversations/{id}
@@ -161,4 +161,86 @@ test('item keys are unique, so the list never confuses two lines', () => {
   }
   const keys = state.items.map((i) => i.key);
   assert.equal(new Set(keys).size, keys.length);
+});
+
+test('done settles a tool line the server left running — never as done', () => {
+  const state = createTimeline();
+  addUserMessage(state, 'x');
+  applyStreamEvent(state, 'tool', { name: 'get_app', state: 'running' });
+  applyStreamEvent(state, 'tool', { name: 'get_usage', state: 'running' });
+  applyStreamEvent(state, 'tool', { name: 'get_usage', state: 'done' });
+  applyStreamEvent(state, 'done', { conversationId: 'c1', remainingToday: 3 });
+  assert.deepEqual(state.items.filter((i) => i.kind === 'tool').map((i) => [i.name, i.state]),
+    [['get_app', 'interrupted'], ['get_usage', 'done']]);
+});
+
+test('settling twice changes nothing more, and an earlier turn is left as it was', () => {
+  const state = createTimeline();
+  addUserMessage(state, 'one');
+  applyStreamEvent(state, 'tool', { name: 'get_app', state: 'done' });
+  addUserMessage(state, 'two');
+  applyStreamEvent(state, 'tool', { name: 'get_app', state: 'running' });
+  settleTurn(state);
+  settleTurn(state);
+  assert.deepEqual(state.items.filter((i) => i.kind === 'tool').map((i) => i.state), ['done', 'interrupted']);
+});
+
+test('a new message the server has received supersedes a card that was still waiting', () => {
+  const state = createTimeline();
+  applyStreamEvent(state, 'plan', plan());
+  addUserMessage(state, 'actually, do something else');
+  applyStreamEvent(state, 'started', { conversationId: 'c1' });
+  assert.equal(state.items[0].plan.status, 'expired');
+  assert.equal(state.items[0].superseded, true);
+});
+
+test('superseding leaves finished cards and this turn\'s own new plan alone', () => {
+  const state = createTimeline();
+  applyStreamEvent(state, 'plan', { ...plan(), id: 'old-done', status: 'executed' });
+  applyStreamEvent(state, 'plan', { ...plan(), id: 'old-rejected', status: 'rejected' });
+  addUserMessage(state, 'next');
+  applyStreamEvent(state, 'started', { conversationId: 'c1' });
+  applyStreamEvent(state, 'plan', { ...plan(), id: 'new' });
+  const byId = Object.fromEntries(state.items.filter((i) => i.kind === 'plan').map((i) => [i.plan.id, i]));
+  assert.equal(byId['old-done'].plan.status, 'executed');
+  assert.equal(byId['old-rejected'].plan.status, 'rejected');
+  assert.equal(byId['old-done'].superseded, false);
+  assert.equal(byId.new.plan.status, 'pending');
+  assert.equal(byId.new.superseded, false);
+});
+
+test('a send that never reached the server leaves the waiting card as it was', () => {
+  const state = createTimeline();
+  applyStreamEvent(state, 'plan', plan());
+  addUserMessage(state, 'next');
+  applyStreamEvent(state, 'error', { messageEn: 'Could not reach the panel.', messageFa: 'x' });
+  assert.equal(state.items[0].plan.status, 'pending');
+});
+
+test('a refused approve puts the server\'s words and the named step on the card', () => {
+  const state = createTimeline();
+  applyStreamEvent(state, 'plan', plan());
+  applyApproveRefusal(state, PLAN_ID, { status: 400, messageEn: 'Type old-db to confirm.', messageFa: 'برای تأیید old-db را بنویسید.', stepIndex: 0, planStatus: null });
+  const card = state.items[0];
+  assert.deepEqual(card.error, { messageEn: 'Type old-db to confirm.', messageFa: 'برای تأیید old-db را بنویسید.' });
+  assert.equal(card.errorStep, 0);
+  assert.equal(card.plan.status, 'pending', 'still pending: the person can correct it and run again');
+});
+
+test('a refusal that says the plan expired is the only thing that expires a card', () => {
+  const state = createTimeline();
+  applyStreamEvent(state, 'plan', plan());
+  applyApproveRefusal(state, PLAN_ID, { status: 409, messageEn: 'This plan expired; nothing ran.', messageFa: 'x', stepIndex: null, planStatus: 'expired' });
+  assert.equal(state.items[0].plan.status, 'expired');
+  assert.equal(state.items[0].errorStep, null);
+});
+
+test('a result after a refusal clears the refusal from the card', () => {
+  const state = createTimeline();
+  applyStreamEvent(state, 'plan', plan());
+  applyApproveRefusal(state, PLAN_ID, { messageEn: 'no', messageFa: 'نه', stepIndex: 0 });
+  applyPlanResult(state, PLAN_ID, { planId: PLAN_ID, status: 'executed', steps: [] });
+  assert.equal(state.items[0].error, null);
+  assert.equal(state.items[0].errorStep, null);
+  assert.equal(state.items[0].resulted, true);
 });

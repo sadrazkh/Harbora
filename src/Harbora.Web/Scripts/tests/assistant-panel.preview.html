@@ -9,7 +9,8 @@
     ?lang=en           English / LTR instead of Persian / RTL
     ?scenario=cut      the stream stops before `done`
     ?scenario=down     the assistant is unavailable
-    ?scenario=expired  the stored plan's 15 minutes are over (use with ?history)
+    ?scenario=expired  approving the stored plan is refused as expired (use with ?history)
+    ?scenario=refuse   approving is refused for step 4, which stays highlighted (use with ?history)
     ?scenario=locked   every request answers 403 feature_not_enabled
     ?dark              dark theme
 -->
@@ -73,7 +74,7 @@ const conversations = [
 ];
 
 const plan = {
-  id: PLAN_ID, status: 'pending', expiresAt: minutesFromNow(scenario === 'expired' ? -1 : 15),
+  id: PLAN_ID, status: 'pending', expiresAt: minutesFromNow(15),
   steps: [
     { index: 0, tool: 'create_database', kind: 'safe', titleEn: 'Create PostgreSQL 16 database shop-db', titleFa: 'ساخت دیتابیس PostgreSQL 16 به نام shop-db',
       detailEn: 'Project shop · environment production · size small', detailFa: 'پروژهٔ shop · محیط production · اندازهٔ small',
@@ -144,6 +145,13 @@ window.fetch = async (url, init = {}) => {
   if (path === '/assistant/conversations') return json(conversations);
   if (path.startsWith('/assistant/conversations/') && method === 'GET') {
     return path.endsWith(conversations[0].id) ? json(conversation) : json({ id: conversations[1].id, title: conversations[1].title, messages: [], pendingPlan: null });
+  }
+  // The refusals AssistantController sends for a late or invalid approve: 4xx with the server's words.
+  if (path.endsWith('/approve') && scenario === 'expired') {
+    return json({ error: 'plan_expired', messageEn: 'This plan expired before it was approved; nothing ran.', messageFa: 'این برنامه پیش از تأیید منقضی شد؛ هیچ کاری اجرا نشد.', status: 'expired' }, 409);
+  }
+  if (path.endsWith('/approve') && scenario === 'refuse') {
+    return json({ error: 'step_refused', messageEn: 'Step 4 can no longer run: old-db is still attached to two apps.', messageFa: 'گام ۴ دیگر قابل اجرا نیست: old-db هنوز به دو اپ وصل است.', status: 'pending', stepIndex: 3 }, 400);
   }
   if (path.endsWith('/approve')) return json(result);
   if (path.endsWith('/reject')) return new Response(null, { status: 204 });

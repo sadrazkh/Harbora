@@ -85,17 +85,19 @@ export function buildApproveBody(plan, form) {
   return { confirmations, rememberTools };
 }
 
-/** Expired by the server's word, or pending past its expiry by the clock. */
-export function planIsExpired(plan, nowMs = Date.now()) {
-  if (plan?.status === 'expired') return true;
-  if (plan?.status !== 'pending') return false;
-  const expires = Date.parse(plan.expiresAt);
-  return Number.isFinite(expires) && expires <= nowMs;
+/**
+ * Expired only by the server's word. The card does not compare `expiresAt` with this browser's
+ * clock: a clock running a few minutes fast would hide Run on a plan the server still accepts, and
+ * a slow one would offer Run on a plan it has already expired. A late approve is refused by the
+ * server, which says so, and the card shows that refusal (applyApproveRefusal).
+ */
+export function planIsExpired(plan) {
+  return plan?.status === 'expired';
 }
 
-/** Run and Cancel are offered only for a pending, unexpired plan. */
-export function planIsActionable(plan, nowMs = Date.now()) {
-  return plan?.status === 'pending' && !planIsExpired(plan, nowMs);
+/** Run and Cancel are offered for a pending plan — pending as the server last said. */
+export function planIsActionable(plan) {
+  return plan?.status === 'pending';
 }
 
 /**

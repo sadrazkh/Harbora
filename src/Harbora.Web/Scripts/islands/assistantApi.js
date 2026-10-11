@@ -60,7 +60,14 @@ const MESSAGES = {
     'This is no longer possible — it may already have run, been cancelled or expired.',
     'این کار دیگر ممکن نیست — شاید قبلاً اجرا، لغو یا منقضی شده باشد.',
   ],
+  paneFault: [
+    'The pane failed while showing the answer — a fault in the panel, not in the assistant or your connection. Reload the page to see the conversation as it was saved.',
+    'پنل هنگام نمایش پاسخ دچار خطا شد — ایراد از خود پنل است، نه از دستیار یا اتصال شما. صفحه را دوباره بارگذاری کنید تا گفت‌وگو را همان‌طور که ذخیره شده ببینید.',
+  ],
 };
+
+/** AgentPlanView.Status values; a refusal's `status` is believed only when it is one of these. */
+const PLAN_STATUSES = new Set(['pending', 'executing', 'executed', 'failed', 'rejected', 'expired']);
 
 const words = (key) => ({ messageEn: MESSAGES[key][0], messageFa: MESSAGES[key][1] });
 
@@ -77,14 +84,28 @@ function statusWords(status) {
   };
 }
 
-/** A failed JSON call, with the reason in both languages. */
+/**
+ * A failed JSON call, with the reason in both languages. A refused approve may also say which step
+ * was refused (`stepIndex`, AgentPlanStepView.Index) and what the plan is now (`planStatus`, e.g.
+ * "expired") — the server's word on both, since the pane does not judge expiry by its own clock.
+ */
 export class AssistantRequestError extends Error {
-  constructor(status, messageEn, messageFa) {
+  constructor(status, messageEn, messageFa, { stepIndex = null, planStatus = null } = {}) {
     super(messageEn);
     this.name = 'AssistantRequestError';
     this.status = status;
     this.messageEn = messageEn;
     this.messageFa = messageFa;
+    this.stepIndex = stepIndex;
+    this.planStatus = planStatus;
+  }
+}
+
+/** Thrown out of the stream reader when the pane's own event handler failed, so it is not mistaken for the network. */
+class PaneFault extends Error {
+  constructor(cause) {
+    super('the pane failed to handle an assistant event', { cause });
+    this.name = 'PaneFault';
   }
 }
 
@@ -105,9 +126,12 @@ async function describeFailure(response) {
   }
 
   // The server's own words, in whichever of the shapes this codebase uses: messageEn/messageFa (the
-  // stream's error event), error/errorFa (AgentValidation, AgentToolResult), or ProblemDetails.
+  // stream's error event and the plan refusals), error/errorFa (AgentValidation, AgentToolResult), or
+  // ProblemDetails. A bare `error` is used only when it is a sentence: "plan_expired" is a code for
+  // programs, and the fallback below says more to a person than that does.
   const firstText = (...values) => values.find((v) => typeof v === 'string' && v.trim() !== '') ?? null;
-  const en = firstText(body?.messageEn, body?.errorEn, body?.error, body?.detail, body?.title);
+  const sentence = typeof body?.error === 'string' && /\s/.test(body.error.trim()) ? body.error : null;
+  const en = firstText(body?.messageEn, body?.errorEn, sentence, body?.detail, body?.title);
   const fa = firstText(body?.messageFa, body?.errorFa);
   const fromServer =
     response.status === 403 && body?.error === 'feature_not_enabled' ? words('notEnabled')
@@ -120,7 +144,13 @@ async function describeFailure(response) {
         : response.status === 409 ? words('conflict')
           : statusWords(response.status);
 
-  return { status: response.status, ...(fromServer ?? fallback) };
+  return {
+    status: response.status,
+    ...(fromServer ?? fallback),
+    stepIndex: Number.isInteger(body?.stepIndex) ? body.stepIndex : null,
+    // ProblemDetails has a numeric `status` too; only a plan status the contract names counts.
+    planStatus: typeof body?.status === 'string' && PLAN_STATUSES.has(body.status) ? body.status : null,
+  };
 }
 
 /**
@@ -148,6 +178,39 @@ export function parseDeclaredContext(json) {
   } catch {
     return null;
   }
+}
+
+/**
+ * The turn in flight, if any, and the means to abandon it. Starting a new conversation, opening
+ * another one, or the pane going away aborts the turn: its stream is cancelled (the server sees the
+ * connection close), and anything still arriving for it is dropped by `isCurrent()` instead of being
+ * written into whatever conversation is on screen by then.
+ *
+ * Closing the drawer does not abort: the island stays mounted, and the answer is there when it
+ * opens again — throwing away a turn the workspace already paid a model call for would be worse.
+ */
+export function createTurnTracker(makeController = () => new AbortController()) {
+  let current = null;
+  return {
+    begin() {
+      current?.controller.abort();
+      const turn = { controller: makeController(), isCurrent: () => current === turn };
+      turn.signal = turn.controller.signal;
+      current = turn;
+      return turn;
+    },
+    /** @returns {boolean} whether there was a turn to abort. */
+    abort() {
+      if (!current) return false;
+      current.controller.abort();
+      current = null;
+      return true;
+    },
+    end(turn) {
+      if (current === turn) current = null;
+    },
+    get active() { return current !== null; },
+  };
 }
 
 /**
@@ -180,7 +243,7 @@ export function createAssistantApi({ fetch: fetchImpl = globalThis.fetch?.bind(g
 
     if (!response.ok || response.type === 'opaqueredirect') {
       const failure = await describeFailure(response);
-      throw new AssistantRequestError(failure.status, failure.messageEn, failure.messageFa);
+      throw new AssistantRequestError(failure.status, failure.messageEn, failure.messageFa, failure);
     }
     if (response.status === 204) return null;
 
@@ -212,6 +275,16 @@ export function createAssistantApi({ fetch: fetchImpl = globalThis.fetch?.bind(g
       const target = conversationId ? encodeURIComponent(conversationId) : 'new';
       const aborted = () => signal?.aborted === true;
 
+      // Stream events go through `deliver`: if the pane's handler throws, that is a fault in the
+      // pane, and reading stops (the reader is cancelled) without blaming the connection. Errors the
+      // pane reports itself go through `report`, which cannot make things worse by throwing.
+      const deliver = (name, data) => {
+        try { onEvent(name, data); } catch (cause) { throw new PaneFault(cause); }
+      };
+      const report = (failure) => {
+        try { onEvent('error', failure); } catch (cause) { console.error('[assistant] could not show an error', cause); }
+      };
+
       let response;
       try {
         response = await fetchImpl(`${base}/conversations/${target}/messages`, {
@@ -229,19 +302,20 @@ export function createAssistantApi({ fetch: fetchImpl = globalThis.fetch?.bind(g
         });
       } catch {
         if (aborted()) return { completed: false, aborted: true };
-        onEvent('error', words('network'));
+        report(words('network'));
         return { completed: false };
       }
 
       if (!response.ok || response.type === 'opaqueredirect') {
         const { messageEn, messageFa } = await describeFailure(response);
-        onEvent('error', { messageEn, messageFa });
+        report({ messageEn, messageFa });
         return { completed: false };
       }
 
       const type = response.headers?.get?.('content-type') ?? '';
       if (!type.includes('text/event-stream') || !response.body) {
-        onEvent('error', words('unexpected'));
+        response.body?.cancel?.().catch(() => {});
+        report(words('unexpected'));
         return { completed: false };
       }
 
@@ -250,18 +324,23 @@ export function createAssistantApi({ fetch: fetchImpl = globalThis.fetch?.bind(g
         await readEventStream(response.body, (frame) => {
           const event = parseAssistantFrame(frame);
           if (!event) return;
-          if (event.unreadable) { onEvent('error', words('unreadable')); return; }
+          if (event.unreadable) { deliver('error', words('unreadable')); return; }
           if (event.name === 'done') sawDone = true;
-          onEvent(event.name, event.data);
+          deliver(event.name, event.data);
         });
-      } catch {
+      } catch (error) {
+        if (error instanceof PaneFault) {
+          console.error('[assistant] the pane failed to handle an event', error.cause);
+          report(words('paneFault'));
+          return { completed: false, paneFault: true };
+        }
         if (aborted()) return { completed: false, aborted: true };
-        onEvent('error', words('connectionLost'));
+        report(words('connectionLost'));
         return { completed: false };
       }
 
       if (!sawDone) {
-        onEvent('error', words('endedEarly'));
+        report(words('endedEarly'));
         return { completed: false };
       }
       return { completed: true };

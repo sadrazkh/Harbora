@@ -8,11 +8,11 @@ import { AssistantIcon } from './assistantIcon';
 import AssistantText from './AssistantText.vue';
 import AssistantPlanCard from './AssistantPlanCard.vue';
 import AssistantResultCard from './AssistantResultCard.vue';
-import { createAssistantApi, buildPageContext, parseDeclaredContext, isGuid } from './assistantApi.js';
-import { textDirection } from './assistantFormat.js';
+import { createAssistantApi, buildPageContext, parseDeclaredContext, isGuid, createTurnTracker } from './assistantApi.js';
+import { textDirection, firstStrongDirection } from './assistantFormat.js';
 import {
   createTimeline, loadConversation, addUserMessage, applyStreamEvent, applyPlanResult,
-  markPlanRejected, settleTurn,
+  applyApproveRefusal, markPlanRejected, settleTurn,
 } from './assistantTimeline.js';
 import { checkPlanForm, buildApproveBody } from './assistantPlan.js';
 import { createAssistantPrefs } from '../assistantDrawer.js';
@@ -41,6 +41,7 @@ const statusLoading = ref(false);
 
 const timeline = reactive(createTimeline());
 const streaming = ref(false);
+const turns = createTurnTracker();
 const loadingConversation = ref(false);
 
 const view = ref<'chat' | 'history'>('chat');
@@ -51,10 +52,6 @@ const conversationsError = ref<{ messageEn: string; messageFa: string } | null>(
 const draft = ref('');
 const composer = ref<HTMLTextAreaElement | null>(null);
 const scroller = ref<HTMLElement | null>(null);
-
-// A clock for the plan cards: a pending plan turns into an expired one while it sits on screen.
-const now = ref(Date.now());
-let clock: ReturnType<typeof setInterval> | undefined;
 
 const words = (e: any) => ({ messageEn: e?.messageEn ?? String(e), messageFa: e?.messageFa ?? e?.messageEn ?? String(e) });
 const say = (w: { messageEn: string; messageFa: string } | null) => (w ? (fa ? w.messageFa || w.messageEn : w.messageEn || w.messageFa) : '');
@@ -111,11 +108,21 @@ async function showHistory() {
   }
 }
 
+/**
+ * Abandons the turn in flight, if any: its stream is cancelled and whatever still arrives for it is
+ * dropped, so it cannot write into the conversation that replaces it on screen. The server keeps
+ * what it had already saved; the conversation list still has it.
+ */
+function abandonTurn() {
+  if (turns.abort()) {
+    settleTurn(timeline);
+    streaming.value = false;
+  }
+}
+
 async function openConversation(id: string, { quietIfGone = false } = {}) {
-  // A turn still streaming writes into whatever conversation is on screen; switching under it
-  // would put its answer into the wrong one.
-  if (streaming.value) return;
   if (!isGuid(id)) { prefs.setConversationId(null); return; }
+  abandonTurn();
   loadingConversation.value = true;
   try {
     loadConversation(timeline, await api.conversation(id));
@@ -138,7 +145,7 @@ async function openConversation(id: string, { quietIfGone = false } = {}) {
 }
 
 function newConversation() {
-  if (streaming.value) return;
+  abandonTurn();
   loadConversation(timeline, null);
   prefs.setConversationId(null);
   view.value = 'chat';
@@ -159,26 +166,35 @@ async function send() {
   draft.value = '';
   resizeComposer();
   addUserMessage(timeline, text);
+  const turn = turns.begin();
   streaming.value = true;
   scrollToEnd(true);
 
-  const outcome = await api.send({
-    conversationId: timeline.conversationId,
-    text,
-    page: buildPageContext(declared, location.pathname),
-    onEvent: (name: string, data: any) => {
-      applyStreamEvent(timeline, name, data);
-      if ((name === 'started' || name === 'done') && timeline.conversationId) prefs.setConversationId(timeline.conversationId);
+  try {
+    await api.send({
+      conversationId: timeline.conversationId,
+      text,
+      page: buildPageContext(declared, location.pathname),
+      signal: turn.signal,
+      onEvent: (name: string, data: any) => {
+        if (!turn.isCurrent()) return; // abandoned: the conversation on screen is another one now
+        applyStreamEvent(timeline, name, data);
+        if ((name === 'started' || name === 'done') && timeline.conversationId) prefs.setConversationId(timeline.conversationId);
+        scrollToEnd();
+      },
+    });
+  } finally {
+    // Whatever ended the turn — `done`, an error already shown, a cut connection — a tool line still
+    // running gets no more news, and stops claiming it is running. An abandoned turn was settled by
+    // abandonTurn, and the conversation on screen now is not its own.
+    if (turn.isCurrent()) {
+      turns.end(turn);
+      settleTurn(timeline);
+      streaming.value = false;
       scrollToEnd();
-    },
-  });
-
-  // A turn that did not reach `done` has already been told so by an error event; what is left is to
-  // stop any spinner that would otherwise go on claiming a tool is still running.
-  if (!outcome.completed) settleTurn(timeline);
-  streaming.value = false;
-  scrollToEnd();
-  focusComposer();
+      focusComposer();
+    }
+  }
 }
 
 function onComposerKey(event: KeyboardEvent) {
@@ -213,12 +229,15 @@ async function runPlan(item: any) {
   if (!check.ok || item.busy) return;
   item.busy = true;
   item.error = null;
+  item.errorStep = null;
   try {
     const result = await api.approve(item.plan.id, buildApproveBody(item.plan, item.form));
     applyPlanResult(timeline, item.plan.id, result);
     scrollToEnd();
-  } catch (e) {
-    item.error = words(e);
+  } catch (e: any) {
+    // The server's refusal, in its words, with the step it names and the plan's status now — a
+    // late approve is how a card learns it expired; this pane never decides that by its clock.
+    applyApproveRefusal(timeline, item.plan.id, { ...words(e), stepIndex: e?.stepIndex ?? null, planStatus: e?.planStatus ?? null });
   } finally {
     item.busy = false;
   }
@@ -228,11 +247,12 @@ async function cancelPlan(item: any) {
   if (item.busy) return;
   item.busy = true;
   item.error = null;
+  item.errorStep = null;
   try {
     await api.reject(item.plan.id);
     markPlanRejected(timeline, item.plan.id);
-  } catch (e) {
-    item.error = words(e);
+  } catch (e: any) {
+    applyApproveRefusal(timeline, item.plan.id, { ...words(e), stepIndex: null, planStatus: e?.planStatus ?? null });
   } finally {
     item.busy = false;
   }
@@ -279,12 +299,11 @@ onMounted(() => {
   if (remembered) openConversation(remembered, { quietIfGone: true });
   if (props.autofocus) focusComposer();
   document.addEventListener('harbora:assistant-opened', onOpened);
-  clock = setInterval(() => { now.value = Date.now(); }, 15000);
 });
 
 onUnmounted(() => {
   document.removeEventListener('harbora:assistant-opened', onOpened);
-  if (clock) clearInterval(clock);
+  turns.abort();
 });
 
 const suggestions = fa
@@ -304,7 +323,7 @@ const Back = fa ? ChevronRight : ChevronLeft;
         <h2 class="text-lg font-semibold leading-6 text-ink">{{ t('Assistant', 'دستیار') }}</h2>
         <!-- Two lines rather than one truncated one: a long model id must not push the remaining
              count — the number people actually need — off the end. -->
-        <div class="text-[11px] leading-4 text-ink-faint" data-assistant-status
+        <div class="text-[11px] leading-4 text-ink-muted" data-assistant-status
              :data-available="status ? String(status.available) : 'unknown'">
           <p v-if="statusLoading && !status">{{ t('Checking…', 'در حال بررسی…') }}</p>
           <p v-else-if="statusError" class="truncate" :title="say(statusError)">{{ say(statusError) }}</p>
@@ -322,7 +341,7 @@ const Back = fa ? ChevronRight : ChevronLeft;
         <AssistantIcon :icon="History" />
       </button>
       <button type="button" class="rounded-lg p-1.5 text-ink-muted hover:bg-surface-2 hover:text-ink disabled:opacity-40"
-              :disabled="streaming" :title="t('New conversation', 'گفت‌وگوی تازه')" :aria-label="t('New conversation', 'گفت‌وگوی تازه')"
+              :title="t('New conversation', 'گفت‌وگوی تازه')" :aria-label="t('New conversation', 'گفت‌وگوی تازه')"
               data-assistant-new @click="newConversation">
         <AssistantIcon :icon="Plus" />
       </button>
@@ -338,19 +357,19 @@ const Back = fa ? ChevronRight : ChevronLeft;
       <button type="button" class="mb-2 flex items-center gap-1 text-sm text-ink-muted hover:text-ink" @click="view = 'chat'">
         <AssistantIcon :icon="Back" :size="14" />{{ t('Back to the conversation', 'بازگشت به گفت‌وگو') }}
       </button>
-      <p v-if="conversationsLoading" class="flex items-center gap-2 p-3 text-sm text-ink-faint">
+      <p v-if="conversationsLoading" class="flex items-center gap-2 p-3 text-sm text-ink-muted">
         <AssistantIcon :icon="LoaderCircle" spin />{{ t('Loading…', 'در حال بارگذاری…') }}
       </p>
       <p v-else-if="conversationsError" class="alert-danger text-sm" role="alert">{{ say(conversationsError) }}</p>
-      <p v-else-if="conversations.length === 0" class="p-3 text-sm text-ink-faint">{{ t('No conversations yet.', 'هنوز گفت‌وگویی نیست.') }}</p>
+      <p v-else-if="conversations.length === 0" class="p-3 text-sm text-ink-muted">{{ t('No conversations yet.', 'هنوز گفت‌وگویی نیست.') }}</p>
       <ul v-else class="space-y-1">
         <li v-for="c in conversations" :key="c.id">
           <button type="button" class="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-start hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
-                  :class="c.id === timeline.conversationId ? 'bg-accent-soft' : ''" :disabled="streaming" @click="openConversation(c.id)">
+                  :class="c.id === timeline.conversationId ? 'bg-accent-soft' : ''" @click="openConversation(c.id)">
             <AssistantIcon :icon="MessageSquare" class="mt-0.5 text-ink-faint" />
             <span class="min-w-0 flex-1">
               <span class="block truncate text-sm text-ink" :dir="textDirection(c.title)">{{ c.title || t('Untitled', 'بی‌عنوان') }}</span>
-              <span class="block text-[11px] text-ink-faint">{{ formatDate(c.updatedAt) }}</span>
+              <span class="block text-[11px] text-ink-muted">{{ formatDate(c.updatedAt) }}</span>
             </span>
           </button>
         </li>
@@ -367,7 +386,7 @@ const Back = fa ? ChevronRight : ChevronLeft;
         {{ t("Today's assistant requests for this workspace are used up.", 'سهمیهٔ درخواست‌های امروز دستیار برای این ورک‌اسپیس تمام شده است.') }}
       </div>
 
-      <p v-if="loadingConversation" class="flex items-center gap-2 text-sm text-ink-faint">
+      <p v-if="loadingConversation" class="flex items-center gap-2 text-sm text-ink-muted">
         <AssistantIcon :icon="LoaderCircle" spin />{{ t('Loading the conversation…', 'در حال بارگذاری گفت‌وگو…') }}
       </p>
 
@@ -392,7 +411,7 @@ const Back = fa ? ChevronRight : ChevronLeft;
           <span class="min-w-0 truncate" :dir="textDirection(toolText(item))">{{ toolText(item) }}</span>
         </div>
 
-        <details v-else-if="item.kind === 'tool-history'" class="group text-[11px] text-ink-faint">
+        <details v-else-if="item.kind === 'tool-history'" class="group text-[11px] text-ink-muted">
           <summary class="flex cursor-pointer list-none items-center gap-2 [&::-webkit-details-marker]:hidden">
             <AssistantIcon :icon="Wrench" :size="14" />
             <span>{{ t('Tool result:', 'نتیجهٔ ابزار:') }} <code dir="ltr" class="font-mono">{{ item.toolName }}</code></span>
@@ -400,7 +419,7 @@ const Back = fa ? ChevronRight : ChevronLeft;
           <pre class="mt-1.5 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-surface-2 p-2 font-mono text-[11px] leading-4 text-ink-muted" dir="ltr">{{ item.text }}</pre>
         </details>
 
-        <AssistantPlanCard v-else-if="item.kind === 'plan'" :item="item" :fa="fa" :now="now"
+        <AssistantPlanCard v-else-if="item.kind === 'plan'" :item="item" :fa="fa" :locked="streaming"
                            @run="runPlan(item)" @cancel="cancelPlan(item)" />
 
         <AssistantResultCard v-else-if="item.kind === 'result'" :result="item.result" :plan="item.plan" :fa="fa" />
@@ -411,7 +430,7 @@ const Back = fa ? ChevronRight : ChevronLeft;
         </div>
       </template>
 
-      <p v-if="streaming" class="flex items-center gap-2 text-sm text-ink-faint" data-assistant-working>
+      <p v-if="streaming" class="flex items-center gap-2 text-sm text-ink-muted" data-assistant-working>
         <AssistantIcon :icon="LoaderCircle" :size="14" spin />{{ t('The assistant is working…', 'دستیار در حال کار است…') }}
       </p>
     </div>
@@ -420,7 +439,7 @@ const Back = fa ? ChevronRight : ChevronLeft;
     <form class="border-t border-line p-3" @submit.prevent="send">
       <div class="flex items-end gap-2 rounded-xl border border-line-strong bg-surface px-2 py-1.5 focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/15">
         <label for="assistant-composer" class="sr-only">{{ t('Message the assistant', 'پیام به دستیار') }}</label>
-        <textarea id="assistant-composer" ref="composer" v-model="draft" rows="1" :dir="textDirection(draft)"
+        <textarea id="assistant-composer" ref="composer" v-model="draft" rows="1" :dir="firstStrongDirection(draft, fa ? 'rtl' : 'ltr')"
                   :disabled="unavailable || outOfRequests"
                   :placeholder="t('Ask the assistant…', 'از دستیار بپرسید…')"
                   class="max-h-40 min-h-[2.25rem] flex-1 resize-none bg-transparent px-1 py-1.5 text-sm text-ink outline-none placeholder:text-ink-faint focus-visible:outline-none disabled:cursor-not-allowed"
@@ -430,7 +449,7 @@ const Back = fa ? ChevronRight : ChevronLeft;
           <AssistantIcon :icon="streaming ? LoaderCircle : ArrowUp" :spin="streaming" />
         </button>
       </div>
-      <p class="mt-1.5 px-1 text-[11px] text-ink-faint">{{ t('Enter to send · Shift+Enter for a new line · Ctrl+J to open or close', 'Enter برای ارسال · Shift+Enter برای خط تازه · Ctrl+J برای باز و بسته کردن') }}</p>
+      <p class="mt-1.5 px-1 text-[11px] text-ink-muted">{{ t('Enter to send · Shift+Enter for a new line · Ctrl+J to open or close', 'Enter برای ارسال · Shift+Enter برای خط تازه · Ctrl+J برای باز و بسته کردن') }}</p>
     </form>
   </div>
 </template>

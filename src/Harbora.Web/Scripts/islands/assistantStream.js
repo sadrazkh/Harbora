@@ -114,9 +114,15 @@ export async function readEventStream(body, onFrame) {
       if (value) parser.push(decoder.decode(value, { stream: true }));
     }
     parser.push(decoder.decode());
+  } catch (error) {
+    // Cancelled, not merely released: a released reader leaves the body — and the request under it —
+    // running, so a pane that gave up on a turn would go on downloading it. Cancelling closes the
+    // connection, which is also how the server learns nobody is listening.
+    try { await reader.cancel(error); } catch { /* already errored or closed */ }
+    throw error;
   } finally {
     parser.end();
-    reader.releaseLock?.();
+    try { reader.releaseLock(); } catch { /* cancel may already have released it */ }
   }
 }
 

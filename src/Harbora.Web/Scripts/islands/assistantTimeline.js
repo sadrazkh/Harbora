@@ -22,7 +22,15 @@ export function createTimeline() {
 }
 
 function planItem(plan) {
-  return { key: `plan-${plan.id}`, kind: 'plan', plan, form: createPlanForm(plan), mismatched: [], busy: false, error: null };
+  return {
+    key: `plan-${plan.id}`, kind: 'plan', plan, form: createPlanForm(plan), mismatched: [], busy: false,
+    // The server's refusal of an approve, and the step it named (AgentPlanStepView.Index), if any.
+    error: null, errorStep: null,
+    // Expired because the person sent a new message while it was waiting (see `started`).
+    superseded: false,
+    // A result card for this plan is on screen, directly under it.
+    resulted: false,
+  };
 }
 
 /** Running → done/failed in place; anything the contract does not name is not drawn as success. */
@@ -61,9 +69,21 @@ export function addUserMessage(state, text) {
 export function applyStreamEvent(state, name, data) {
   data = data ?? {};
   switch (name) {
-    case 'started':
+    case 'started': {
       if (data.conversationId) state.conversationId = data.conversationId;
+      // The server has the new message. It expires a plan that was still waiting and tells the model
+      // that plan did not run, so a card left offering Run would be offering something that no
+      // longer exists. Only plans from before this turn: this turn's own plan has not arrived yet.
+      const from = currentTurnStart(state);
+      for (let i = 0; i < from; i++) {
+        const item = state.items[i];
+        if (item.kind === 'plan' && item.plan.status === 'pending') {
+          item.plan = { ...item.plan, status: 'expired' };
+          item.superseded = true;
+        }
+      }
       return;
+    }
 
     case 'tool': {
       const next = toolState(data.state);
@@ -111,6 +131,8 @@ export function applyStreamEvent(state, name, data) {
     case 'done':
       if (data.conversationId) state.conversationId = data.conversationId;
       if ('remainingToday' in data) state.remainingToday = data.remainingToday;
+      // The turn is over. A tool line the server never finished must not spin for ever.
+      settleTurn(state);
       return;
 
     default:
@@ -127,12 +149,29 @@ export function applyPlanResult(state, planId, result) {
   const at = state.items.findIndex((i) => i.kind === 'plan' && i.plan.id === planId);
   const item = { key: nextKey('result'), kind: 'result', result, plan: at >= 0 ? state.items[at].plan : null };
   if (at >= 0) {
-    state.items[at].plan = { ...state.items[at].plan, status: result?.status ?? state.items[at].plan.status };
-    item.plan = state.items[at].plan;
+    const card = state.items[at];
+    card.plan = { ...card.plan, status: result?.status ?? card.plan.status };
+    card.resulted = true;
+    card.error = null;
+    card.errorStep = null;
+    item.plan = card.plan;
     state.items.splice(at + 1, 0, item);
   } else {
     state.items.push(item);
   }
+}
+
+/**
+ * The server refused an approve (AssistantRequestError). Its words go on the card; the step it named
+ * is marked; and if it said what the plan is now — "expired", "executed" — the card believes it.
+ * This is the only way a card becomes expired on its own: the pane never decides that by its clock.
+ */
+export function applyApproveRefusal(state, planId, error) {
+  const item = state.items.find((i) => i.kind === 'plan' && i.plan.id === planId);
+  if (!item) return;
+  item.error = { messageEn: error?.messageEn ?? '', messageFa: error?.messageFa ?? error?.messageEn ?? '' };
+  item.errorStep = Number.isInteger(error?.stepIndex) ? error.stepIndex : null;
+  if (typeof error?.planStatus === 'string' && error.planStatus) item.plan = { ...item.plan, status: error.planStatus };
 }
 
 export function markPlanRejected(state, planId) {
@@ -141,8 +180,9 @@ export function markPlanRejected(state, planId) {
 }
 
 /**
- * The stream ended without finishing a tool's line (it was cut off, or the server never sent the
- * outcome). The spinner stops and the line says it has no result — it does not become a check.
+ * The turn is over — `done`, an error, a cut connection, a stop — and a tool line is still running:
+ * the server never sent its outcome. The spinner stops and the line says no result arrived. It never
+ * becomes a check; nobody said it worked. Safe to call more than once.
  */
 export function settleTurn(state) {
   const from = currentTurnStart(state);

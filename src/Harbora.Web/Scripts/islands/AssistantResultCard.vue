@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { Check, CircleHelp, ExternalLink, Minus, X } from 'lucide';
+import { Check, CircleCheck, CircleHelp, ExternalLink, Minus, TriangleAlert, X } from 'lucide';
 import { AssistantIcon } from './assistantIcon';
 import { stepResultState, summarizeResult } from './assistantPlan.js';
 import { safeHref, textDirection } from './assistantFormat.js';
@@ -47,14 +47,13 @@ const iconClass = (r: any) => ({ done: 'bg-ok-soft text-ok', failed: 'bg-danger-
 </script>
 
 <template>
-  <section class="rounded-xl border border-line bg-surface shadow-panel" data-assistant-result
+  <section class="overflow-hidden rounded-xl border border-line bg-surface shadow-panel" data-assistant-result
            :data-result-status="result.status" role="group" :aria-label="heading">
-    <header class="flex items-center gap-2 border-b border-line px-3 py-2.5">
-      <span class="grid h-5 w-5 place-items-center rounded-full"
-            :class="summary.allDone ? 'bg-ok-soft text-ok' : firstFailed !== null ? 'bg-danger-soft text-danger' : 'bg-surface-2 text-ink-faint'">
-        <AssistantIcon :icon="summary.allDone ? Check : firstFailed !== null ? X : CircleHelp" :size="12" />
-      </span>
-      <strong class="text-sm font-semibold text-ink">{{ heading }}</strong>
+    <!-- A band of its own, tinted by the outcome, so the heading never reads as one more step. -->
+    <header class="flex items-center gap-2 border-b border-line px-3 py-2.5" data-result-heading
+            :class="summary.allDone ? 'bg-ok-soft text-ok' : firstFailed !== null ? 'bg-danger-soft text-danger' : 'bg-surface-2 text-ink-muted'">
+      <AssistantIcon :icon="summary.allDone ? CircleCheck : firstFailed !== null ? TriangleAlert : CircleHelp" />
+      <h3 class="text-sm font-semibold">{{ heading }}</h3>
     </header>
     <ol class="divide-y divide-line">
       <li v-for="(r, i) in result.steps" :key="r.index" class="flex items-start gap-2.5 px-3 py-2.5" :data-step-state="stepResultState(r)">
@@ -62,7 +61,7 @@ const iconClass = (r: any) => ({ done: 'bg-ok-soft text-ok', failed: 'bg-danger-
           <AssistantIcon :icon="iconFor(r)" :size="12" />
         </span>
         <div class="min-w-0 flex-1 space-y-1">
-          <p class="text-sm font-medium text-ink" :dir="textDirection(title(r, i))">{{ title(r, i) }}</p>
+          <p class="text-sm text-ink" :dir="textDirection(title(r, i))">{{ title(r, i) }}</p>
           <p v-if="note(r)" class="text-sm leading-5" :class="stepResultState(r) === 'failed' ? 'text-danger' : 'text-ink-muted'" :dir="textDirection(note(r))">{{ note(r) }}</p>
           <div v-if="r.links?.length" class="flex flex-wrap gap-1.5 pt-0.5">
             <template v-for="(link, li) in r.links" :key="li">

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createAssistantApi, AssistantRequestError, buildPageContext, parseDeclaredContext, isGuid } from '../islands/assistantApi.js';
+import { createAssistantApi, AssistantRequestError, buildPageContext, parseDeclaredContext, isGuid, createTurnTracker } from '../islands/assistantApi.js';
 
 // The pane's HTTP layer against a fake fetch. What matters: the request shapes match the server's
 // contract (AgentViews.cs, the X-CSRF-TOKEN header, `new` for a new conversation), and every way a
@@ -123,6 +123,114 @@ test('an aborted send is not reported as a failure of the assistant', async () =
   const { events, outcome } = await sendCollect(api, { conversationId: null, text: 'x', page: null, signal: controller.signal });
   assert.deepEqual(outcome, { completed: false, aborted: true });
   assert.deepEqual(events, []);
+});
+
+test('a fault in the pane\'s own event handler is reported as the pane\'s, not as a lost connection', async () => {
+  const cancelled = [];
+  const encoder = new TextEncoder();
+  const frames = ['event: started\ndata: {"conversationId":"c1"}\n\n', 'event: message\ndata: {"text":"x"}\n\n', done];
+  const body = new ReadableStream({
+    pull(controller) { if (frames.length) controller.enqueue(encoder.encode(frames.shift())); else controller.close(); },
+    cancel(reason) { cancelled.push(reason); },
+  });
+  const api = createAssistantApi({ fetch: async () => new Response(body, { headers: { 'content-type': 'text/event-stream' } }) });
+  const events = [];
+  const originalError = console.error;
+  console.error = () => {};
+  let outcome;
+  try {
+    outcome = await api.send({
+      conversationId: null, text: 'x', page: null,
+      onEvent: (name, data) => {
+        events.push([name, data]);
+        if (name === 'message') throw new TypeError('cannot read properties of undefined');
+      },
+    });
+  } finally {
+    console.error = originalError;
+  }
+  assert.deepEqual(outcome, { completed: false, paneFault: true });
+  const [name, data] = events.at(-1);
+  assert.equal(name, 'error');
+  assert.match(data.messageEn, /fault in the panel/);
+  assert.doesNotMatch(data.messageEn, /connection was lost/);
+  assert.equal(cancelled.length, 1, 'reading stopped and the body was cancelled');
+  assert.equal(events.some(([n]) => n === 'done'), false, 'nothing after the fault is delivered');
+});
+
+test('a refused approve carries the refused step and the plan\'s new status from the server', async () => {
+  const { fetch } = recordingFetch(() => jsonResponse({
+    error: 'plan_expired', messageEn: 'This plan expired; nothing ran.', messageFa: 'این برنامه منقضی شد؛ هیچ کاری اجرا نشد.',
+    status: 'expired', stepIndex: 2,
+  }, 409));
+  await assert.rejects(createAssistantApi({ fetch }).approve('p', {}), (err) => {
+    assert.equal(err.status, 409);
+    assert.equal(err.messageEn, 'This plan expired; nothing ran.');
+    assert.equal(err.planStatus, 'expired');
+    assert.equal(err.stepIndex, 2);
+    return true;
+  });
+});
+
+test('a numeric ProblemDetails status or a made-up one is not taken for a plan status', async () => {
+  for (const body of [{ title: 'Bad Request', status: 400 }, { messageEn: 'x', messageFa: 'x', status: 'gone', stepIndex: '1' }]) {
+    const { fetch } = recordingFetch(() => jsonResponse(body, 400));
+    await assert.rejects(createAssistantApi({ fetch }).approve('p', {}), (err) => err.planStatus === null && err.stepIndex === null);
+  }
+});
+
+test('a machine code alone is not shown to a person; the status words are', async () => {
+  const { fetch } = recordingFetch(() => jsonResponse({ error: 'plan_not_pending' }, 409));
+  await assert.rejects(createAssistantApi({ fetch }).approve('p', {}), (err) => {
+    assert.doesNotMatch(err.messageEn, /plan_not_pending/);
+    assert.match(err.messageEn, /no longer possible/);
+    return true;
+  });
+});
+
+test('an abandoned turn is aborted and its late events are recognisably stale', () => {
+  const turns = createTurnTracker();
+  const first = turns.begin();
+  assert.equal(turns.active, true);
+  assert.equal(first.isCurrent(), true);
+  const second = turns.begin();
+  assert.equal(first.signal.aborted, true, 'starting a turn abandons the one before');
+  assert.equal(first.isCurrent(), false);
+  assert.equal(second.isCurrent(), true);
+  assert.equal(turns.abort(), true);
+  assert.equal(second.signal.aborted, true);
+  assert.equal(second.isCurrent(), false);
+  assert.equal(turns.active, false);
+  assert.equal(turns.abort(), false, 'nothing left to abort');
+});
+
+test('ending a turn that was already replaced leaves the new one alone', () => {
+  const turns = createTurnTracker();
+  const first = turns.begin();
+  const second = turns.begin();
+  turns.end(first);
+  assert.equal(second.isCurrent(), true);
+  turns.end(second);
+  assert.equal(turns.active, false);
+  assert.equal(second.signal.aborted, false, 'a turn that finished is not aborted');
+});
+
+test('aborting mid-stream ends the send quietly, with no error for a turn the pane abandoned', async () => {
+  const controller = new AbortController();
+  const encoder = new TextEncoder();
+  let sentFirst = false;
+  const body = new ReadableStream({
+    pull(c) {
+      if (!sentFirst) { sentFirst = true; c.enqueue(encoder.encode('event: started\ndata: {"conversationId":"c1"}\n\n')); return; }
+      return new Promise((resolve, reject) => controller.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))));
+    },
+  });
+  const api = createAssistantApi({ fetch: async () => new Response(body, { headers: { 'content-type': 'text/event-stream' } }) });
+  const events = [];
+  const sending = api.send({ conversationId: null, text: 'x', page: null, signal: controller.signal, onEvent: (n) => { events.push(n); if (n === 'started') controller.abort(); } });
+  const outcome = await sending;
+  assert.deepEqual(outcome, { completed: false, aborted: true });
+  assert.deepEqual(events, ['started'], 'no error is reported for a turn the pane abandoned');
 });
 
 test('a known event with unreadable data becomes an error rather than vanishing', async () => {

@@ -178,6 +178,25 @@ public class AssistantPaneHttpTests(HarboraHttpFixture fixture)
     }
 
     [Fact]
+    public async Task A_signed_out_page_draws_neither_the_toggle_nor_the_drawer()
+    {
+        // /error/{code} is anonymous and renders the whole shell, topbar included — the one place a
+        // signed-out visitor sees the topbar. FeatureView answers "locked" for a request with no
+        // workspace, so without the sign-in check this page would advertise a greyed assistant.
+        var client = Panel.ClientFrom("198.51.100.140");
+
+        var response = await client.GetAsync("/error/404");
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        var document = await new HtmlParser().ParseDocumentAsync(await response.Content.ReadAsStreamAsync());
+
+        document.QuerySelector("header [data-command-open]").Should().NotBeNull(
+            "the topbar did render, so what is missing below was left out on purpose");
+        document.QuerySelector("[data-assistant-state]").Should().BeNull();
+        document.QuerySelector("[data-assistant-toggle]").Should().BeNull();
+        document.GetElementById("assistant-panel").Should().BeNull();
+    }
+
+    [Fact]
     public async Task The_drawers_token_is_accepted_as_the_X_CSRF_TOKEN_header()
     {
         // The island never posts a form: every POST sends data-csrf in the header Program.cs's
