@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using FluentAssertions;
 using Harbora.Application.Abstractions;
 using Harbora.Domain.Common;
@@ -5,6 +6,8 @@ using Harbora.Domain.Services;
 using Harbora.Domain.Tenancy;
 using Harbora.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace Harbora.Tests;
@@ -455,6 +458,29 @@ public class DatabaseProvisioningServiceTests
         outcome.Ok.Should().BeFalse();
         outcome.Refusals.Single().Message.Should().Contain("still there");
         h.Audit.Entries.Should().BeEmpty();
+    }
+
+    // ---- registration ---------------------------------------------------------------------------
+
+    [Fact]
+    public void Both_database_services_are_registered_for_the_panel_and_the_agent_to_resolve()
+    {
+        // DatabasesController builds its own copy when DI hands it none (so hand-built test
+        // controllers keep working), which would also hide a registration that went missing — the
+        // agent's tools have no such fallback, so the registration itself is what is asserted.
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Harbora:MasterKey"] = Convert.ToBase64String(SHA256.HashData("tests"u8.ToArray()))
+        }).Build();
+        var services = new ServiceCollection();
+        Harbora.Infrastructure.DependencyInjection.AddHarboraInfrastructure(services, config);
+
+        services.Should().ContainSingle(d => d.ServiceType == typeof(IDatabaseProvisioningService))
+            .Which.ImplementationType.Should().Be(typeof(DatabaseProvisioningService));
+        services.Should().ContainSingle(d => d.ServiceType == typeof(IDatabaseAttachmentService))
+            .Which.ImplementationType.Should().Be(typeof(DatabaseAttachmentService));
+        services.Single(d => d.ServiceType == typeof(IDatabaseProvisioningService)).Lifetime
+            .Should().Be(ServiceLifetime.Scoped, "it runs inside the request, under its workspace filter");
     }
 
     // ---- helpers shared with the controller -----------------------------------------------------
