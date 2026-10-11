@@ -59,6 +59,23 @@ public sealed class AssistantController(
     public async Task<IActionResult> Conversation(Guid id, CancellationToken ct) =>
         await conversations.GetAsync(Actor, id, IsFa, ct) is { } view ? Json(view) : NoSuchConversation();
 
+    /// <summary>
+    /// A new, empty conversation, before its first message — so the pane can remember the id at once and
+    /// a reload in the middle of the first answer still knows the conversation. Sending to <c>new</c>
+    /// keeps working for a client that does not do this.
+    /// </summary>
+    [HttpPost("conversations")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> NewConversation(CancellationToken ct) =>
+        await conversations.CreateAsync(Actor, ct) is { } created
+            ? Json(created)
+            : new ObjectResult(new
+            {
+                error = "feature_not_enabled",
+                messageEn = "The assistant is not enabled for this workspace.",
+                messageFa = "دستیار برای این فضای کاری فعال نیست."
+            }) { StatusCode = StatusCodes.Status403Forbidden };
+
     private NotFoundObjectResult NoSuchConversation() => NotFound(new
     {
         error = "not_found",
@@ -66,7 +83,11 @@ public sealed class AssistantController(
         messageFa = "چنین گفت‌وگویی وجود ندارد."
     });
 
-    /// <summary><c>id</c> is a conversation id, or <c>new</c> to start one.</summary>
+    /// <summary>
+    /// <c>id</c> is a conversation id, or <c>new</c> to start one. 409 <c>turn_in_progress</c> when the
+    /// conversation is still answering the previous message. Once the stream has begun, the turn no
+    /// longer depends on this request: a reload or a closed tab stops the writing, not the answer.
+    /// </summary>
     [HttpPost("conversations/{id}/messages")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> SendMessage(
@@ -81,10 +102,16 @@ public sealed class AssistantController(
         }
 
         var started = false;
+        var listening = true;
         Guid? streamedConversation = null;
+        var aborted = HttpContext.RequestAborted;
 
-        async Task Emit(AgentStreamEvent e, CancellationToken token)
+        // Writes go to the person's connection, on its own token. A reload or a closed tab ends that
+        // connection but not the turn: the first write that fails marks the listener gone, nothing more
+        // is written, and the orchestrator carries on and saves the answer for when the person comes back.
+        async Task Emit(AgentStreamEvent e, CancellationToken _)
         {
+            if (!listening) return;
             if (!started)
             {
                 started = true;
@@ -100,8 +127,16 @@ public sealed class AssistantController(
             if (e.Data is AgentStartedData s) streamedConversation = s.ConversationId;
 
             var data = JsonSerializer.Serialize(e.Data, e.Data.GetType(), StreamJson);
-            await Response.WriteAsync($"event: {e.Name}\ndata: {data}\n\n", token);
-            await Response.Body.FlushAsync(token);
+            try
+            {
+                aborted.ThrowIfCancellationRequested();
+                await Response.WriteAsync($"event: {e.Name}\ndata: {data}\n\n", aborted);
+                await Response.Body.FlushAsync(aborted);
+            }
+            catch (Exception ex) when (ex is OperationCanceledException or IOException or ObjectDisposedException)
+            {
+                listening = false;
+            }
         }
 
         try
@@ -115,6 +150,7 @@ public sealed class AssistantController(
                 {
                     AgentSendStatus.NotEntitled => "feature_not_enabled",
                     AgentSendStatus.NotFound => "not_found",
+                    AgentSendStatus.Busy => "turn_in_progress",
                     _ => "invalid"
                 },
                 messageEn = outcome.MessageEn,
@@ -124,6 +160,7 @@ public sealed class AssistantController(
             {
                 AgentSendStatus.NotEntitled => new ObjectResult(body) { StatusCode = StatusCodes.Status403Forbidden },
                 AgentSendStatus.NotFound => NotFound(body),
+                AgentSendStatus.Busy => Conflict(body),
                 _ => BadRequest(body)
             };
         }

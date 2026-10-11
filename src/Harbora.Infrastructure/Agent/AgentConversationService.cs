@@ -65,6 +65,25 @@ public sealed class AgentConversationService(
 
     private const int MaxTitleLength = 60;
 
+    /// <summary>
+    /// The longest one turn may run — model calls, tools and all — once it no longer depends on the
+    /// request that started it. Past this the turn is stopped, what was done so far stays saved, and the
+    /// person is told so.
+    /// </summary>
+    public static readonly TimeSpan DefaultTurnDeadline = TimeSpan.FromMinutes(3);
+
+    /// <summary>
+    /// How long a turn's mark is believed. A little past the deadline: a turn that reached its deadline
+    /// still needs a moment to write its end, and only a mark older than that can have been left by a
+    /// process that died mid-turn.
+    /// </summary>
+    public static readonly TimeSpan TurnMarkGrace = TimeSpan.FromSeconds(30);
+
+    /// <summary>The deadline in force; tests shorten it.</summary>
+    internal TimeSpan TurnDeadline { get; init; } = DefaultTurnDeadline;
+
+    private TimeSpan TurnMarkLifetime => TurnDeadline + TurnMarkGrace;
+
     // ---- reading -------------------------------------------------------------------------------
 
     /// <summary>What the pane shows on opening: can the assistant be used now, which model, how much is left today.</summary>
@@ -88,10 +107,14 @@ public sealed class AgentConversationService(
         return new(true, null, null, model, remaining);
     }
 
-    /// <summary>This person's latest conversations in this workspace, most recently active first.</summary>
+    /// <summary>
+    /// This person's latest conversations in this workspace, most recently active first. A conversation
+    /// created ahead of its first message (<see cref="CreateAsync"/>) and never used has no title yet and
+    /// is left out — it is a place the pane reserved, not something the person said.
+    /// </summary>
     public async Task<IReadOnlyList<AgentConversationSummaryView>> ListAsync(AgentActor actor, CancellationToken ct) =>
         await db.AgentConversations.IgnoreQueryFilters().AsNoTracking()
-            .Where(c => c.WorkspaceId == actor.WorkspaceId && c.UserId == actor.UserId)
+            .Where(c => c.WorkspaceId == actor.WorkspaceId && c.UserId == actor.UserId && c.Title != "")
             .OrderByDescending(c => c.UpdatedAt)
             .Take(ConversationListSize)
             .Select(c => new AgentConversationSummaryView(c.Id, c.Title, c.UpdatedAt))
@@ -136,17 +159,53 @@ public sealed class AgentConversationService(
 
         var pending = await plans.PendingPlanAsync(actor, conversationId, ct);
         return new AgentConversationView(conversation.Id, conversation.Title, messages,
-            pending is null ? null : plans.ViewOf(pending));
+            pending is null ? null : plans.ViewOf(pending),
+            InProgress: IsTurnLive(conversation.TurnStartedAt));
+    }
+
+    /// <summary>Whether a turn mark still means a turn is being answered — see <see cref="TurnMarkGrace"/>.</summary>
+    private bool IsTurnLive(DateTimeOffset? turnStartedAt) =>
+        turnStartedAt is { } started && clock.UtcNow - started < TurnMarkLifetime;
+
+    /// <summary>
+    /// A new, empty conversation — created before its first message, so the pane can remember the id at
+    /// once and a reload in the middle of that first answer still knows where it was. Null when the
+    /// workspace is not entitled to the assistant.
+    /// </summary>
+    public async Task<AgentConversationSummaryView?> CreateAsync(AgentActor actor, CancellationToken ct)
+    {
+        if (!(await features.EvaluateAsync(actor.WorkspaceId, PlatformFeatures.Assistant, ct)).IsEnabled)
+            return null;
+
+        var now = clock.UtcNow;
+        var conversation = new AgentConversation
+        {
+            WorkspaceId = actor.WorkspaceId, UserId = actor.UserId, Title = "", CreatedAt = now, UpdatedAt = now
+        };
+        db.AgentConversations.Add(conversation);
+        await db.SaveChangesAsync(ct);
+        return new AgentConversationSummaryView(conversation.Id, conversation.Title, conversation.UpdatedAt);
     }
 
     // ---- one message ---------------------------------------------------------------------------
 
+
     /// <summary>
     /// Handles one message. Refusals that need no stream — an unusable message, a workspace without the
-    /// entitlement, a conversation that is not this person's — come back as the outcome with nothing
-    /// emitted, so the caller can still answer with a status code. Otherwise <c>started</c> is emitted
-    /// first and <c>done</c> last, whatever happens in between; a failure after <c>started</c> becomes
-    /// an <c>error</c> event, never an exception — except cancellation, which means nobody is listening.
+    /// entitlement, a conversation that is not this person's, one still answering the previous message —
+    /// come back as the outcome with nothing emitted, so the caller can still answer with a status code.
+    /// Otherwise <c>started</c> is emitted first and <c>done</c> last, whatever happens in between; a
+    /// failure after <c>started</c> becomes an <c>error</c> event, never an exception.
+    ///
+    /// <para>
+    /// The turn does not belong to the request. <paramref name="ct"/> — the request's own token, which a
+    /// reload or a closed tab cancels — only guards the checks before the turn is taken on. From then on
+    /// the turn runs on a token of its own with a hard deadline (<see cref="DefaultTurnDeadline"/>), and a
+    /// listener that has gone away is simply no longer written to: the answer is still produced and saved
+    /// as it goes, so the person who comes back finds it. While it runs, the conversation carries
+    /// <see cref="AgentConversation.TurnStartedAt"/>, which is what <c>InProgress</c> reports and what
+    /// refuses a second message over the first.
+    /// </para>
     /// </summary>
     /// <param name="conversationId">Null starts a new conversation.</param>
     /// <param name="persianInterface">The panel's language, a hint for messages whose own language is unclear.</param>
@@ -165,7 +224,9 @@ public sealed class AgentConversationService(
         if (!(await features.EvaluateAsync(actor.WorkspaceId, PlatformFeatures.Assistant, ct)).IsEnabled)
             return new(AgentSendStatus.NotEntitled, NotEntitledEn, NotEntitledFa);
 
-        var now = clock.UtcNow;
+        // Stored to the microsecond, which is all Postgres keeps: the mark is later compared for
+        // equality, and a stamp with finer ticks than the column would never match its own row.
+        var stamp = ToMicroseconds(clock.UtcNow);
         AgentConversation conversation;
         if (conversationId is { } id)
         {
@@ -174,6 +235,14 @@ public sealed class AgentConversationService(
             if (existing is null)
                 return new(AgentSendStatus.NotFound, "There is no such conversation.", "چنین گفت‌وگویی وجود ندارد.");
             conversation = existing;
+
+            if (!await TryClaimTurnAsync(conversation, stamp, ct))
+                return new(AgentSendStatus.Busy,
+                    "Still answering your previous message — wait for it to finish, then send this one.",
+                    "هنوز در حال پاسخ به پیام قبلی شماست — صبر کنید تمام شود، بعد این یکی را بفرستید.");
+
+            // A conversation created ahead of its first message takes its title from that message.
+            if (conversation.Title.Length == 0) conversation.Title = TitleFrom(text);
         }
         else
         {
@@ -182,50 +251,157 @@ public sealed class AgentConversationService(
                 WorkspaceId = actor.WorkspaceId,
                 UserId = actor.UserId,
                 Title = TitleFrom(text),
-                CreatedAt = now,
-                UpdatedAt = now
+                TurnStartedAt = stamp,
+                CreatedAt = stamp,
+                UpdatedAt = stamp
             };
             db.AgentConversations.Add(conversation);
         }
 
-        // The design's gates after the entitlement: can a model be reached, and is any of today's
-        // allowance left. Asked before anything else changes, so a message that cannot be answered does
-        // not withdraw a card that could still have been approved.
-        var refusal = await GateAsync(actor, ct);
-
-        // A card left open while the person moved on is withdrawn, and the turn is told so — only for a
-        // message that will actually be answered, and before it, so the record reads in order.
-        if (refusal is null && conversationId is not null)
-            await plans.SupersedePendingAsync(actor, conversation.Id, ct);
-
-        // The person's words are kept whatever happens next, so the conversation they reopen shows what
-        // they asked — including when the answer was an error.
-        await AppendAsync(conversation, new AgentMessage { Role = AgentMessageRole.User, Text = text }, ct);
-
-        await emit(new AgentStreamEvent(AgentStreamEvents.Started, new AgentStartedData(conversation.Id)), ct);
+        // From here the turn is taken on: it runs to its end on its own token, whoever is listening.
+        using var deadline = new CancellationTokenSource(TurnDeadline);
+        var turn = deadline.Token;
+        var listener = new Listener(emit, logger);
+        emit = listener.EmitAsync;
 
         try
         {
-            if (refusal is not null)
-                await emit(new AgentStreamEvent(AgentStreamEvents.Error, refusal), ct);
-            else
-                await RunTurnAsync(actor, conversation, request!.Page, persianInterface, emit, ct);
+            // The design's gates after the entitlement: can a model be reached, and is any of today's
+            // allowance left. Asked before anything else changes, so a message that cannot be answered
+            // does not withdraw a card that could still have been approved.
+            var refusal = await GateAsync(actor, turn);
+
+            // A card left open while the person moved on is withdrawn, and the turn is told so — only for
+            // a message that will actually be answered, and before it, so the record reads in order.
+            if (refusal is null && conversationId is not null)
+                await plans.SupersedePendingAsync(actor, conversation.Id, turn);
+
+            // The person's words are kept whatever happens next, so the conversation they reopen shows
+            // what they asked — including when the answer was an error.
+            await AppendAsync(conversation, new AgentMessage { Role = AgentMessageRole.User, Text = text }, turn);
+
+            await emit(new AgentStreamEvent(AgentStreamEvents.Started, new AgentStartedData(conversation.Id)), turn);
+
+            try
+            {
+                if (refusal is not null)
+                    await emit(new AgentStreamEvent(AgentStreamEvents.Error, refusal), turn);
+                else
+                    await RunTurnAsync(actor, conversation, request!.Page, persianInterface, emit, turn);
+            }
+            catch (OperationCanceledException) when (turn.IsCancellationRequested)
+            {
+                logger.LogWarning("The assistant turn in conversation {Conversation} reached its {Deadline} deadline.",
+                    conversation.Id, TurnDeadline);
+                await emit(Error(
+                    $"This answer took longer than {TurnDeadline.TotalMinutes:0} minutes and was stopped. What was done so far is saved.",
+                    $"این پاسخ بیش از {TurnDeadline.TotalMinutes:0} دقیقه طول کشید و متوقف شد. آنچه تا اینجا انجام شده ذخیره شده است."),
+                    CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "The assistant turn failed in conversation {Conversation}.", conversation.Id);
+                await emit(Error("Something went wrong on the server while answering; nothing further was done.",
+                    "هنگام پاسخ‌دادن خطایی در سرور رخ داد؛ کار دیگری انجام نشد."), CancellationToken.None);
+            }
+
+            var remaining = await meter.RemainingAsync(actor.WorkspaceId, CancellationToken.None);
+            await emit(new AgentStreamEvent(AgentStreamEvents.Done, new AgentDoneData(conversation.Id, remaining)),
+                CancellationToken.None);
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        finally
         {
-            throw;
+            await EndTurnAsync(conversation.Id, stamp);
+        }
+
+        return AgentSendOutcome.Streamed;
+    }
+
+    /// <summary>
+    /// The person listening to a turn — or not, any more. A write to a closed connection fails, and that
+    /// failure must not end the turn: the answer is still being produced and saved for when the person
+    /// comes back. So the first failed write marks the listener gone, and nothing is written after it.
+    /// </summary>
+    private sealed class Listener(Func<AgentStreamEvent, CancellationToken, Task> sink, ILogger logger)
+    {
+        private bool _gone;
+
+        public async Task EmitAsync(AgentStreamEvent e, CancellationToken ct)
+        {
+            if (_gone) return;
+            try
+            {
+                await sink(e, ct);
+            }
+            catch (Exception ex)
+            {
+                _gone = true;
+                logger.LogInformation("The listener left during an assistant turn ({Error}); the turn carries on and is saved.",
+                    ex.GetType().Name);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Takes the conversation's turn, if no live one holds it: one conditional update whose <c>WHERE</c>
+    /// is the whole check (no mark, or a mark old enough to have been left by a process that died), so
+    /// two messages sent at once cannot both start a turn. EF InMemory has no <c>ExecuteUpdateAsync</c>;
+    /// there it is a plain read-then-write, as in <c>AgentPlanService.TryMoveAsync</c>.
+    /// </summary>
+    private async Task<bool> TryClaimTurnAsync(AgentConversation conversation, DateTimeOffset stamp, CancellationToken ct)
+    {
+        var staleBefore = stamp - TurnMarkLifetime;
+
+        if (db.Database.IsRelational())
+        {
+            var claimed = await db.AgentConversations.IgnoreQueryFilters()
+                .Where(c => c.Id == conversation.Id && (c.TurnStartedAt == null || c.TurnStartedAt <= staleBefore))
+                .ExecuteUpdateAsync(s => s.SetProperty(c => c.TurnStartedAt, stamp), ct);
+            // The tracked copy is brought in line, so later saves of this conversation never write the
+            // stale mark back (the same reason as AgentPlanService.RefreshTrackedAsync).
+            if (claimed > 0) await db.Entry(conversation).ReloadAsync(CancellationToken.None);
+            return claimed > 0;
+        }
+
+        if (conversation.TurnStartedAt is { } started && started > staleBefore) return false;
+        conversation.TurnStartedAt = stamp;
+        await db.SaveChangesAsync(ct);
+        return true;
+    }
+
+    /// <summary>
+    /// Clears the turn's mark — only this turn's own, so a turn that overran its deadline cannot clear
+    /// the mark of a newer one that took over. Never throws: a mark that could not be cleared goes stale
+    /// on its own after <see cref="TurnMarkGrace"/>, and the answer is saved either way.
+    /// </summary>
+    private async Task EndTurnAsync(Guid conversationId, DateTimeOffset stamp)
+    {
+        try
+        {
+            if (db.Database.IsRelational())
+            {
+                await db.AgentConversations.IgnoreQueryFilters()
+                    .Where(c => c.Id == conversationId && c.TurnStartedAt == stamp)
+                    .ExecuteUpdateAsync(s => s.SetProperty(c => c.TurnStartedAt, (DateTimeOffset?)null), CancellationToken.None);
+                var tracked = db.ChangeTracker.Entries<AgentConversation>().FirstOrDefault(e => e.Entity.Id == conversationId);
+                if (tracked is not null) await tracked.ReloadAsync(CancellationToken.None);
+                return;
+            }
+
+            // Re-read rather than trusting a reference: a broken plan run may have cleared the tracker.
+            var row = await db.AgentConversations.IgnoreQueryFilters().FirstOrDefaultAsync(c => c.Id == conversationId);
+            if (row is null || row.TurnStartedAt != stamp) return;
+            row.TurnStartedAt = null;
+            await db.SaveChangesAsync(CancellationToken.None);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The assistant turn failed in conversation {Conversation}.", conversation.Id);
-            await emit(Error("Something went wrong on the server while answering; nothing further was done.",
-                "هنگام پاسخ‌دادن خطایی در سرور رخ داد؛ کار دیگری انجام نشد."), ct);
+            logger.LogError(ex, "The turn mark of conversation {Conversation} could not be cleared; it lapses by itself.", conversationId);
         }
-
-        var remaining = await meter.RemainingAsync(actor.WorkspaceId, ct);
-        await emit(new AgentStreamEvent(AgentStreamEvents.Done, new AgentDoneData(conversation.Id, remaining)), ct);
-        return AgentSendOutcome.Streamed;
     }
+
+    private static DateTimeOffset ToMicroseconds(DateTimeOffset value) =>
+        new(value.Ticks - value.Ticks % 10, value.Offset);
 
     private async Task RunTurnAsync(
         AgentActor actor, AgentConversation conversation, AgentPageContext? page, bool persianInterface,
@@ -257,8 +433,15 @@ public sealed class AgentConversationService(
                 break;
             }
 
-            // A copy: the list keeps growing after the call, and a request must stay what was sent.
-            var response = await chat.CompleteAsync(new AgentChatRequest(messages.ToList(), specs), ct);
+            // A copy: the list keeps growing after the call, and a request must stay what was sent. Streamed:
+            // each piece of the model's text goes to the pane as a delta while it is written — display
+            // only; the message event below carries the whole text and is the one that counts. The client
+            // passes text only, never tool-call fragments.
+            var response = await chat.CompleteAsync(new AgentChatRequest(messages.ToList(), specs),
+                piece => string.IsNullOrEmpty(piece)
+                    ? Task.CompletedTask
+                    : emit(new AgentStreamEvent(AgentStreamEvents.Delta, new AgentDeltaData(piece)), ct),
+                ct);
             if (!response.Ok || response.Message is null)
             {
                 await emit(new AgentStreamEvent(AgentStreamEvents.Error, await ProviderFailureAsync(actor, response, ct)), ct);

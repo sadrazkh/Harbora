@@ -18,54 +18,89 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Harbora.Tests.Agent;
 
 /// <summary>
-/// A scripted model. Each <see cref="IAgentChatClient.CompleteAsync"/> returns the next queued answer
-/// and records exactly what it was sent, so a test can assert on what reached "the model" — including
-/// that something did not. Never touches a network.
+/// A scripted model. Each call returns the next queued answer and records exactly what it was sent, so a
+/// test can assert on what reached "the model" — including that something did not. An answer may carry
+/// the pieces it is streamed in (handed to <c>onTextDelta</c> by the streaming overload) and a pause to
+/// await first — a gate, a delay, a disconnect. Never touches a network.
 /// </summary>
 public sealed class ScriptedAgentChatClient : IAgentChatClient
 {
-    private readonly Queue<AgentChatResponse> _script = new();
+    private sealed record Step(AgentChatResponse Response, IReadOnlyList<string>? Pieces, Func<CancellationToken, Task>? Before);
+
+    private readonly Queue<Step> _script = new();
     private readonly List<AgentChatRequest> _requests = [];
     private int _ids;
+    private int _streamedCalls;
 
     public AssistantUnavailable? Unavailable { get; set; }
     public string? Model { get; set; } = "test/agent-model:free";
 
     public IReadOnlyList<AgentChatRequest> Requests { get { lock (_requests) return _requests.ToList(); } }
 
+    /// <summary>How many calls came through the streaming overload.</summary>
+    public int StreamedCalls => _streamedCalls;
+
     public Task<AssistantUnavailable?> GetAvailabilityAsync(CancellationToken ct) => Task.FromResult(Unavailable);
 
     public Task<string?> GetModelAsync(CancellationToken ct) => Task.FromResult(Model);
 
-    public Task<AgentChatResponse> CompleteAsync(AgentChatRequest request, CancellationToken ct)
+    public Task<AgentChatResponse> CompleteAsync(AgentChatRequest request, CancellationToken ct) =>
+        RunAsync(request, onTextDelta: null, ct);
+
+    public Task<AgentChatResponse> CompleteAsync(AgentChatRequest request, Func<string, Task>? onTextDelta, CancellationToken ct)
     {
+        Interlocked.Increment(ref _streamedCalls);
+        return RunAsync(request, onTextDelta, ct);
+    }
+
+    private async Task<AgentChatResponse> RunAsync(AgentChatRequest request, Func<string, Task>? onTextDelta, CancellationToken ct)
+    {
+        Step? step;
         lock (_requests)
         {
             _requests.Add(request with { Messages = request.Messages.ToList(), Tools = request.Tools.ToList() });
-            return Task.FromResult(_script.Count > 0
-                ? _script.Dequeue()
-                : AgentChatResponse.Failed("The test script ran out of answers.", "اسکریپت آزمون تمام شد."));
+            step = _script.Count > 0 ? _script.Dequeue() : null;
         }
+
+        if (step is null)
+            return AgentChatResponse.Failed("The test script ran out of answers.", "اسکریپت آزمون تمام شد.");
+
+        if (step.Before is not null) await step.Before(ct);
+        if (onTextDelta is not null && step.Pieces is not null)
+            foreach (var piece in step.Pieces)
+                await onTextDelta(piece);
+        return step.Response;
     }
 
-    public ScriptedAgentChatClient Then(AgentChatResponse response)
+    public ScriptedAgentChatClient Then(AgentChatResponse response, Func<CancellationToken, Task>? before = null)
     {
-        lock (_requests) _script.Enqueue(response);
+        lock (_requests) _script.Enqueue(new Step(response, null, before));
         return this;
     }
 
-    public ScriptedAgentChatClient ThenText(string text) =>
-        Then(new AgentChatResponse(true, new AgentChatMessage(AgentRole.Assistant, text), Model,
-            new AgentChatUsage(100, 20), "stop", null, null));
+    public ScriptedAgentChatClient ThenText(string text, Func<CancellationToken, Task>? before = null) =>
+        Then(TextResponse(text), before);
 
-    public ScriptedAgentChatClient ThenCalls(params AgentToolCall[] calls) =>
+    /// <summary>A text answer that the streaming overload delivers in <paramref name="pieces"/>.</summary>
+    public ScriptedAgentChatClient ThenStreamedText(params string[] pieces)
+    {
+        lock (_requests) _script.Enqueue(new Step(TextResponse(string.Concat(pieces)), pieces, null));
+        return this;
+    }
+
+    public ScriptedAgentChatClient ThenCalls(params AgentToolCall[] calls) => ThenCallsAfter(null, calls);
+
+    public ScriptedAgentChatClient ThenCallsAfter(Func<CancellationToken, Task>? before, params AgentToolCall[] calls) =>
         Then(new AgentChatResponse(true, new AgentChatMessage(AgentRole.Assistant, null, calls), Model,
-            new AgentChatUsage(100, 10), "tool_calls", null, null));
+            new AgentChatUsage(100, 10), "tool_calls", null, null), before);
 
     public ScriptedAgentChatClient ThenCall(string name, string argumentsJson = "{}") => ThenCalls(Call(name, argumentsJson));
 
     public AgentToolCall Call(string name, string argumentsJson = "{}") =>
         new($"call_{Interlocked.Increment(ref _ids)}", name, argumentsJson);
+
+    private AgentChatResponse TextResponse(string text) =>
+        new(true, new AgentChatMessage(AgentRole.Assistant, text), Model, new AgentChatUsage(100, 20), "stop", null, null);
 
     /// <summary>Everything every request carried, as one string — for "this never reached the model".</summary>
     public string EverythingSent() => string.Join("\n", Requests.Select(r => JsonSerializer.Serialize(r)));
@@ -78,6 +113,18 @@ public sealed class ScriptedAgentChatClient : IAgentChatClient
             _requests.Clear();
         }
     }
+}
+
+/// <summary>A client that knows nothing of streaming: the interface's default overload answers for it.</summary>
+public sealed class PlainChatClient(string text) : IAgentChatClient
+{
+    public Task<AssistantUnavailable?> GetAvailabilityAsync(CancellationToken ct) => Task.FromResult<AssistantUnavailable?>(null);
+
+    public Task<string?> GetModelAsync(CancellationToken ct) => Task.FromResult<string?>("plain/model");
+
+    public Task<AgentChatResponse> CompleteAsync(AgentChatRequest request, CancellationToken ct) =>
+        Task.FromResult(new AgentChatResponse(true, new AgentChatMessage(AgentRole.Assistant, text), "plain/model",
+            new AgentChatUsage(10, 5), "stop", null, null));
 }
 
 /// <summary>
@@ -252,9 +299,31 @@ public sealed class AgentHarness : IDisposable
     public AgentToolRegistry Registry => new(Tools, Capabilities);
     public AgentPlanService Plans => new(Db, Registry, Audit, Clock, NullLogger<AgentPlanService>.Instance);
 
-    public AgentConversationService Service => new(
-        Db, Chat, Registry, Plans, Meter, new AgentWorkspaceSnapshot(Db, Resolver, Access),
-        new FeatureGate(Db), Capabilities, Clock, NullLogger<AgentConversationService>.Instance);
+    public AgentConversationService Service => ServiceOver();
+
+    /// <summary>
+    /// The orchestrator over another context on the same store (a second request, as the pane's reload
+    /// would be), another chat client, or a shorter turn deadline.
+    /// </summary>
+    public AgentConversationService ServiceOver(
+        HarboraDbContext? db = null, IAgentChatClient? chat = null, TimeSpan? turnDeadline = null)
+    {
+        db ??= Db;
+        var access = new ProjectAccessService(db, new Caller(UserId, WorkspaceId));
+        var registry = new AgentToolRegistry(Tools, Capabilities);
+        return new AgentConversationService(
+            db, chat ?? Chat, registry, new AgentPlanService(db, registry, Audit, Clock, NullLogger<AgentPlanService>.Instance),
+            new AgentUsageMeter(db, Clock), new AgentWorkspaceSnapshot(db, new AgentResourceResolver(db, access), access),
+            new FeatureGate(db), Capabilities, Clock, NullLogger<AgentConversationService>.Instance)
+        {
+            TurnDeadline = turnDeadline ?? AgentConversationService.DefaultTurnDeadline
+        };
+    }
+
+    /// <summary>A second context on the same in-memory store and workspace — another request.</summary>
+    public HarboraDbContext NewContext() => new(
+        new DbContextOptionsBuilder<HarboraDbContext>().UseInMemoryDatabase(DatabaseName).Options,
+        new FixedWorkspaceScope(WorkspaceId));
 
     /// <summary>Sends one message and collects every event, in order.</summary>
     public async Task<(AgentSendOutcome Outcome, List<AgentStreamEvent> Events)> SendAsync(

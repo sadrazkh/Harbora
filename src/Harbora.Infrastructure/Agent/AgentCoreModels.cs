@@ -26,6 +26,9 @@ public sealed record AgentStartedData(Guid ConversationId);
 /// "done" or "failed"; <paramref name="Kind"/> is <see cref="AgentConsentPolicy.KindLabel"/>.</summary>
 public sealed record AgentToolEventData(string Name, string Kind, string State, string? SummaryEn, string? SummaryFa);
 
+/// <summary>Data of <see cref="AgentStreamEvents.Delta"/>: the next piece of the model's text.</summary>
+public sealed record AgentDeltaData(string Text);
+
 /// <summary>Data of <see cref="AgentStreamEvents.Error"/>.</summary>
 public sealed record AgentErrorData(string MessageEn, string MessageFa);
 
@@ -49,7 +52,10 @@ public enum AgentSendStatus
     NotEntitled,
 
     /// <summary>No such conversation for this person in this workspace.</summary>
-    NotFound
+    NotFound,
+
+    /// <summary>The conversation is still answering the previous message.</summary>
+    Busy
 }
 
 /// <summary>The outcome of a send. Nothing was emitted unless <see cref="Status"/> is

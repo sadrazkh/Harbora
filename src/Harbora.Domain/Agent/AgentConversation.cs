@@ -18,6 +18,14 @@ public class AgentConversation : BaseEntity
     /// <summary>The first thing the person asked, trimmed — what the conversation list shows.</summary>
     public string Title { get; set; } = string.Empty;
 
+    /// <summary>
+    /// When the turn being answered right now started; null when none is. Set as a message is taken on
+    /// and cleared when its turn ends, so a person who reloads mid-answer is told it is still coming, and
+    /// a second message cannot start a second turn over the first. A process that dies mid-turn leaves it
+    /// set, so it is only believed while younger than the turn's own deadline.
+    /// </summary>
+    public DateTimeOffset? TurnStartedAt { get; set; }
+
     public ICollection<AgentMessage> Messages { get; set; } = new List<AgentMessage>();
 }
 

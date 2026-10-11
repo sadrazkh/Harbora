@@ -389,6 +389,113 @@ public class AssistantHttpTests(AssistantPanelFixture fixture) : IClassFixture<A
         }
     }
 
+    // ---- a turn the person can leave and come back to -----------------------------------------
+
+    [Fact]
+    public async Task A_conversation_can_be_created_before_its_first_message_and_then_used()
+    {
+        fixture.GivenUser(fixture.WorkspaceId, "create-owner@example.com");
+        var (client, csrf) = await fixture.SignedInAs("203.0.113.191", "create-owner@example.com");
+        Chat.Clear();
+
+        (await PostAsync(client, "/assistant/conversations", csrf: null)).StatusCode.Should().Be(HttpStatusCode.BadRequest,
+            "creating one is a POST like any other and needs the antiforgery header");
+
+        var created = await PostAsync(client, "/assistant/conversations", csrf);
+        created.StatusCode.Should().Be(HttpStatusCode.OK);
+        var summary = await created.JsonAsync();
+        var id = summary.GetProperty("id").GetGuid();
+        summary.GetProperty("title").GetString().Should().BeEmpty();
+        summary.TryGetProperty("updatedAt", out _).Should().BeTrue();
+
+        var view = await (await client.GetAsync($"/assistant/conversations/{id}")).JsonAsync();
+        view.GetProperty("messages").GetArrayLength().Should().Be(0);
+        view.GetProperty("inProgress").GetBoolean().Should().BeFalse();
+
+        Chat.ThenStreamedText("Hello", ", world");
+        var frames = await SendAsync(client, csrf, id.ToString(), "hi");
+        frames.Select(f => f.Event).Should().Equal("started", "delta", "delta", "message", "done");
+        frames[0].Data.GetProperty("conversationId").GetGuid().Should().Be(id);
+        frames.Where(f => f.Event == "delta").Select(f => f.Data.GetProperty("text").GetString()).Should().Equal("Hello", ", world");
+        frames[3].Data.GetProperty("text").GetString().Should().Be("Hello, world");
+    }
+
+    [Fact]
+    public async Task A_second_message_while_the_first_is_still_being_answered_is_a_409_with_the_reason()
+    {
+        var owner = fixture.GivenUser(fixture.WorkspaceId, "busy-owner@example.com");
+        var (client, csrf) = await fixture.SignedInAs("203.0.113.192", "busy-owner@example.com");
+        Chat.Clear();
+        var conversationId = Guid.CreateVersion7();
+        fixture.Seed(db => db.AgentConversations.Add(new Harbora.Domain.Agent.AgentConversation
+        {
+            Id = conversationId, WorkspaceId = fixture.WorkspaceId, UserId = owner.Id, Title = "busy",
+            TurnStartedAt = DateTimeOffset.UtcNow
+        }));
+
+        var view = await (await client.GetAsync($"/assistant/conversations/{conversationId}")).JsonAsync();
+        view.GetProperty("inProgress").GetBoolean().Should().BeTrue();
+
+        var refused = await PostAsync(client, $"/assistant/conversations/{conversationId}/messages", csrf, new { text = "again?" });
+
+        refused.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await refused.JsonAsync();
+        body.GetProperty("error").GetString().Should().Be("turn_in_progress");
+        body.GetProperty("messageEn").GetString().Should().StartWith("Still answering your previous message");
+        body.GetProperty("messageFa").GetString().Should().NotBeNullOrEmpty();
+        Chat.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Leaving_in_the_middle_of_an_answer_does_not_lose_it()
+    {
+        fixture.GivenUser(fixture.WorkspaceId, "leave-owner@example.com");
+        var (client, csrf) = await fixture.SignedInAs("203.0.113.193", "leave-owner@example.com");
+        Chat.Clear();
+        var left = new TaskCompletionSource();
+        Chat.ThenText("Saved for when you come back.", before: ct => left.Task.WaitAsync(ct));
+
+        var request = new HttpRequestMessage(HttpMethod.Post, "/assistant/conversations/new/messages")
+        {
+            Content = Body(new { text = "answer slowly" })
+        };
+        request.Headers.Add("X-CSRF-TOKEN", csrf);
+        var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Read the started frame, then leave — the reload the owner did.
+        var stream = await response.Content.ReadAsStreamAsync();
+        var buffer = new byte[4096];
+        var first = new StringBuilder();
+        while (!first.ToString().Contains("\n\n"))
+        {
+            var read = await stream.ReadAsync(buffer);
+            if (read == 0) break;
+            first.Append(Encoding.UTF8.GetString(buffer, 0, read));
+        }
+        var conversationId = Frames(first.ToString().Split("\n\n")[0] + "\n\n")[0].Data.GetProperty("conversationId").GetGuid();
+        response.Dispose();
+        left.SetResult();
+
+        // The answer arrives in the database although nobody was listening for it.
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        (bool Saved, bool Marked) state = default;
+        while (DateTime.UtcNow < deadline)
+        {
+            state = fixture.Read(db => (
+                db.AgentMessages.Any(m => m.ConversationId == conversationId && m.Text == "Saved for when you come back."),
+                db.AgentConversations.Single(c => c.Id == conversationId).TurnStartedAt != null));
+            if (state.Saved && !state.Marked) break;
+            await Task.Delay(100);
+        }
+
+        state.Saved.Should().BeTrue("the turn runs to its end whoever is listening");
+        state.Marked.Should().BeFalse("and clears its mark when it ends");
+        var view = await (await client.GetAsync($"/assistant/conversations/{conversationId}")).JsonAsync();
+        view.GetProperty("inProgress").GetBoolean().Should().BeFalse();
+        view.GetProperty("messages").EnumerateArray().Select(m => m.GetProperty("role").GetString()).Should().Equal("user", "assistant");
+    }
+
     [Fact]
     public async Task Refusals_before_the_stream_are_ordinary_status_codes()
     {

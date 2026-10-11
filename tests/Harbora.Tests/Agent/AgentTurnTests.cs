@@ -1,0 +1,233 @@
+using FluentAssertions;
+using Harbora.Domain.Agent;
+using Harbora.Infrastructure.Agent;
+using Microsoft.EntityFrameworkCore;
+using Xunit;
+
+namespace Harbora.Tests.Agent;
+
+/// <summary>
+/// A turn the person can leave and come back to (round six, owner feedback after the first deploy): the
+/// answer is written out as it arrives, it is produced and saved whether or not anybody is still
+/// listening, a reload mid-answer is told it is still coming, and a second message cannot start a second
+/// turn over the first.
+/// </summary>
+public class AgentTurnTests
+{
+    private static FakeTool Reader() =>
+        new("peek", AgentToolKind.Read) { OnExecute = (_, _) => new AgentToolResult(true, """{"answer":42}""", "peek looked", "peek دید") };
+
+    private static async Task<(AgentSendOutcome Outcome, List<AgentStreamEvent> Events)> Send(
+        AgentConversationService service, AgentHarness h, string text, Guid? conversationId = null,
+        Func<AgentStreamEvent, CancellationToken, Task>? sink = null, CancellationToken requestToken = default)
+    {
+        var events = new List<AgentStreamEvent>();
+        var outcome = await service.SendAsync(h.Actor, conversationId, new AgentSendMessageRequest(text, null), false,
+            sink ?? ((e, _) => { events.Add(e); return Task.CompletedTask; }), requestToken);
+        return (outcome, events);
+    }
+
+    // ---- streamed text -------------------------------------------------------------------------
+
+    [Fact]
+    public async Task Text_is_streamed_as_deltas_in_order_and_the_whole_message_follows()
+    {
+        using var h = new AgentHarness();
+        h.Chat.ThenStreamedText("سلام", "، چه ", "کمکی از دستم برمی‌آید؟");
+
+        var (_, events) = await h.SendAsync("سلام");
+
+        events.Names().Should().Equal("started", "delta", "delta", "delta", "message", "done");
+        events.Where(e => e.Name == "delta").Select(e => ((AgentDeltaData)e.Data).Text)
+            .Should().Equal("سلام", "، چه ", "کمکی از دستم برمی‌آید؟");
+        events.Single<AgentMessageView>("message").Text.Should().Be("سلام، چه کمکی از دستم برمی‌آید؟");
+        h.Chat.StreamedCalls.Should().Be(1, "the loop asks the streaming overload");
+    }
+
+    [Fact]
+    public async Task A_client_that_cannot_stream_still_answers_without_deltas()
+    {
+        using var h = new AgentHarness();
+
+        var (_, events) = await Send(h.ServiceOver(chat: new PlainChatClient("Hello there.")), h, "hi");
+
+        events.Names().Should().Equal("started", "message", "done");
+        events.Single<AgentMessageView>("message").Text.Should().Be("Hello there.");
+    }
+
+    // ---- the turn outlives its listener --------------------------------------------------------
+
+    [Fact]
+    public async Task A_listener_that_leaves_mid_turn_does_not_stop_the_answer_being_produced_and_saved()
+    {
+        using var h = new AgentHarness([Reader()]);
+        using var request = new CancellationTokenSource();
+        var heard = new List<string>();
+
+        // A sink like a real connection: once the request is gone, every write fails.
+        Task Sink(AgentStreamEvent e, CancellationToken _)
+        {
+            request.Token.ThrowIfCancellationRequested();
+            heard.Add(e.Name);
+            return Task.CompletedTask;
+        }
+
+        // The reload happens while the model is working on the first call.
+        h.Chat.ThenCallsAfter(_ => { request.Cancel(); return Task.CompletedTask; }, h.Chat.Call("peek"))
+            .ThenText("The answer is 42.");
+
+        var (outcome, _) = await Send(h.Service, h, "what is the answer?", sink: Sink, requestToken: request.Token);
+
+        outcome.Status.Should().Be(AgentSendStatus.Streamed);
+        heard.Should().Equal(["started"], "nothing is written after the listener left");
+        h.Chat.Requests.Should().HaveCount(2, "the turn carried on to its second model call");
+
+        using var other = h.NewContext();
+        var conversationId = await other.AgentConversations.Select(c => c.Id).SingleAsync();
+        var view = await h.ServiceOver(other).GetAsync(h.Actor, conversationId, persian: false, default);
+        view!.Messages.Select(m => (m.Role, m.Text)).Should().Equal(
+            ("user", "what is the answer?"), ("tool", "peek looked"), ("assistant", "The answer is 42."));
+        view.InProgress.Should().BeFalse("the turn's mark is cleared when it ends");
+    }
+
+    [Fact]
+    public async Task A_conversation_mid_turn_shows_what_is_saved_so_far_reports_in_progress_and_refuses_a_second_message()
+    {
+        using var h = new AgentHarness([Reader()]);
+        AgentConversationView? midTurn = null;
+        AgentSendOutcome? second = null;
+        Guid conversationId = default;
+
+        h.Chat.ThenCall("peek")
+            .ThenText("Done.", before: async cancellation =>
+            {
+                // A second request — the reloaded pane, then the person typing again — on its own context.
+                using var other = h.NewContext();
+                var service = h.ServiceOver(other);
+                conversationId = await other.AgentConversations.Select(c => c.Id).SingleAsync();
+                midTurn = await service.GetAsync(h.Actor, conversationId, persian: false, default);
+                second = (await Send(service, h, "hello again?", conversationId)).Outcome;
+            });
+
+        await h.SendAsync("first question");
+
+        midTurn!.InProgress.Should().BeTrue();
+        midTurn.Messages.Select(m => m.Role).Should().Equal(["user", "tool"], "what was produced so far is already saved");
+        second!.Status.Should().Be(AgentSendStatus.Busy);
+        second.MessageEn.Should().StartWith("Still answering your previous message");
+        second.MessageFa.Should().NotBeNullOrEmpty();
+
+        using var after = h.NewContext();
+        (await h.ServiceOver(after).GetAsync(h.Actor, conversationId, persian: false, default))!.InProgress.Should().BeFalse();
+        (await after.AgentMessages.CountAsync(m => m.Text == "hello again?")).Should().Be(0, "the refused message was not stored");
+    }
+
+    [Fact]
+    public async Task A_stale_turn_mark_left_by_a_dead_process_is_neither_in_progress_nor_in_the_way()
+    {
+        using var h = new AgentHarness();
+        var conversation = new AgentConversation
+        {
+            WorkspaceId = h.WorkspaceId, UserId = h.UserId, Title = "old",
+            TurnStartedAt = AgentHarness.Start - AgentConversationService.DefaultTurnDeadline - AgentConversationService.TurnMarkGrace
+        };
+        h.Db.AgentConversations.Add(conversation);
+        await h.Db.SaveChangesAsync();
+
+        (await h.Service.GetAsync(h.Actor, conversation.Id, persian: false, default))!.InProgress.Should().BeFalse();
+
+        h.Chat.ThenText("Back again.");
+        var (outcome, events) = await h.SendAsync("anyone there?", conversation.Id);
+        outcome.Status.Should().Be(AgentSendStatus.Streamed);
+        events.Names().Should().Contain("message");
+        (await h.Db.AgentConversations.AsNoTracking().SingleAsync()).TurnStartedAt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task A_fresh_turn_mark_refuses_the_message_before_anything_is_stored_or_sent()
+    {
+        using var h = new AgentHarness();
+        var conversation = new AgentConversation
+        {
+            WorkspaceId = h.WorkspaceId, UserId = h.UserId, Title = "busy", TurnStartedAt = AgentHarness.Start - TimeSpan.FromSeconds(20)
+        };
+        h.Db.AgentConversations.Add(conversation);
+        await h.Db.SaveChangesAsync();
+        h.Chat.ThenText("never");
+
+        var (outcome, events) = await h.SendAsync("again", conversation.Id);
+
+        outcome.Status.Should().Be(AgentSendStatus.Busy);
+        events.Should().BeEmpty();
+        h.Chat.Requests.Should().BeEmpty();
+        (await h.Db.AgentMessages.CountAsync()).Should().Be(0);
+        (await h.Db.AgentConversations.AsNoTracking().SingleAsync()).TurnStartedAt
+            .Should().Be(AgentHarness.Start - TimeSpan.FromSeconds(20), "a refused message does not touch the running turn's mark");
+    }
+
+    [Fact]
+    public async Task A_turn_past_its_deadline_is_stopped_with_what_was_done_saved_and_its_mark_released()
+    {
+        using var h = new AgentHarness([Reader()]);
+        h.Chat.ThenCall("peek").ThenText("too late", before: ct => Task.Delay(Timeout.Infinite, ct));
+
+        var (outcome, events) = await Send(h.ServiceOver(turnDeadline: TimeSpan.FromSeconds(2)), h, "slow one");
+
+        outcome.Status.Should().Be(AgentSendStatus.Streamed);
+        events.Names().Should().Equal("started", "tool", "tool", "error", "done");
+        events.Single<AgentErrorData>("error").MessageEn.Should().StartWith("This answer took longer than");
+        using var other = h.NewContext();
+        (await other.AgentConversations.SingleAsync()).TurnStartedAt.Should().BeNull();
+        (await other.AgentMessages.CountAsync(m => m.Role == AgentMessageRole.Tool)).Should().Be(1, "the read that finished is kept");
+    }
+
+    // ---- a conversation before its first message -----------------------------------------------
+
+    [Fact]
+    public async Task A_conversation_created_ahead_is_empty_unlisted_and_takes_its_title_from_the_first_message()
+    {
+        using var h = new AgentHarness();
+
+        var created = await h.Service.CreateAsync(h.Actor, default);
+
+        created!.Title.Should().BeEmpty();
+        (await h.Service.ListAsync(h.Actor, default)).Should().BeEmpty("a reserved conversation is not something the person said");
+        var view = await h.Service.GetAsync(h.Actor, created.Id, persian: false, default);
+        view!.Messages.Should().BeEmpty();
+        view.InProgress.Should().BeFalse();
+
+        h.Chat.ThenText("Hi!");
+        var (outcome, events) = await h.SendAsync("  hello   there ", created.Id);
+
+        outcome.Status.Should().Be(AgentSendStatus.Streamed);
+        events.Single<AgentStartedData>("started").ConversationId.Should().Be(created.Id);
+        (await h.Service.ListAsync(h.Actor, default)).Should().ContainSingle(c => c.Id == created.Id && c.Title == "hello there");
+    }
+
+    [Fact]
+    public async Task Creating_a_conversation_is_refused_without_the_entitlement()
+    {
+        using var h = new AgentHarness(entitled: false);
+
+        (await h.Service.CreateAsync(h.Actor, default)).Should().BeNull();
+        (await h.Db.AgentConversations.CountAsync()).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task A_new_conversation_carries_its_turn_mark_while_it_is_answered()
+    {
+        using var h = new AgentHarness();
+        bool? inProgress = null;
+        h.Chat.ThenText("ok", before: async _ =>
+        {
+            using var other = h.NewContext();
+            var id = await other.AgentConversations.Select(c => c.Id).SingleAsync();
+            inProgress = (await h.ServiceOver(other).GetAsync(h.Actor, id, persian: false, default))!.InProgress;
+        });
+
+        await h.SendAsync("first ever message");
+
+        inProgress.Should().BeTrue();
+        (await h.Db.AgentConversations.AsNoTracking().SingleAsync()).TurnStartedAt.Should().BeNull();
+    }
+}
