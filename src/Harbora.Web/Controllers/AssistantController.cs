@@ -57,7 +57,14 @@ public sealed class AssistantController(
 
     [HttpGet("conversations/{id:guid}")]
     public async Task<IActionResult> Conversation(Guid id, CancellationToken ct) =>
-        await conversations.GetAsync(Actor, id, IsFa, ct) is { } view ? Json(view) : NotFound();
+        await conversations.GetAsync(Actor, id, IsFa, ct) is { } view ? Json(view) : NoSuchConversation();
+
+    private NotFoundObjectResult NoSuchConversation() => NotFound(new
+    {
+        error = "not_found",
+        messageEn = "There is no such conversation.",
+        messageFa = "چنین گفت‌وگویی وجود ندارد."
+    });
 
     /// <summary><c>id</c> is a conversation id, or <c>new</c> to start one.</summary>
     [HttpPost("conversations/{id}/messages")]
@@ -69,7 +76,7 @@ public sealed class AssistantController(
         Guid? conversationId = null;
         if (!string.Equals(id, "new", StringComparison.OrdinalIgnoreCase))
         {
-            if (!Guid.TryParse(id, out var parsed)) return NotFound();
+            if (!Guid.TryParse(id, out var parsed)) return NoSuchConversation();
             conversationId = parsed;
         }
 
@@ -173,9 +180,11 @@ public sealed class AssistantController(
     }
 
     /// <summary>
-    /// A refused decision as <c>{ error, messageEn, messageFa, status, stepIndex }</c>: 404 for a plan
-    /// that is not this person's, 400 for a typed name that did not match (the plan is still pending and
-    /// can be approved again), 409 for a plan that is no longer pending or has expired.
+    /// A refused decision as <c>{ error, messageEn, messageFa, status, stepIndex }</c> — messageEn and
+    /// messageFa being the same pair the stream's <c>error</c> event carries: 404 for a plan that is not
+    /// this person's, 400 for a typed name that did not match (the plan is still pending and can be
+    /// approved again), 409 for a plan that is no longer pending, has expired, or whose step was refused
+    /// when checked again (<c>revalidation_refused</c>: nothing ran, and the plan has failed).
     /// </summary>
     private ObjectResult Refusal(AgentPlanRefusal refusal) => new(new
     {

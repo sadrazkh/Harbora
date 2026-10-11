@@ -81,7 +81,7 @@ public sealed class AgentPlanApprovalRaceTests(PostgresLane lane)
         await db.SaveChangesAsync();
 
         var plan = await ServiceOver(db, tool, clock).CreatePendingAsync(actor, conversation.Id,
-            [new AgentPlanStep(1, tool.Name, tool.Kind, "{}", "call_1", "Count", "شمارش", null, null, [], [], null, false)],
+            [new AgentPlanStep(0, tool.Name, tool.Kind, "{}", "call_1", "Count", "شمارش", null, null, [], [], null, false)],
             default);
         return (actor, plan.Id);
     }
@@ -129,7 +129,7 @@ public sealed class AgentPlanApprovalRaceTests(PostgresLane lane)
         await db.SaveChangesAsync();
         var service = ServiceOver(db, tool, new Clock(Now));
         var plan = await service.CreatePendingAsync(actor, conversation.Id,
-            [new AgentPlanStep(1, tool.Name, tool.Kind, "{}", "call_1", "Count", "شمارش", null, null, [], [], null, false)], default);
+            [new AgentPlanStep(0, tool.Name, tool.Kind, "{}", "call_1", "Count", "شمارش", null, null, [], [], null, false)], default);
 
         var outcome = await service.ApproveAsync(actor, plan.Id, new AgentApproveRequest(null, null), default);
 

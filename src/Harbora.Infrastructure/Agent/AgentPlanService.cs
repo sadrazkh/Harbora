@@ -72,7 +72,9 @@ public sealed class AgentPlanService(
     /// <summary>
     /// Approves and runs a plan. Refused, with nothing run and nothing changed, when the plan is not
     /// this person's in this workspace, is no longer pending, has expired, or a destructive step's typed
-    /// name does not match its confirmation phrase.
+    /// name does not match its confirmation phrase. Also refused — "revalidation_refused", with nothing
+    /// run — when the approval was accepted but a step no longer passes its checks; the plan is then
+    /// <see cref="AgentPlanStatus.Failed"/> with the refused step's reason in its results.
     /// </summary>
     public async Task<AgentApproveOutcome> ApproveAsync(
         AgentActor actor, Guid planId, AgentApproveRequest? request, CancellationToken ct)
@@ -94,8 +96,8 @@ public sealed class AgentPlanService(
             if (!AgentConsentPolicy.ConfirmationMatches(step.ConfirmationPhrase, typed))
                 return new(null, new AgentPlanRefusal(
                     AgentPlanRefusal.ConfirmationMismatchCode,
-                    $"Step {step.Index}: type \"{step.ConfirmationPhrase}\" exactly to confirm.",
-                    $"مرحلهٔ {step.Index}: برای تأیید، «{step.ConfirmationPhrase}» را دقیقاً تایپ کنید.",
+                    $"Step {step.Index + 1}: type \"{step.ConfirmationPhrase}\" exactly to confirm.",
+                    $"مرحلهٔ {step.Index + 1}: برای تأیید، «{step.ConfirmationPhrase}» را دقیقاً تایپ کنید.",
                     StatusName(plan.Status), step.Index));
         }
 
@@ -106,8 +108,8 @@ public sealed class AgentPlanService(
         // — the conditional update is what proves it. From here on the work is not abandoned because the
         // browser went away: a plan cancelled halfway through would be the worst of both outcomes.
         await RememberAsync(actor, steps, request?.RememberTools, now, CancellationToken.None);
-        var result = await RunClaimedAsync(actor, plan, steps, CancellationToken.None);
-        return new(result, null);
+        var run = await RunClaimedAsync(actor, plan, steps, CancellationToken.None);
+        return run.Refusal is { } refused ? new(null, refused) : new(run.Result, null);
     }
 
     /// <summary>
@@ -123,7 +125,9 @@ public sealed class AgentPlanService(
             throw new InvalidOperationException($"A plan created a moment ago could not be claimed: {refusal.MessageEn}");
         }
 
-        return await RunClaimedAsync(actor, plan, StepsOf(plan), CancellationToken.None);
+        // A refusal at re-validation is reported in the result itself here — the refused step failed,
+        // the rest skipped — because there is no response status to carry it; the executed event shows it.
+        return (await RunClaimedAsync(actor, plan, StepsOf(plan), CancellationToken.None)).Result;
     }
 
     /// <summary>
@@ -257,7 +261,11 @@ public sealed class AgentPlanService(
 
     // ---- execution -----------------------------------------------------------------------------
 
-    private async Task<AgentPlanResultView> RunClaimedAsync(
+    /// <summary>What a claimed run produced; <see cref="Refusal"/> is set when re-validation refused a
+    /// step and nothing ran.</summary>
+    private sealed record ClaimedRun(AgentPlanResultView Result, AgentPlanRefusal? Refusal = null);
+
+    private async Task<ClaimedRun> RunClaimedAsync(
         AgentActor actor, AgentPlan plan, IReadOnlyList<AgentPlanStep> steps, CancellationToken ct)
     {
         var context = new AgentToolContext(actor.WorkspaceId, actor.UserId, actor.User, plan.ConversationId, Page: null);
@@ -303,7 +311,12 @@ public sealed class AgentPlanService(
 
             await FinishAsync(plan, AgentPlanStatus.Failed, results, executedAt: null, ct);
             await RecordOutcomeAsync(plan, outcomes, now, ct);
-            return new AgentPlanResultView(plan.Id, StatusName(plan.Status), results);
+            return new ClaimedRun(
+                new AgentPlanResultView(plan.Id, StatusName(plan.Status), results),
+                new AgentPlanRefusal(AgentPlanRefusal.RevalidationRefusedCode,
+                    $"Nothing ran: step {r.Step.Index + 1} was refused when the plan was checked again. {r.Error}",
+                    $"هیچ‌چیز اجرا نشد: مرحلهٔ {r.Step.Index + 1} هنگام بررسی دوباره رد شد. {r.ErrorFa}",
+                    StatusName(plan.Status), r.Step.Index));
         }
 
         // 2. Run in order; the first failure stops the rest.
@@ -337,7 +350,8 @@ public sealed class AgentPlanService(
                 {
                     conversationId = plan.ConversationId,
                     planId = plan.Id,
-                    step = step.Index,
+                    step = step.Index + 1, // the ordinal a person reads on the card
+                    stepIndex = step.Index,
                     tool = step.Tool,
                     ok = result.Ok
                 }),
@@ -362,7 +376,7 @@ public sealed class AgentPlanService(
         now = clock.UtcNow;
         await FinishAsync(plan, stopped ? AgentPlanStatus.Failed : AgentPlanStatus.Executed, results, executedAt: now, ct);
         await RecordOutcomeAsync(plan, outcomes, now, ct);
-        return new AgentPlanResultView(plan.Id, StatusName(plan.Status), results);
+        return new ClaimedRun(new AgentPlanResultView(plan.Id, StatusName(plan.Status), results));
     }
 
     private sealed record Revalidation(IAgentTool? Tool, JsonElement Args, string? Error, string? ErrorFa);
@@ -609,7 +623,7 @@ public sealed class AgentPlanService(
             var content = new JsonObject
             {
                 ["plan"] = plan.Id.ToString(),
-                ["step"] = outcome.Step.Index,
+                ["step"] = outcome.Step.Index + 1,
                 ["tool"] = outcome.Step.Tool,
                 ["state"] = outcome.State,
                 ["summary"] = outcome.SummaryEn

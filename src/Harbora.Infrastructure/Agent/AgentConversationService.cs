@@ -422,7 +422,10 @@ public sealed class AgentConversationService(
 
         if (validation.Creates is not null) turn.Scope.Add(validation.Creates);
 
-        var index = turn.Draft.Count + 1;
+        // Index is the step's 0-based position — what the card keys typed confirmations by; people,
+        // and the model, read it as "step Index + 1".
+        var index = turn.Draft.Count;
+        var number = index + 1;
         var titleEn = string.IsNullOrWhiteSpace(validation.TitleEn) ? tool.Name : validation.TitleEn;
         var titleFa = string.IsNullOrWhiteSpace(validation.TitleFa) ? titleEn : validation.TitleFa;
 
@@ -434,9 +437,9 @@ public sealed class AgentConversationService(
             AgentConsentPolicy.IsAutoApproved(tool.Kind, turn.Remembered.Contains(tool.Name))));
 
         return new(
-            AgentJson.ForModel($"Added as step {index} — nothing has run yet; the user will approve it. (Step {index}: {titleEn})"),
-            $"Proposed as step {index}: {titleEn}",
-            $"پیشنهاد به‌عنوان مرحلهٔ {index}: {titleFa}");
+            AgentJson.ForModel($"Added as step {number} — nothing has run yet; the user will approve it. (Step {number}: {titleEn})"),
+            $"Proposed as step {number}: {titleEn}",
+            $"پیشنهاد به‌عنوان مرحلهٔ {number}: {titleFa}");
     }
 
     /// <summary>

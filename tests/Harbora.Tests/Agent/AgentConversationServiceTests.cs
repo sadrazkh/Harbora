@@ -168,7 +168,7 @@ public class AgentConversationServiceTests
         plan.Steps.Should().ContainSingle();
         plan.Steps[0].Should().BeEquivalentTo(new
         {
-            Index = 1, Tool = "create_database", Kind = "safe", TitleEn = "Create database shop-db",
+            Index = 0, Tool = "create_database", Kind = "safe", TitleEn = "Create database shop-db",
             AutoApproved = false, Rememberable = true, ConfirmationPhrase = (string?)null
         });
         (await h.Db.AgentPlans.SingleAsync()).Status.Should().Be(AgentPlanStatus.Pending);
@@ -198,7 +198,7 @@ public class AgentConversationServiceTests
         h.Chat.Requests[1].Messages.Last().Content.Should().StartWith("Refused: No such database.",
             "attaching something nothing creates is refused");
         var plan = events.Single<AgentPlanView>("plan");
-        plan.Steps.Select(s => (s.Index, s.Tool)).Should().Equal((1, "create_database"), (2, "attach_database"));
+        plan.Steps.Select(s => (s.Index, s.Tool)).Should().Equal((0, "create_database"), (1, "attach_database"));
     }
 
     [Fact]

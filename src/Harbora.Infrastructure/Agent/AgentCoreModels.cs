@@ -59,10 +59,16 @@ public sealed record AgentSendOutcome(AgentSendStatus Status, string? MessageEn 
     public static readonly AgentSendOutcome Streamed = new(AgentSendStatus.Streamed);
 }
 
-/// <summary>Why a plan decision was refused. Nothing ran and nothing changed.</summary>
-/// <param name="Code">"not_found", "expired", "not_pending" or "confirmation_mismatch".</param>
+/// <summary>
+/// Why a plan decision was refused. Nothing ran. The HTTP body carries <see cref="MessageEn"/> and
+/// <see cref="MessageFa"/> — the same shape as the stream's <c>error</c> event — beside the code.
+/// </summary>
+/// <param name="Code">"not_found", "expired", "not_pending", "confirmation_mismatch" or
+/// "revalidation_refused" (the approval was accepted, but a step was refused when checked again, so
+/// the plan failed with nothing run).</param>
 /// <param name="Status">The plan's status as it stands, when there is a plan.</param>
-/// <param name="StepIndex">For "confirmation_mismatch": the step whose typed name did not match.</param>
+/// <param name="StepIndex">The 0-based <see cref="AgentPlanStep.Index"/> of the step the refusal is
+/// about, for "confirmation_mismatch" and "revalidation_refused".</param>
 public sealed record AgentPlanRefusal(
     string Code, string MessageEn, string MessageFa, string? Status = null, int? StepIndex = null)
 {
@@ -70,6 +76,7 @@ public sealed record AgentPlanRefusal(
     public const string ExpiredCode = "expired";
     public const string NotPendingCode = "not_pending";
     public const string ConfirmationMismatchCode = "confirmation_mismatch";
+    public const string RevalidationRefusedCode = "revalidation_refused";
 
     public static AgentPlanRefusal NotFound() =>
         new(NotFoundCode, "There is no such plan.", "چنین برنامه‌ای وجود ندارد.");
@@ -85,7 +92,9 @@ public sealed record AgentApproveOutcome(AgentPlanResultView? Result, AgentPlanR
 /// One validated step of a plan, as stored in <c>AgentPlan.StepsJson</c>: what to run (tool and
 /// arguments, exactly as validated) and what the card says about it.
 /// </summary>
-/// <param name="Index">1-based, in execution order.</param>
+/// <param name="Index">The step's 0-based position in the plan, in execution order — the key of
+/// <see cref="AgentApproveRequest.Confirmations"/> and of every <see cref="AgentPlanStepResultView"/>.
+/// Text a person or the model reads calls it "step Index + 1".</param>
 /// <param name="ToolCallId">The model's call this step came from; null for steps not proposed by a call.</param>
 /// <param name="ConfirmationPhrase">Destructive steps only: what the person must type.</param>
 /// <param name="AutoApproved">A remembered safe tool when the plan was made.</param>

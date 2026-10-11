@@ -28,7 +28,7 @@ public class AgentPlanServiceTests
         h.Db.AgentConversations.Add(conversation);
         await h.Db.SaveChangesAsync();
         var plan = await h.Plans.CreatePendingAsync(h.Actor, conversation.Id,
-            tools.Select((t, i) => Step(i + 1, t, $$"""{"n":{{i + 1}}}""")).ToList(), default);
+            tools.Select((t, i) => Step(i, t, $$"""{"n":{{i}}}""")).ToList(), default);
         return (h, plan);
     }
 
@@ -52,7 +52,7 @@ public class AgentPlanServiceTests
         order.Should().Equal("first", "second", "third");
         outcome.Result!.Status.Should().Be("executed");
         outcome.Result.Steps.Select(s => (s.Index, s.State, s.SummaryEn)).Should().Equal(
-            (1, "done", "first made"), (2, "done", "second made"), (3, "done", "third made"));
+            (0, "done", "first made"), (1, "done", "second made"), (2, "done", "third made"));
 
         // 1. the plan
         var stored = await h.Db.AgentPlans.AsNoTracking().SingleAsync();
@@ -77,7 +77,8 @@ public class AgentPlanServiceTests
         using var meta = JsonDocument.Parse(audit[1].MetadataJson!);
         meta.RootElement.GetProperty("conversationId").GetGuid().Should().Be(plan.ConversationId);
         meta.RootElement.GetProperty("planId").GetGuid().Should().Be(plan.Id);
-        meta.RootElement.GetProperty("step").GetInt32().Should().Be(2);
+        meta.RootElement.GetProperty("step").GetInt32().Should().Be(2, "the ordinal a person reads");
+        meta.RootElement.GetProperty("stepIndex").GetInt32().Should().Be(1, "the position the card keys by");
         meta.RootElement.GetProperty("tool").GetString().Should().Be("second");
         meta.RootElement.GetProperty("ok").GetBoolean().Should().BeTrue();
     }
@@ -107,9 +108,10 @@ public class AgentPlanServiceTests
 
         foreach (var typed in new[] { "Shop-DB", "shop", "", "shop-db!" })
         {
-            var refused = await h.Plans.ApproveAsync(h.Actor, plan.Id, Approve(new() { [1] = typed }), default);
+            var refused = await h.Plans.ApproveAsync(h.Actor, plan.Id, Approve(new() { [0] = typed }), default);
             refused.Refusal!.Code.Should().Be(AgentPlanRefusal.ConfirmationMismatchCode, $"'{typed}' is not the name");
-            refused.Refusal.StepIndex.Should().Be(1);
+            refused.Refusal.StepIndex.Should().Be(0);
+            refused.Refusal.MessageEn.Should().StartWith("Step 1: type \"shop-db\"");
         }
         (await h.Plans.ApproveAsync(h.Actor, plan.Id, Approve(), default)).Refusal!.Code
             .Should().Be(AgentPlanRefusal.ConfirmationMismatchCode, "a destructive step without any typed name does not run");
@@ -117,7 +119,10 @@ public class AgentPlanServiceTests
         delete.Executions.Should().Be(0);
         (await h.Db.AgentPlans.AsNoTracking().SingleAsync()).Status.Should().Be(AgentPlanStatus.Pending);
 
-        var accepted = await h.Plans.ApproveAsync(h.Actor, plan.Id, Approve(new() { [1] = "  shop-db \n" }), default);
+        (await h.Plans.ApproveAsync(h.Actor, plan.Id, Approve(new() { [1] = "shop-db" }), default)).Refusal!.Code
+            .Should().Be(AgentPlanRefusal.ConfirmationMismatchCode, "confirmations are keyed by the step's 0-based Index");
+
+        var accepted = await h.Plans.ApproveAsync(h.Actor, plan.Id, Approve(new() { [0] = "  shop-db \n" }), default);
         accepted.Ok.Should().BeTrue("surrounding whitespace is trimmed; the name itself is compared exactly");
         delete.Executions.Should().Be(1);
     }
@@ -156,14 +161,20 @@ public class AgentPlanServiceTests
 
         var outcome = await h.Plans.ApproveAsync(h.Actor, plan.Id, Approve(), default);
 
-        outcome.Ok.Should().BeTrue("the approval was accepted; it is the plan that failed");
-        outcome.Result!.Status.Should().Be("failed");
-        outcome.Result.Steps.Select(s => s.State).Should().Equal("skipped", "failed", "skipped");
-        outcome.Result.Steps[1].ErrorEn.Should().Be("The quota is full now.");
-        outcome.Result.Steps[1].ErrorFa.Should().Be("سهمیه اکنون پر است.");
+        outcome.Ok.Should().BeFalse("nothing ran, and the person is told why");
+        outcome.Refusal!.Code.Should().Be(AgentPlanRefusal.RevalidationRefusedCode);
+        outcome.Refusal.StepIndex.Should().Be(1);
+        outcome.Refusal.Status.Should().Be("failed");
+        outcome.Refusal.MessageEn.Should().Be("Nothing ran: step 2 was refused when the plan was checked again. The quota is full now.");
+        outcome.Refusal.MessageFa.Should().Contain("سهمیه اکنون پر است.");
         (first.Executions + second.Executions + third.Executions).Should().Be(0);
         h.Audit.Entries.Should().NotContain(e => e.Action == AgentPlanService.StepExecutedAction);
-        (await h.Db.AgentPlans.AsNoTracking().SingleAsync()).ExecutedAt.Should().BeNull("nothing executed");
+
+        var stored = await h.Db.AgentPlans.AsNoTracking().SingleAsync();
+        stored.Status.Should().Be(AgentPlanStatus.Failed, "the plan cannot be approved again into a world that refused it");
+        stored.ExecutedAt.Should().BeNull("nothing executed");
+        AgentJson.Deserialize<List<AgentPlanStepResultView>>(stored.ResultsJson)!.Select(s => s.State)
+            .Should().Equal("skipped", "failed", "skipped");
     }
 
     [Fact]
@@ -290,7 +301,7 @@ public class AgentPlanServiceTests
         var (h, plan) = await PlanWith(safe, delete);
         using var _ = h;
 
-        await h.Plans.ApproveAsync(h.Actor, plan.Id, Approve(new() { [2] = "wrong" }, "set_env"), default);
+        await h.Plans.ApproveAsync(h.Actor, plan.Id, Approve(new() { [1] = "wrong" }, "set_env"), default);
 
         (await h.Plans.ApprovalsAsync(h.Actor, default)).Should().BeEmpty();
     }
@@ -305,8 +316,8 @@ public class AgentPlanServiceTests
 
         var outcome = await h.Plans.ApproveAsync(h.Actor, plan.Id, Approve(), default);
 
-        outcome.Result!.Status.Should().Be("failed");
-        outcome.Result.Steps.Single().ErrorEn.Should().Contain("changed since this plan was made");
+        outcome.Refusal!.Code.Should().Be(AgentPlanRefusal.RevalidationRefusedCode);
+        outcome.Refusal.MessageEn.Should().Contain("changed since this plan was made");
         tool.Executions.Should().Be(0);
     }
 
@@ -318,9 +329,10 @@ public class AgentPlanServiceTests
         using var _ = h;
         delete.OnValidate = (_, _, _) => new AgentValidation(true, ConfirmationPhrase: "billing-db");
 
-        var outcome = await h.Plans.ApproveAsync(h.Actor, plan.Id, Approve(new() { [1] = "shop-db" }), default);
+        var outcome = await h.Plans.ApproveAsync(h.Actor, plan.Id, Approve(new() { [0] = "shop-db" }), default);
 
-        outcome.Result!.Steps.Single().State.Should().Be("failed");
+        outcome.Refusal!.Code.Should().Be(AgentPlanRefusal.RevalidationRefusedCode);
+        outcome.Refusal.StepIndex.Should().Be(0);
         delete.Executions.Should().Be(0);
     }
 
@@ -332,7 +344,7 @@ public class AgentPlanServiceTests
         var conversation = new AgentConversation { WorkspaceId = h.WorkspaceId, UserId = h.UserId, Title = "t" };
         h.Db.AgentConversations.Add(conversation);
         await h.Db.SaveChangesAsync();
-        var plan = await h.Plans.CreatePendingAsync(h.Actor, conversation.Id, [Step(1, tool)], default);
+        var plan = await h.Plans.CreatePendingAsync(h.Actor, conversation.Id, [Step(0, tool)], default);
 
         // The same person, now signed in as a viewer.
         var viewer = new AgentHarness([tool], role: SystemRole.Viewer, databaseName: h.DatabaseName, workspaceId: h.WorkspaceId, clock: h.Clock);
@@ -341,7 +353,7 @@ public class AgentPlanServiceTests
 
         var outcome = await h.Plans.ApproveAsync(demoted, plan.Id, Approve(), default);
 
-        outcome.Result!.Steps.Single().ErrorEn.Should().Be("Your role no longer allows this step.");
+        outcome.Refusal!.MessageEn.Should().EndWith("Your role no longer allows this step.");
         tool.Executions.Should().Be(0);
     }
 

@@ -308,16 +308,21 @@ public class AssistantHttpTests(AssistantPanelFixture fixture) : IClassFixture<A
         var planId = first.Single(f => f.Event == "plan").Data.GetProperty("id").GetGuid();
         first.Single(f => f.Event == "plan").Data.GetProperty("steps")[0].GetProperty("confirmationPhrase").GetString().Should().Be("shop-db");
 
+        var plan = first.Single(f => f.Event == "plan").Data;
+        var index = plan.GetProperty("steps")[0].GetProperty("index").GetInt32();
+        index.Should().Be(0, "a step's index is its 0-based position, and the card keys confirmations by it");
+
         var wrong = await PostAsync(client, $"/assistant/plans/{planId}/approve", csrf,
-            new { confirmations = new Dictionary<string, string> { ["1"] = "Shop-DB" } });
+            new { confirmations = new Dictionary<string, string> { [index.ToString()] = "Shop-DB" } });
         wrong.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         var refusal = await wrong.JsonAsync();
         refusal.GetProperty("error").GetString().Should().Be("confirmation_mismatch");
-        refusal.GetProperty("stepIndex").GetInt32().Should().Be(1);
+        refusal.GetProperty("stepIndex").GetInt32().Should().Be(index);
+        refusal.GetProperty("messageEn").GetString().Should().NotBeNullOrEmpty();
         refusal.GetProperty("messageFa").GetString().Should().NotBeNullOrEmpty();
 
         var right = await PostAsync(client, $"/assistant/plans/{planId}/approve", csrf,
-            new { confirmations = new Dictionary<string, string> { ["1"] = "shop-db" } });
+            new { confirmations = new Dictionary<string, string> { [index.ToString()] = "shop-db" } });
         right.StatusCode.Should().Be(HttpStatusCode.OK);
         fixture.DeleteTool.Executions.Should().Be(before + 1);
 
@@ -326,9 +331,42 @@ public class AssistantHttpTests(AssistantPanelFixture fixture) : IClassFixture<A
         var secondPlan = second.Single(f => f.Event == "plan").Data.GetProperty("id").GetGuid();
 
         (await PostAsync(client, $"/assistant/plans/{secondPlan}/reject", csrf)).StatusCode.Should().Be(HttpStatusCode.NoContent);
-        (await PostAsync(client, $"/assistant/plans/{secondPlan}/approve", csrf,
-            new { confirmations = new Dictionary<string, string> { ["1"] = "shop-db" } })).StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var late = await PostAsync(client, $"/assistant/plans/{secondPlan}/approve", csrf,
+            new { confirmations = new Dictionary<string, string> { ["0"] = "shop-db" } });
+        late.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await late.JsonAsync()).GetProperty("messageEn").GetString().Should().Contain("rejected");
         fixture.DeleteTool.Executions.Should().Be(before + 1);
+    }
+
+    [Fact]
+    public async Task A_step_refused_when_rechecked_at_approval_is_a_409_with_the_reason_and_nothing_runs()
+    {
+        fixture.GivenUser(fixture.WorkspaceId, "recheck-owner@example.com");
+        var (client, csrf) = await fixture.SignedInAs("203.0.113.189", "recheck-owner@example.com");
+        Chat.Clear();
+        Chat.ThenCall("test_safe_write", """{"name":"shop-db"}""").ThenText("Approve it?");
+        var before = fixture.SafeTool.Executions;
+
+        var frames = await SendAsync(client, csrf, "new", "create shop-db");
+        var planId = frames.Single(f => f.Event == "plan").Data.GetProperty("id").GetGuid();
+
+        fixture.SafeTool.OnValidate = (_, _, _) => AgentValidation.Refused("The workspace's quota is full now.", "سهمیهٔ فضای کاری اکنون پر است.");
+        try
+        {
+            var refused = await PostAsync(client, $"/assistant/plans/{planId}/approve", csrf, new { });
+
+            refused.StatusCode.Should().Be(HttpStatusCode.Conflict);
+            var body = await refused.JsonAsync();
+            body.GetProperty("error").GetString().Should().Be("revalidation_refused");
+            body.GetProperty("messageEn").GetString().Should().EndWith("The workspace's quota is full now.");
+            body.GetProperty("messageFa").GetString().Should().Contain("سهمیهٔ فضای کاری اکنون پر است.");
+            body.GetProperty("stepIndex").GetInt32().Should().Be(0);
+            fixture.SafeTool.Executions.Should().Be(before);
+        }
+        finally
+        {
+            fixture.SafeTool.OnValidate = null;
+        }
     }
 
     [Fact]
