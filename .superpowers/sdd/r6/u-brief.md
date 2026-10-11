@@ -74,3 +74,49 @@ error, truncated stream, fallback to non-streaming.
 
 CONSTRAINTS apply (owner identity, no trailer, branch-named logs, full suite once at the end, honest
 report). Report to `.superpowers/sdd/r6/u-<letter>-report.md` (`git add -f`).
+
+# S — Secrets as black boxes (owner decision 2026-10-12, before the deploy)
+
+Owner: «سکرت رو بگیره ولی برای مدل به عنوان بلک باکس بفرسته و بگیره اینور اعمال کنه». Contract on master:
+`src/Harbora.Infrastructure/Agent/AgentSecretContracts.cs` — `IAgentSecretVault` (Put/Resolve),
+`AgentSecretRequest`, `AgentSecretView`, `AgentSecretHandles` (format `{{secret:<22 url-safe chars>}}`,
+30-minute lifetime, `IsHandle`, `Masked`). The value never reaches the provider, the history or a plan.
+
+## D — the vault and the endpoint (server)
+- `InMemoryAgentSecretVault : IAgentSecretVault`, singleton: values encrypted with `ISecretProtector`
+  while held, keyed by a random 16-byte id (URL-safe base64, 22 chars), scoped to workspace + user,
+  expiring after `Lifetime` (sweep expired entries on access; cap entries per user, e.g. 50). A restart
+  forgets everything — by design.
+- `POST /assistant/secrets` (`AgentSecretRequest`) → `AgentSecretView`; same entitlement/antiforgery/
+  [Authorize] as the other endpoints; name 1–100 chars, value 1–8,000 chars; never logs or audits the
+  value (audit `assistant.secret_held` with the name only).
+- System prompt: text of the form `{{secret:…}}` is a secret the person entered privately; pass it
+  through unchanged as the tool argument where it belongs; never ask the person to type a secret into the
+  chat — tell them to use the lock button in the composer.
+- Redaction: also treat any resolved value as a known secret when redacting what goes to the model.
+- Tests: put/resolve, other user/workspace cannot resolve, expiry, cap, endpoint shape, value absent from
+  every log/audit/model request.
+
+## F — tools resolve handles (set_env_vars, deploy_template)
+- An argument value that `AgentSecretHandles.IsHandle` is resolved with the vault at **execute** (and
+  checked to exist at validate — never resolved into card text); a handle forces the variable secret.
+- A plain (non-handle) value for a variable marked `secret: true`, or for a template variable the
+  template marks secret, is refused with guidance in both languages: use the lock button so the value
+  never goes to the AI.
+- Card text and `ResultJson` show `AgentSecretHandles.Masked` for handle values. An expired/unknown
+  handle at execute → `Ok = false`, "the secret expired — enter it again with the lock button".
+- Tests: handle applied encrypted; card/result/audit never contain the value; plain secret refused;
+  expired handle refused at execute; non-secret plain values still work.
+
+## E — the lock button (pane)
+- A lock button beside the composer opens a small inline form (name + masked value, show/hide toggle);
+  submit → `POST /assistant/secrets` → insert a chip/placeholder showing the name, whose underlying text
+  is the handle, into the draft at the cursor. The value is never put in the draft, the outbox or
+  localStorage, and the form clears on submit/close.
+- Before sending, if the draft contains something that looks like a secret (`password=`, `token:`,
+  `api_key`, a long `sk-…`/`ghp_…` style token), show a gentle inline warning offering the lock button
+  (the person may still send).
+- Messages that contain handles render the handle as a lock chip with the name if known, else
+  «secret».
+- Tests (node): the value never reaches draft/outbox/storage; chip insertion; the warning heuristic;
+  rendering of handles in history.
