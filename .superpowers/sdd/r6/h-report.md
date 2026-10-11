@@ -141,3 +141,112 @@ was fixed before the commit, and the final build shows none.) The Postgres lane 
    possible) and can be dropped without touching anything else, but it keeps the quoted numbers from drifting.
 7. The Persian copy is mine and has had no native editor beyond matching the existing chapters' voice; the owner
    may want a read-through of the consent table and the "after Run" list in particular.
+
+---
+
+# Update after everything landed on master (5737b07)
+
+The coordinator asked for the guide to describe what was actually built. The branch was rebased onto master
+`5737b07` (clean; the coordinator's `e919153`, the entitlement correction, kept: the provider's default plan has
+the assistant at once, customer plans are Locked until granted). Sources read: `f-report.md`, `g-report.md`,
+`u-brief.md` (section S), `u-c-report.md`, `u-d-report.md`, `u-e-report.md`, plus the code and the Vue sources
+for every label I quote.
+
+Commits (owner identity, no trailer; hashes are after the rebase):
+
+```
+08aa498 Assistant guide brought up to what was built: the write tools by kind and where they refuse, the lock button ...
+93244c3 READMEs: the assistant paragraph updated for the write tools, streaming and the lock button ...
+```
+
+plus the commit adding this section. The earlier commits of this branch were rebased: `98c27e0` is now
+`d865dbd`, `c1c397f` is `cb287e9`, `92d3fa3` is `936785a`, `e6846d6` is `c38e2bf`.
+
+## What changed in `docs/tutorial/08-ai.md`
+
+* **Write tools, as built.** A table of every tool by kind. Safe: create project, add environment, create
+  database, create app, deploy template, set env vars, add domain, add volume, deploy, restart, attach database,
+  start database. Dangerous: delete env var, remove domain, stop app, rollback, detach database, rotate database
+  password, stop database. Typed delete: delete app, remove volume, delete database, delete project. The kinds
+  and names are F's and G's tables, cross-checked against the tool names registered in the code.
+* **Notable refusals**, one bullet each: a taken slug is refused, not suffixed with `-2` (F: create_app and
+  deploy_template; G: create_project and add_environment); a Persian-only name needs a Latin slug; a rollback
+  must name its deployment number and is refused while one is in flight; restart or stop of a never-deployed
+  app, stop of a stopped app, stop of a non-running database and start of a provisioning one are refused;
+  attach across environments is refused; data is kept unless asked (`deleteData` and `removeVolumes` default to
+  false, and a protected volume is never deleted with its data); a template always creates a new project; no
+  private Git through chat (no token, no credentials in the URL); no resize or replicas; a protected
+  environment waits for approval.
+* **The typed delete** now says what the card says about data (kept unless you said otherwise), that it names
+  apps still using the database, and what to type: the resource's name for a database or project, the app's slug
+  for deleting an app or a volume (F's remove_volume phrase is the app's slug).
+* **Money:** the first-hour warning on app and database cards, and that a payment refusal can still arrive when
+  the step runs.
+* **New subsection «رمزها: دکمهٔ قفل».** The lock button beside the composer (name, masked value with show/hide,
+  «افزودن به پیام», `[🔒 NAME]` in the draft); what the model sees (only `{{secret:...}}`); the value reaches the
+  panel in a separate request; held encrypted in memory for **30 minutes**, per person and workspace, at most
+  **50** per person (the oldest is forgotten), name up to **100** and value up to **8000** characters; forgotten
+  on a panel restart, after which a waiting plan is refused at «اجرا» (the re-check) with "enter it again", so
+  nothing runs; chips read «سکرت» after a reload; `generate` for secrets nobody needs to type (48 random
+  characters made on the server); the plain-text warning (what it matches, that the first Send is held, that it
+  is gentle and incomplete); a plain value for a secret variable is refused; a secret cannot be turned plain
+  through the assistant; and a template variable the template keeps plain cannot take a lock-button value
+  (deploy with a plain value, then set it with the lock button afterwards).
+* **New subsection «جواب، رفتن و برگشتن».** Streaming; the three-dot indicator (also after a tool finishes);
+  leaving, refreshing or closing mid-answer (the turn runs on, is saved, the pane re-reads about every 2.5 s);
+  the conversation created before the first message and the words returned to the box if the message never
+  arrived; a second message while one is being answered waits (typing works, Send does not); the **3 minute**
+  turn limit and the restart message.
+* **Limits:** 90 s per model request and 45 s of silence; the "what reaches the provider" line says lock-button
+  values do not; the "never" list's secret bullet is rewritten; the drawer's history line says an empty
+  conversation is not listed.
+* **The honesty note** under «تست مدل عامل», and both README paragraphs, no longer say nothing ever met a real
+  model. `progress.md` records that the owner ran the agent-model test on production with a free OpenRouter model
+  (6/6) and that the read-only assistant answered live. They now say that, and that the write tools, streamed
+  answers and the lock button have only run against scripted fakes.
+
+## Tests
+
+`AssistantGuideTests` now pins, from the code: the secret lifetime (`AgentSecretHandles.Lifetime`), the
+per-person cap (`InMemoryAgentSecretVault.MaxPerPerson`), the name and value sizes
+(`AgentSecretService.MaxNameLength` and `MaxValueLength`) and the turn limit
+(`AgentConversationService.DefaultTurnDeadline`), on top of the earlier daily default, call ceiling, plan
+lifetime, message, history and list sizes and the bench's 6 prompts and 9 tools. It also asserts the two new
+sub-headings and **three** tables now (tools by kind, result words, consent), and that no pipe syntax leaks. The
+render test is renamed `..._with_all_three_of_its_tables`.
+
+Mutation check (doc-only, no rebuild): the secret lifetime changed from 30 to 45, the turn limit from 3 to 5, and
+the tools table's separator row blanked made `The_guides_figures...` and `...renders_the_assistant_guide...`
+fail (2 of 3; the HelpMap test is unaffected, as it should be). Restored with `git checkout`.
+
+```
+export MSBUILDDISABLENODEREUSE=1
+dotnet build Harbora.slnx --nologo -v q -p:UseSharedCompilation=false   -> BUILD_EXIT=0, 28 Warning(s) (package warnings), 0 CS/RZ/CA warnings, 0 Error(s)
+guide + HelpMap + learning classes (AssistantGuideTests, LearningCensusTests, LearningLibraryTests, LearnHttpTests, LearningCentreDockerImageTests) -> Passed! 30/30
+dotnet test  Harbora.slnx --nologo -v q --no-build                       -> EXIT=0
+Skipped! - Failed: 0, Passed:    0, Skipped: 109, Total:  109 - Harbora.Postgres.Tests.dll
+Passed!  - Failed: 0, Passed:  500, Skipped:  17, Total:  517 - Harbora.NodeAgent.Tests.dll
+Passed!  - Failed: 0, Passed:   15, Skipped:   0, Total:   15 - Harbora.NodeIngress.Tests.dll
+Passed!  - Failed: 0, Passed: 7304, Skipped:   0, Total: 7304 - Harbora.Tests.dll
+grep -c "Harbora.Tests.dll" /tmp/test-r6-assistant-docs.log -> 2 ; grep -c MSB3030 -> 0
+```
+
+`Harbora.Tests` 7304 = F's report figure for master (7301) + this branch's 3; I did not run master separately.
+
+## Not verified / concerns
+
+1. **Nothing here ran against a real model, Docker or a browser.** The guide is written from the reports and the
+   code; label wording is from the Vue and Razor sources. The sentence "the first read-only release ran on a real
+   free model, 6/6" comes from the coordinator's ledger (`progress.md`), not from anything I saw. **Re-word the
+   guide's note and both README paragraphs after the write tools are deployed and tried**, since they say those
+   parts have not met a real provider.
+2. **Very short secrets are not masked on the way back.** D's scrub replaces held values of 4 characters or more
+   (the floor `AssistantRedaction` uses). The lock button accepts shorter ones; the model still only receives
+   the handle, but a tool that echoed a 1 to 3 character value would not be scrubbed. The guide says the model
+   never sees the value; that holds for what the pane sends, not for such an echo (no tool echoes values today).
+3. **A process that dies mid-answer** leaves the conversation "answering" for up to 3.5 minutes (deadline plus
+   grace), and a message sent then is refused. The guide only says what the person sees when the panel restarts
+   cleanly (the answer stops with a message). This is D's concern 2.
+4. **The guide does not describe `deploy_template`'s stricter access** (a project-scoped member is refused,
+   because a template always creates a new project) or the audit entries the tools write; both are in F's report.
+5. Still true from before: no screen undoes «دیگر نپرس» (API only), and the Persian copy has had no native editor.
