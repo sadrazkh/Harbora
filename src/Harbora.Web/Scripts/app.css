@@ -177,7 +177,7 @@ html[dir] .assistant-drawer.is-open { visibility: visible; transform: none; tran
    instead: discs where text-security is supported, and blurred beyond reading where it is not. */
 .assistant-secret-mask { -webkit-text-security: disc; text-security: disc; }
 @supports not (-webkit-text-security: disc) {
-  .assistant-secret-mask { color: transparent; text-shadow: 0 0 .5em rgb(var(--text)); }
+  .assistant-secret-mask { color: transparent; caret-color: rgb(var(--text)); text-shadow: 0 0 .5em rgb(var(--text)); }
 }
 
 /* The assistant's "thinking" dots (AssistantPanel.vue): three dots rising in turn, the way chat apps

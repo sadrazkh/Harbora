@@ -300,6 +300,10 @@ test('the lock form is not a login form: no password field, no form submit, pass
     assert.ok(input.includes('type="text"'), 'a text field');
   }
   assert.ok(/assistant-secret-mask/.test(form), 'masked with CSS');
+  // The class alone hides nothing: deleting its rule would leave the secret readable with the markup
+  // assertions above still green.
+  const css = readFileSync(new URL('../app.css', import.meta.url), 'utf8');
+  assert.match(css, /\.assistant-secret-mask\s*\{[^}]*text-security:\s*disc/, 'app.css masks the field');
 });
 
 test('a draft that opens with a placeholder takes the direction of the words around it', async () => {

@@ -330,6 +330,7 @@ async function retryLoad() {
 }
 
 onUnmounted(() => {
+  secretForm.close();
   document.removeEventListener('harbora:assistant-opened', onOpened);
   document.removeEventListener('harbora:assistant-closed', onClosed);
   session.dispose();
