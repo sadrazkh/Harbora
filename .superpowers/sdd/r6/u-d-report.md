@@ -274,3 +274,68 @@ service and the controller log nothing about a secret, and the app has no reques
    held but is not redacted.
 7. **Two separate panel processes would not share the vault.** One panel container runs today, so that is
    fine; it would matter only if the panel were scaled out.
+
+## 8. Hardening pass (`9f0d795`)
+
+Rebased onto master `707f896` (C's streaming client) first. `git merge-tree` was clean and so was the rebase.
+
+1. **Expiry/eviction window.** `RunClaimedAsync` takes the person's held values once at the start
+   (`RunLedger.KnownAtStart`). At the end, the results, the outcome messages and the fallback all use those
+   values together with the ones held at that point (`KnownSecrets(plan, ledger)`). So a handle that lapses
+   or is evicted while its step runs is still scrubbed. Reject and expiry, where no step runs, use the
+   current values.
+2. **History scrubbed by value.** Before the stored history goes back to the model, user messages are
+   scrubbed of the person's held values, by value only (`AgentSecretScrub.ByValue`). A value typed plainly
+   beside its handle is never sent, and the handle reaches the model intact.
+3. **Display scrubbing is by value only.** This covers tool summaries, tool events, plan results and errors,
+   and card text. Shape rules had turned `{{secret:…}}` into `{{secret:[redacted]`. The new
+   `AgentSecretScrub.ByValue` replaces values of 4 characters or more with `[redacted]` — the same floor and
+   mask `AssistantRedaction` uses. Tool results bound for the model still go through `AgentJson.ForModel`,
+   which applies values and then shapes, as before this feature.
+4. **Card text is scrubbed too.** Validation title, detail and warnings (both languages) and the "Proposed as
+   step N" summary now pass the held-value scrub. The scrubbed title is the one written into the stored plan
+   and the model's "Added as step" note.
+5. **`FinalizePartialAsync` never throws.** If the partial save fails, it logs, drops the failed row from the
+   tracker (`Forget`) and still emits the closing `message`, so the deadline or shutdown error that was on its
+   way out is what the person is told. The streamed-answer save now does the same `Forget` when it fails.
+   Either way no later save retries the failed row, and the turn's mark can be cleared.
+6. **Fail closed, and no value in a bound request.**
+   - `IAgentSecretValues` is now a **required** constructor parameter of `AgentConversationService` (before
+     the optional `IHostApplicationLifetime`) and of `AgentPlanService` (last). Any direct construction must
+     pass it; this repo's two Postgres-lane tests now pass a `NoSecrets` stub.
+   - `POST /assistant/secrets` binds `Harbora.Web.Controllers.AssistantSecretBody`, whose `ToString()` prints
+     the name and `••••••`, never the value, and maps it to the contract record only to call the service.
+   - The action carries `[RequestSizeLimit(32 * 1024)]`.
+
+**Tests (7 new, all passing):**
+
+| File | New tests |
+|---|---|
+| `tests/Harbora.Tests/Agent/AgentSecretTests.cs` (+6) | a value whose handle lapses mid-step is still scrubbed from the outcome, the stored results and the messages; a value typed beside its handle never reaches the model while the handle survives unmangled; lines a person reads are scrubbed by value only (exact summary `Uses {handle}, which is [redacted]`, in the event and the stored row); a card whose validation put the value in its title, detail and warnings shows none of it, and neither do the stored plan, the messages or the model; the bound request body never prints its value; the endpoint's limit is 32 KB, read through `IRequestSizeLimitMetadata` |
+| `tests/Harbora.Tests/Agent/AgentTurnTests.cs` (+1) | a partial answer whose save fails still closes its bubble, the person is told the deadline (not the generic error), and the mark is cleared |
+
+**What could not be shown here:** `TestServer` does not enforce the request-size limit (it does not implement
+`IHttpMaxRequestBodySizeFeature`), so the 32 KB cap is pinned by its attribute metadata, not exercised over
+HTTP; Kestrel enforces it in production.
+
+**Mutation check:** I put back three old behaviours one at a time: no values captured at the start of a run,
+shape rules in the display scrub, and a rethrow in `FinalizePartialAsync`. Each made one of the new tests fail
+(the lapsed-handle test, the summary test and the partial-save test). All three were restored and rebuilt
+before the run below.
+
+**Commands and output:**
+- `dotnet build Harbora.slnx --nologo -v q -p:UseSharedCompilation=false` → `BUILD_EXIT=0`, `28 Warning(s)`,
+  `0 Error(s)`.
+- Focused (agent tests, assistant HTTP tests, `MigrationConsistencyTests`) →
+  `Passed!  - Failed:     0, Passed:   293, Skipped:     0, Total:   293 - Harbora.Tests.dll`.
+- Full: `dotnet test Harbora.slnx --nologo -v q --no-build` → `EXIT=0`:
+  ```
+  Skipped! - Failed:     0, Passed:     0, Skipped:   109, Total:   109 - Harbora.Postgres.Tests.dll (net10.0)
+  Passed!  - Failed:     0, Passed:   500, Skipped:    17, Total:   517 - Harbora.NodeAgent.Tests.dll (net10.0)
+  Passed!  - Failed:     0, Passed:    15, Skipped:     0, Total:    15 - Harbora.NodeIngress.Tests.dll (net10.0)
+  Passed!  - Failed:     0, Passed:  7077, Skipped:     0, Total:  7077 - Harbora.Tests.dll (net10.0)
+  ```
+  `grep -c "Harbora.Tests.dll"` → 2.
+
+**Note for F:** if any of F's tests construct `AgentPlanService` or `AgentConversationService` directly, they
+now need an `IAgentSecretValues` argument — the vault itself, or an empty stub.
