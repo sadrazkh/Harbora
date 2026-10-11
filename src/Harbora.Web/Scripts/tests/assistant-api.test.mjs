@@ -347,3 +347,42 @@ test('isGuid accepts the server\'s ids and nothing else', () => {
   assert.equal(isGuid(''), false);
   assert.equal(isGuid(null), false);
 });
+
+// ---- round six U: create-first, delta, still answering -------------------------------------------
+
+test('createConversation posts to /assistant/conversations with the token and returns the summary', async () => {
+  const summary = { id: '0199d0c4-6a1e-7000-8000-0000000000c1', title: '', updatedAt: '2026-10-11T10:00:00Z' };
+  const { calls, fetch } = recordingFetch(() => jsonResponse(summary));
+  const created = await createAssistantApi({ fetch, csrf: CSRF }).createConversation();
+  assert.deepEqual(created, summary);
+  assert.equal(calls[0].url, '/assistant/conversations');
+  assert.equal(calls[0].init.method, 'POST');
+  assert.equal(calls[0].init.headers['X-CSRF-TOKEN'], CSRF);
+});
+
+test('delta events reach the pane in order, before the message that completes them', async () => {
+  const { fetch } = recordingFetch(() => sseResponse([
+    'event: started\ndata: {"conversationId":"c1"}\n\n',
+    'event: delta\ndata: {"text":"سلام"}\n\n',
+    'event: delta\ndata: {"text":" دنیا"}\n\n',
+    'event: message\ndata: {"id":"m","role":"assistant","text":"سلام دنیا"}\n\n',
+    done,
+  ]));
+  const { events } = await sendCollect(createAssistantApi({ fetch }), { conversationId: null, text: 'x', page: null });
+  assert.deepEqual(events.map(([n, d]) => (n === 'delta' ? `delta:${d.text}` : n)), ['started', 'delta:سلام', 'delta: دنیا', 'message', 'done']);
+});
+
+test('"still answering" (409) is handed back as a notice, never reported as an error', async () => {
+  const { fetch } = recordingFetch(() => jsonResponse({ error: 'turn_in_progress', messageEn: 'Still answering the previous message.', messageFa: 'هنوز در حال پاسخ به پیام قبلی است.' }, 409));
+  const { events, outcome } = await sendCollect(createAssistantApi({ fetch }), { conversationId: 'c1', text: 'x', page: null });
+  assert.deepEqual(events, []);
+  assert.deepEqual(outcome, { completed: false, busy: true, notice: { messageEn: 'Still answering the previous message.', messageFa: 'هنوز در حال پاسخ به پیام قبلی است.' } });
+});
+
+test('a 409 with no words of its own gets the pane\'s "still answering", not the plan wording', async () => {
+  const { fetch } = recordingFetch(() => new Response('', { status: 409 }));
+  const { outcome } = await sendCollect(createAssistantApi({ fetch }), { conversationId: 'c1', text: 'x', page: null });
+  assert.equal(outcome.busy, true);
+  assert.match(outcome.notice.messageEn, /still answering your previous message/);
+  assert.doesNotMatch(outcome.notice.messageEn, /already have run/);
+});

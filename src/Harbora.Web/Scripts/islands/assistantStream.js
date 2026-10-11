@@ -8,7 +8,7 @@
 // arrive split across two reads, and every one of those splits has to come out the same as no split.
 
 /** The event names the server sends, from `AgentStreamEvents`. Anything else is ignored. */
-export const ASSISTANT_EVENTS = ['started', 'tool', 'message', 'plan', 'executed', 'error', 'done'];
+export const ASSISTANT_EVENTS = ['started', 'tool', 'delta', 'message', 'plan', 'executed', 'error', 'done'];
 
 /**
  * @typedef {{ event: string, data: string, id: string }} SseFrame

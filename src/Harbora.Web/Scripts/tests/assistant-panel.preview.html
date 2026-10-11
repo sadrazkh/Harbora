@@ -12,6 +12,10 @@
     ?scenario=expired  approving the stored plan is refused as expired (use with ?history)
     ?scenario=refuse   approving is refused for step 4, which stays highlighted (use with ?history)
     ?scenario=locked   every request answers 403 feature_not_enabled
+    ?scenario=resume   the stored conversation is still being answered: dots, re-read until done (with ?history)
+    ?scenario=busy     sending answers 409 "still answering" (with ?history)
+    ?scenario=nocreate POST /assistant/conversations does not exist yet (405): the pane sends to `new`
+    ?keep              keep localStorage across loads (reload mid-answer to see the outbox at work)
     ?dark              dark theme
 -->
 <html lang="fa" dir="rtl" class="h-full">
@@ -115,6 +119,8 @@ const result = {
   ],
 };
 
+const CREATED_ID = '0199d0c4-6a1e-7000-8000-0000000000c3';
+let resumeReads = 0;
 const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -142,9 +148,24 @@ window.fetch = async (url, init = {}) => {
   await sleep(250);
   if (scenario === 'locked') return json({ error: 'feature_not_enabled', feature: 'assistant', state: 'locked' }, 403);
   if (path === '/assistant/status') return json(status);
+  if (path === '/assistant/conversations' && method === 'POST') {
+    if (scenario === 'nocreate') return new Response('', { status: 405 });
+    return json({ id: CREATED_ID, title: '', updatedAt: new Date().toISOString() });
+  }
   if (path === '/assistant/conversations') return json(conversations);
   if (path.startsWith('/assistant/conversations/') && method === 'GET') {
-    return path.endsWith(conversations[0].id) ? json(conversation) : json({ id: conversations[1].id, title: conversations[1].title, messages: [], pendingPlan: null });
+    if (path.endsWith(conversations[0].id)) {
+      // ?scenario=resume: still being answered for the first reads, then the finished conversation.
+      if (scenario === 'resume') {
+        resumeReads++;
+        const answer = { id: 'a-resume', role: 'assistant', text: fa ? 'دیتابیس shop-db آماده است.' : 'shop-db is ready.', toolName: null, createdAt: new Date().toISOString() };
+        const question = { id: 'u-resume', role: 'user', text: fa ? 'وضعیت shop-db چیست؟' : 'How is shop-db?', toolName: null, createdAt: new Date().toISOString() };
+        return json({ id: conversations[0].id, title: conversations[0].title, pendingPlan: null,
+          messages: resumeReads < 3 ? [question] : [question, answer], inProgress: resumeReads < 3 });
+      }
+      return json(conversation);
+    }
+    return json({ id: path.split('/').pop(), title: conversations[1].title, messages: [], pendingPlan: null, inProgress: false });
   }
   // The refusals AssistantController sends for a late or invalid approve: 4xx with the server's words.
   if (path.endsWith('/approve') && scenario === 'expired') {
@@ -155,9 +176,15 @@ window.fetch = async (url, init = {}) => {
   }
   if (path.endsWith('/approve')) return json(result);
   if (path.endsWith('/reject')) return new Response(null, { status: 204 });
+  if (path.endsWith('/messages') && scenario === 'busy') {
+    return json({ error: 'turn_in_progress', messageEn: 'Still answering your previous message.', messageFa: 'هنوز در حال پاسخ به پیام قبلی شماست.' }, 409);
+  }
   if (path.endsWith('/messages')) {
+    const answer = fa ? 'shop در حال اجراست و `2` نسخه دارد.\nهنوز استقراری ثبت نشده است.' : 'shop is running with `2` replicas.\nNo deployment has been recorded yet.';
+    // The answer's text as the model writes it: a few words per delta, then the whole message.
+    const deltas = answer.match(/\S+\s*/g).map((piece) => [120, 'delta', { text: piece }]);
     const frames = [
-      [100, 'started', { conversationId: '0199d0c4-6a1e-7000-8000-0000000000c3' }],
+      [900, 'started', { conversationId: path.includes('/new/') ? CREATED_ID : path.split('/').at(-2) }],
       [300, 'tool', { name: 'get_app', kind: 'read', state: 'running', summaryEn: null, summaryFa: null }],
       [900, 'tool', { name: 'get_app', kind: 'read', state: 'done', summaryEn: 'Read shop: running, 2 replicas', summaryFa: 'shop خوانده شد: در حال اجرا، ۲ نسخه' }],
       [300, 'tool', { name: 'get_deployment', kind: 'read', state: 'running', summaryEn: null, summaryFa: null }],
@@ -165,8 +192,9 @@ window.fetch = async (url, init = {}) => {
     if (scenario === 'cut') return stream(frames);
     return stream([...frames,
       [900, 'tool', { name: 'get_deployment', kind: 'read', state: 'failed', summaryEn: 'No deployments yet', summaryFa: 'هنوز استقراری نیست' }],
-      [400, 'message', { id: 'm9', role: 'assistant', text: fa ? 'shop در حال اجراست و `2` نسخه دارد.\nهنوز استقراری ثبت نشده است.' : 'shop is running with `2` replicas.\nNo deployment has been recorded yet.', toolName: null, createdAt: new Date().toISOString() }],
-      [200, 'done', { conversationId: '0199d0c4-6a1e-7000-8000-0000000000c3', remainingToday: 286 }],
+      ...deltas,
+      [200, 'message', { id: 'm9', role: 'assistant', text: answer, toolName: null, createdAt: new Date().toISOString() }],
+      [200, 'done', { conversationId: path.includes('/new/') ? CREATED_ID : path.split('/').at(-2), remainingToday: 286 }],
     ]);
   }
   return json({}, 404);

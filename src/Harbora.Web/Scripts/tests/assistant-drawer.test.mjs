@@ -305,3 +305,17 @@ test('a link opened elsewhere (Ctrl+click, middle click) does not close the draw
   w.link.click({ button: 1 });
   assert.equal(w.drawer.isOpen(), true);
 });
+
+test('closing tells a mounted island, so it can stop re-reading; before mounting there is nobody to tell', async () => {
+  const w = wiring();
+  w.topbar.click(); // open: mounts
+  await settle();
+  w.topbar.click(); // close
+  await settle();
+  assert.equal(w.doc.dispatched.at(-1).type, 'harbora:assistant-closed');
+
+  const fresh = wiring({ stored: { [STORAGE_OPEN]: '0' } });
+  fresh.key({ key: 'Escape' });
+  await settle();
+  assert.equal(fresh.doc.dispatched.length, 0);
+});

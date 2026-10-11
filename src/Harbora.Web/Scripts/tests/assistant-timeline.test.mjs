@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createTimeline, loadConversation, addUserMessage, applyStreamEvent, applyPlanResult,
-  markPlanRejected, settleTurn, applyApproveRefusal,
+  markPlanRejected, settleTurn, applyApproveRefusal, isThinking, withdrawUserMessage,
 } from '../islands/assistantTimeline.js';
 
 // The conversation as the pane draws it: one list of items fed by GET /assistant/conversations/{id}
@@ -253,4 +253,108 @@ test('a result after a refusal clears the refusal from the card', () => {
   assert.equal(state.items[0].error, null);
   assert.equal(state.items[0].errorStep, null);
   assert.equal(state.items[0].resulted, true);
+});
+
+// ---- streamed text (delta) and the typing indicator -----------------------------------------------
+
+test('deltas build one live bubble, in order, and the message replaces it with the whole text', () => {
+  const state = createTimeline();
+  addUserMessage(state, 'how is shop?');
+  for (const piece of ['shop ', 'is ', 'running']) applyStreamEvent(state, 'delta', { text: piece });
+  assert.equal(state.items.length, 2);
+  assert.deepEqual({ kind: state.items[1].kind, text: state.items[1].text, live: state.items[1].live }, { kind: 'assistant', text: 'shop is running', live: true });
+  const key = state.items[1].key;
+  applyStreamEvent(state, 'message', { id: 'm1', role: 'assistant', text: 'shop is running with 2 replicas.' });
+  assert.equal(state.items.length, 2, 'replaced, not drawn twice');
+  assert.equal(state.items[1].text, 'shop is running with 2 replicas.');
+  assert.equal(state.items[1].live, false);
+  assert.equal(state.items[1].key, key, 'the same bubble, so it does not jump');
+});
+
+test('a delta carries text only: HTML in it stays characters for the formatter', () => {
+  const state = createTimeline();
+  addUserMessage(state, 'x');
+  applyStreamEvent(state, 'delta', { text: '<img src=x onerror=alert(1)>' });
+  assert.equal(state.items[1].text, '<img src=x onerror=alert(1)>');
+});
+
+test('empty or malformed deltas are ignored', () => {
+  const state = createTimeline();
+  addUserMessage(state, 'x');
+  applyStreamEvent(state, 'delta', { text: '' });
+  applyStreamEvent(state, 'delta', { text: 42 });
+  applyStreamEvent(state, 'delta', {});
+  assert.equal(state.items.length, 1);
+});
+
+test('text after a tool line starts a new bubble rather than joining the one before the tool', () => {
+  const state = createTimeline();
+  addUserMessage(state, 'x');
+  applyStreamEvent(state, 'delta', { text: 'Let me look.' });
+  applyStreamEvent(state, 'message', { id: 'm1', role: 'assistant', text: 'Let me look.' });
+  applyStreamEvent(state, 'tool', { name: 'get_app', state: 'running' });
+  applyStreamEvent(state, 'tool', { name: 'get_app', state: 'done' });
+  applyStreamEvent(state, 'delta', { text: 'It is fine.' });
+  assert.deepEqual(state.items.map((i) => [i.kind, i.text ?? i.name]), [
+    ['user', 'x'], ['assistant', 'Let me look.'], ['tool', 'get_app'], ['assistant', 'It is fine.'],
+  ]);
+});
+
+test('a bubble the stream abandoned keeps what arrived and says the rest did not', () => {
+  const state = createTimeline();
+  addUserMessage(state, 'x');
+  applyStreamEvent(state, 'delta', { text: 'shop is' });
+  settleTurn(state);
+  assert.equal(state.items[1].text, 'shop is');
+  assert.equal(state.items[1].live, false);
+  assert.equal(state.items[1].cut, true);
+});
+
+test('an error after streamed text marks that text as cut off, and a bubble of only spaces goes', () => {
+  const state = createTimeline();
+  addUserMessage(state, 'x');
+  applyStreamEvent(state, 'delta', { text: 'half an ans' });
+  applyStreamEvent(state, 'error', { messageEn: 'provider failed', messageFa: 'x' });
+  assert.equal(state.items[1].cut, true);
+
+  const blank = createTimeline();
+  addUserMessage(blank, 'x');
+  applyStreamEvent(blank, 'delta', { text: '  \n ' });
+  applyStreamEvent(blank, 'tool', { name: 'get_app', state: 'running' });
+  assert.deepEqual(blank.items.map((i) => i.kind), ['user', 'tool']);
+});
+
+test('a confirmed answer is not marked cut when the turn ends', () => {
+  const state = createTimeline();
+  addUserMessage(state, 'x');
+  applyStreamEvent(state, 'delta', { text: 'done' });
+  applyStreamEvent(state, 'message', { id: 'm', role: 'assistant', text: 'done.' });
+  applyStreamEvent(state, 'done', { conversationId: 'c', remainingToday: 1 });
+  assert.equal(state.items[1].cut, undefined);
+});
+
+test('the dots show only while a sent turn has nothing on screen, or a reloaded one is still answering', () => {
+  const state = createTimeline();
+  assert.equal(isThinking(state), false, 'idle');
+  addUserMessage(state, 'x');
+  state.streaming = true;
+  assert.equal(isThinking(state), true, 'sent, nothing yet');
+  applyStreamEvent(state, 'tool', { name: 'get_app', state: 'running' });
+  assert.equal(isThinking(state), false, 'a running tool has its own spinner');
+  applyStreamEvent(state, 'tool', { name: 'get_app', state: 'failed' });
+  assert.equal(isThinking(state), true, 'after a tool, until the next output');
+  applyStreamEvent(state, 'delta', { text: 'a' });
+  assert.equal(isThinking(state), false, 'text is arriving');
+  state.streaming = false;
+  assert.equal(isThinking(state), false);
+  state.resuming = true;
+  assert.equal(isThinking(state), true, 'a conversation opened mid-answer');
+});
+
+test('withdrawing a refused message removes exactly that bubble', () => {
+  const state = createTimeline();
+  addUserMessage(state, 'one');
+  const key = addUserMessage(state, 'two');
+  withdrawUserMessage(state, key);
+  assert.deepEqual(state.items.map((i) => i.text), ['one']);
 });

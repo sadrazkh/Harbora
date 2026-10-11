@@ -1,20 +1,20 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue';
 import {
-  ArrowUp, Check, ChevronLeft, ChevronRight, CircleHelp, History, LoaderCircle, MessageSquare,
+  ArrowUp, Check, ChevronLeft, ChevronRight, CircleHelp, History, Info, LoaderCircle, MessageSquare,
   Plus, Sparkles, TriangleAlert, Wrench, X,
 } from 'lucide';
 import { AssistantIcon } from './assistantIcon';
 import AssistantText from './AssistantText.vue';
 import AssistantPlanCard from './AssistantPlanCard.vue';
 import AssistantResultCard from './AssistantResultCard.vue';
-import { createAssistantApi, buildPageContext, parseDeclaredContext, isGuid, createTurnTracker } from './assistantApi.js';
+import { createAssistantApi, buildPageContext, parseDeclaredContext } from './assistantApi.js';
 import { textDirection, firstStrongDirection } from './assistantFormat.js';
 import {
-  createTimeline, loadConversation, addUserMessage, applyStreamEvent, applyPlanResult,
-  applyApproveRefusal, markPlanRejected, settleTurn,
+  createTimeline, applyStreamEvent, applyPlanResult, applyApproveRefusal, markPlanRejected, isThinking,
 } from './assistantTimeline.js';
 import { checkPlanForm, buildApproveBody } from './assistantPlan.js';
+import { createAssistantSession } from './assistantSession.js';
 import { createAssistantPrefs } from '../assistantDrawer.js';
 
 // The assistant pane: status, conversations, the message stream, plan and result cards.
@@ -22,8 +22,9 @@ import { createAssistantPrefs } from '../assistantDrawer.js';
 // Everything with a rule in it lives in plain modules beside this file, tested by node --test:
 // the SSE parser (assistantStream.js), the HTTP layer and its error words (assistantApi.js), the
 // conversation reducer (assistantTimeline.js), the plan card's consent rules (assistantPlan.js) and
-// the message formatter (assistantFormat.js). This file wires them to markup. The drawer around it,
-// its toggle and Ctrl/Cmd+J belong to ../assistantDrawer.js.
+// the message formatter (assistantFormat.js), and sending, streaming and coming back mid-answer
+// (assistantSession.js). This file wires them to markup. The drawer around it, its toggle and
+// Ctrl/Cmd+J belong to ../assistantDrawer.js.
 
 const props = defineProps<{ csrf: string; lang: string; context?: string; autofocus?: boolean }>();
 const emit = defineEmits<{ (e: 'close'): void }>();
@@ -40,9 +41,20 @@ const statusError = ref<{ messageEn: string; messageFa: string } | null>(null);
 const statusLoading = ref(false);
 
 const timeline = reactive(createTimeline());
-const streaming = ref(false);
-const turns = createTurnTracker();
-const loadingConversation = ref(false);
+const session = createAssistantSession({
+  api,
+  prefs,
+  timeline,
+  pageContext: () => buildPageContext(declared, location.pathname),
+  onChange: (what) => {
+    scrollToEnd(what === 'sent' || what === 'opened');
+    // A conversation that finished while it was being re-read: today's count has moved.
+    if (what === 'settled') refreshStatus();
+  },
+});
+const thinking = computed(() => isThinking(timeline));
+// The composer waits while a turn is streaming here or still being answered after a reload.
+const answering = computed(() => timeline.streaming || timeline.resuming);
 
 const view = ref<'chat' | 'history'>('chat');
 const conversations = ref<any[]>([]);
@@ -62,7 +74,7 @@ const remaining = computed<number | null | undefined>(() =>
   timeline.remainingToday !== undefined ? timeline.remainingToday : status.value?.remainingToday);
 const unavailable = computed(() => status.value?.available === false);
 const outOfRequests = computed(() => remaining.value === 0);
-const canSend = computed(() => !streaming.value && !loadingConversation.value && !unavailable.value
+const canSend = computed(() => !answering.value && !timeline.loading && !unavailable.value
   && !outOfRequests.value && draft.value.trim().length > 0);
 
 const unavailableReason = computed(() => {
@@ -108,48 +120,28 @@ async function showHistory() {
   }
 }
 
-/**
- * Abandons the turn in flight, if any: its stream is cancelled and whatever still arrives for it is
- * dropped, so it cannot write into the conversation that replaces it on screen. The server keeps
- * what it had already saved; the conversation list still has it.
- */
-function abandonTurn() {
-  if (turns.abort()) {
-    settleTurn(timeline);
-    streaming.value = false;
+async function openConversation(id: string) {
+  const outcome = await session.open(id);
+  if (outcome.error) {
+    if (view.value === 'history') conversationsError.value = words(outcome.error);
+    else applyStreamEvent(timeline, 'error', words(outcome.error));
+    return;
   }
-}
-
-async function openConversation(id: string, { quietIfGone = false } = {}) {
-  if (!isGuid(id)) { prefs.setConversationId(null); return; }
-  abandonTurn();
-  loadingConversation.value = true;
-  try {
-    loadConversation(timeline, await api.conversation(id));
-    prefs.setConversationId(id);
-    view.value = 'chat';
-    scrollToEnd(true);
-  } catch (e: any) {
-    // The remembered conversation may belong to another workspace or user on this browser, or have
-    // been removed: start fresh rather than greet the person with an error they did not cause.
-    if (quietIfGone && (e?.status === 404 || e?.status === 403)) {
-      prefs.setConversationId(null);
-    } else if (view.value === 'history') {
-      conversationsError.value = words(e);
-    } else {
-      applyStreamEvent(timeline, 'error', words(e));
-    }
-  } finally {
-    loadingConversation.value = false;
-  }
+  view.value = 'chat';
+  restoreDraft(outcome.restoreDraft);
 }
 
 function newConversation() {
-  abandonTurn();
-  loadConversation(timeline, null);
-  prefs.setConversationId(null);
+  session.startNew();
   view.value = 'chat';
   focusComposer();
+}
+
+/** Words that were not taken go back in the composer — unless the person has started typing again. */
+function restoreDraft(text?: string | null) {
+  if (!text || draft.value.trim()) return;
+  draft.value = text;
+  nextTick(resizeComposer);
 }
 
 function formatDate(value: string) {
@@ -165,36 +157,10 @@ async function send() {
   if (!canSend.value || !text) return;
   draft.value = '';
   resizeComposer();
-  addUserMessage(timeline, text);
-  const turn = turns.begin();
-  streaming.value = true;
-  scrollToEnd(true);
-
-  try {
-    await api.send({
-      conversationId: timeline.conversationId,
-      text,
-      page: buildPageContext(declared, location.pathname),
-      signal: turn.signal,
-      onEvent: (name: string, data: any) => {
-        if (!turn.isCurrent()) return; // abandoned: the conversation on screen is another one now
-        applyStreamEvent(timeline, name, data);
-        if ((name === 'started' || name === 'done') && timeline.conversationId) prefs.setConversationId(timeline.conversationId);
-        scrollToEnd();
-      },
-    });
-  } finally {
-    // Whatever ended the turn — `done`, an error already shown, a cut connection — a tool line still
-    // running gets no more news, and stops claiming it is running. An abandoned turn was settled by
-    // abandonTurn, and the conversation on screen now is not its own.
-    if (turn.isCurrent()) {
-      turns.end(turn);
-      settleTurn(timeline);
-      streaming.value = false;
-      scrollToEnd();
-      focusComposer();
-    }
-  }
+  const outcome = await session.send(text);
+  restoreDraft(outcome.restoreDraft);
+  scrollToEnd();
+  focusComposer();
 }
 
 function onComposerKey(event: KeyboardEvent) {
@@ -290,20 +256,29 @@ function scrollToEnd(force = false) {
 
 function onOpened(event: Event) {
   refreshStatus();
+  session.wake();
   if ((event as CustomEvent).detail?.focus) focusComposer();
 }
 
-onMounted(() => {
+function onClosed() {
+  session.pause();
+}
+
+onMounted(async () => {
   refreshStatus();
-  const remembered = prefs.conversationId();
-  if (remembered) openConversation(remembered, { quietIfGone: true });
-  if (props.autofocus) focusComposer();
   document.addEventListener('harbora:assistant-opened', onOpened);
+  document.addEventListener('harbora:assistant-closed', onClosed);
+  if (props.autofocus) focusComposer();
+  // The remembered conversation (the person's own message shows at once, and a turn still being
+  // answered is followed to its end), and any words that were on their way when the page went.
+  const restored = await session.restore();
+  restoreDraft(restored.restoreDraft);
 });
 
 onUnmounted(() => {
   document.removeEventListener('harbora:assistant-opened', onOpened);
-  turns.abort();
+  document.removeEventListener('harbora:assistant-closed', onClosed);
+  session.dispose();
 });
 
 const suggestions = fa
@@ -378,7 +353,7 @@ const Back = fa ? ChevronRight : ChevronLeft;
 
     <!-- The conversation -->
     <div v-else ref="scroller" class="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-4 py-4"
-         role="log" aria-live="polite" :aria-busy="streaming ? 'true' : 'false'" data-assistant-log>
+         role="log" aria-live="polite" :aria-busy="answering ? 'true' : 'false'" data-assistant-log>
       <div v-if="unavailable" class="flex items-start gap-2 rounded-xl border border-warn/20 bg-warn-soft px-3 py-2.5 text-sm leading-5 text-warn" role="status" data-assistant-unavailable>
         <AssistantIcon :icon="TriangleAlert" :size="14" class="mt-0.5" /><span :dir="textDirection(unavailableReason)">{{ unavailableReason }}</span>
       </div>
@@ -386,7 +361,7 @@ const Back = fa ? ChevronRight : ChevronLeft;
         {{ t("Today's assistant requests for this workspace are used up.", 'سهمیهٔ درخواست‌های امروز دستیار برای این ورک‌اسپیس تمام شده است.') }}
       </div>
 
-      <p v-if="loadingConversation" class="flex items-center gap-2 text-sm text-ink-muted">
+      <p v-if="timeline.loading" class="flex items-center gap-2 text-sm text-ink-muted">
         <AssistantIcon :icon="LoaderCircle" spin />{{ t('Loading the conversation…', 'در حال بارگذاری گفت‌وگو…') }}
       </p>
 
@@ -398,12 +373,17 @@ const Back = fa ? ChevronRight : ChevronLeft;
       </div>
 
       <template v-for="item in timeline.items" :key="item.key">
-        <div v-if="item.kind === 'user'" class="flex justify-end" data-assistant-message="user">
-          <div class="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-ee-md bg-accent px-3 py-2 text-sm leading-6 text-white" :dir="textDirection(item.text)">{{ item.text }}</div>
+        <div v-if="item.kind === 'user'" class="flex flex-col items-end gap-1" data-assistant-message="user" :data-unsent="item.unsent ? 'true' : undefined">
+          <div class="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-ee-md px-3 py-2 text-sm leading-6"
+               :class="item.unsent ? 'border border-dashed border-line-strong bg-surface-2 text-ink' : 'bg-accent text-white'"
+               :dir="textDirection(item.text)">{{ item.text }}</div>
+          <span v-if="item.unsent" class="text-[11px] text-ink-muted">{{ t('Not sent', 'فرستاده نشد') }}</span>
         </div>
 
-        <div v-else-if="item.kind === 'assistant'" class="text-sm text-ink" data-assistant-message="assistant">
+        <!-- The model's text — the bubble being written while deltas arrive, then the whole answer. -->
+        <div v-else-if="item.kind === 'assistant'" class="text-sm text-ink" data-assistant-message="assistant" :data-live="item.live ? 'true' : undefined">
           <AssistantText :text="item.text" />
+          <p v-if="item.cut" class="mt-1 text-[11px] text-ink-muted" data-assistant-cut>{{ t('The rest of this answer did not arrive.', 'بقیهٔ این پاسخ نرسید.') }}</p>
         </div>
 
         <div v-else-if="item.kind === 'tool'" class="flex items-center gap-2 text-sm text-ink-muted" :data-tool-state="item.state">
@@ -419,7 +399,7 @@ const Back = fa ? ChevronRight : ChevronLeft;
           <pre class="mt-1.5 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-surface-2 p-2 font-mono text-[11px] leading-4 text-ink-muted" dir="ltr">{{ item.text }}</pre>
         </details>
 
-        <AssistantPlanCard v-else-if="item.kind === 'plan'" :item="item" :fa="fa" :locked="streaming"
+        <AssistantPlanCard v-else-if="item.kind === 'plan'" :item="item" :fa="fa" :locked="answering"
                            @run="runPlan(item)" @cancel="cancelPlan(item)" />
 
         <AssistantResultCard v-else-if="item.kind === 'result'" :result="item.result" :plan="item.plan" :fa="fa" />
@@ -430,13 +410,24 @@ const Back = fa ? ChevronRight : ChevronLeft;
         </div>
       </template>
 
-      <p v-if="streaming" class="flex items-center gap-2 text-sm text-ink-muted" data-assistant-working>
-        <AssistantIcon :icon="LoaderCircle" :size="14" spin />{{ t('The assistant is working…', 'دستیار در حال کار است…') }}
-      </p>
+      <!-- Thinking: three dots, as a bubble of its own, from the send until the first text or tool line,
+           after a tool until the next output, and for a conversation opened mid-answer. The words are
+           for screen readers; the dots stand still for anyone who asked for less motion. -->
+      <div v-if="thinking" class="flex" role="status" data-assistant-thinking>
+        <span class="assistant-dots inline-flex items-center gap-1 rounded-2xl rounded-es-md bg-surface-2 px-3 py-3" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </span>
+        <span class="sr-only">{{ t('Thinking…', 'در حال فکر کردن…') }}</span>
+      </div>
     </div>
 
     <!-- Composer -->
     <form class="border-t border-line p-3" @submit.prevent="send">
+      <!-- Information, not a failure: "still answering", "your last message is back in the box". -->
+      <p v-if="timeline.notice" class="mb-2 flex items-start gap-2 rounded-lg bg-surface-2 px-3 py-2 text-sm leading-5 text-ink-muted" role="status" data-assistant-notice
+         :dir="textDirection(say(timeline.notice))">
+        <AssistantIcon :icon="Info" :size="14" class="mt-0.5 shrink-0" /><span>{{ say(timeline.notice) }}</span>
+      </p>
       <div class="flex items-end gap-2 rounded-xl border border-line-strong bg-surface px-2 py-1.5 focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/15">
         <label for="assistant-composer" class="sr-only">{{ t('Message the assistant', 'پیام به دستیار') }}</label>
         <textarea id="assistant-composer" ref="composer" v-model="draft" rows="1" :dir="firstStrongDirection(draft, fa ? 'rtl' : 'ltr')"
@@ -446,7 +437,7 @@ const Back = fa ? ChevronRight : ChevronLeft;
                   data-assistant-composer @keydown="onComposerKey" @input="resizeComposer"></textarea>
         <button type="submit" class="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-accent text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
                 :disabled="!canSend" :aria-label="t('Send', 'ارسال')" :title="t('Send', 'ارسال')" data-assistant-send>
-          <AssistantIcon :icon="streaming ? LoaderCircle : ArrowUp" :spin="streaming" />
+          <AssistantIcon :icon="answering ? LoaderCircle : ArrowUp" :spin="answering" />
         </button>
       </div>
       <p class="mt-1.5 px-1 text-[11px] text-ink-muted">{{ t('Enter to send · Shift+Enter for a new line · Ctrl+J to open or close', 'Enter برای ارسال · Shift+Enter برای خط تازه · Ctrl+J برای باز و بسته کردن') }}</p>

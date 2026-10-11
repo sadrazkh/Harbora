@@ -172,6 +172,26 @@ html[dir] .assistant-drawer.is-open { visibility: visible; transform: none; tran
   .assistant-drawer, html[dir] .assistant-drawer.is-open { transition: none; }
 }
 
+/* The assistant's "thinking" dots (AssistantPanel.vue): three dots rising in turn, the way chat apps
+   show someone typing. With reduced motion they stand still at three shades, which still reads as
+   "…" without anything moving. */
+.assistant-dots > span {
+  width: .4rem; height: .4rem; border-radius: 9999px;
+  background: rgb(var(--text-muted));
+  animation: assistant-dot 1.2s ease-in-out infinite;
+}
+.assistant-dots > span:nth-child(2) { animation-delay: .15s; }
+.assistant-dots > span:nth-child(3) { animation-delay: .3s; }
+@keyframes assistant-dot {
+  0%, 60%, 100% { transform: translateY(0); opacity: .45; }
+  30%           { transform: translateY(-.25rem); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .assistant-dots > span { animation: none; }
+  .assistant-dots > span:nth-child(1) { opacity: .45; }
+  .assistant-dots > span:nth-child(2) { opacity: .7; }
+}
+
 /* Tiny inline spinner for loading buttons. */
 .btn-spin::before {
   content: ""; display: inline-block; width: .85em; height: .85em; margin-inline-end: .4em;

@@ -60,6 +60,10 @@ const MESSAGES = {
     'This is no longer possible — it may already have run, been cancelled or expired.',
     'این کار دیگر ممکن نیست — شاید قبلاً اجرا، لغو یا منقضی شده باشد.',
   ],
+  stillAnswering: [
+    'The assistant is still answering your previous message. Your new message was not sent; it is back in the box below.',
+    'دستیار هنوز در حال پاسخ به پیام قبلی شماست. پیام تازه‌تان فرستاده نشد؛ دوباره در کادر پایین است.',
+  ],
   paneFault: [
     'The pane failed while showing the answer — a fault in the panel, not in the assistant or your connection. Reload the page to see the conversation as it was saved.',
     'پنل هنگام نمایش پاسخ دچار خطا شد — ایراد از خود پنل است، نه از دستیار یا اتصال شما. صفحه را دوباره بارگذاری کنید تا گفت‌وگو را همان‌طور که ذخیره شده ببینید.',
@@ -147,6 +151,7 @@ async function describeFailure(response) {
   return {
     status: response.status,
     ...(fromServer ?? fallback),
+    fromServer: fromServer !== null,
     stepIndex: Number.isInteger(body?.stepIndex) ? body.stepIndex : null,
     // ProblemDetails has a numeric `status` too; only a plan status the contract names counts.
     planStatus: typeof body?.status === 'string' && PLAN_STATUSES.has(body.status) ? body.status : null,
@@ -260,6 +265,12 @@ export function createAssistantApi({ fetch: fetchImpl = globalThis.fetch?.bind(g
   return {
     status: () => json('GET', '/status'),
     conversations: () => json('GET', '/conversations'),
+    /**
+     * `POST /assistant/conversations` → AgentConversationSummaryView of a new, empty conversation —
+     * created before the first message so the pane knows (and remembers) its id before anything is
+     * sent. A reload at any moment after that finds the conversation again.
+     */
+    createConversation: () => json('POST', '/conversations'),
     conversation: (id) => json('GET', `/conversations/${encodeURIComponent(id)}`),
     approve: (planId, body) => json('POST', `/plans/${encodeURIComponent(planId)}/approve`, body),
     reject: (planId) => json('POST', `/plans/${encodeURIComponent(planId)}/reject`),
@@ -307,7 +318,13 @@ export function createAssistantApi({ fetch: fetchImpl = globalThis.fetch?.bind(g
       }
 
       if (!response.ok || response.type === 'opaqueredirect') {
-        const { messageEn, messageFa } = await describeFailure(response);
+        const { messageEn, messageFa, fromServer } = await describeFailure(response);
+        // 409: the conversation is still answering the previous message. Not a failure — the message
+        // was simply not taken — so it is handed back as a notice for the pane to show gently, not
+        // reported as an error.
+        if (response.status === 409) {
+          return { completed: false, busy: true, notice: fromServer ? { messageEn, messageFa } : words('stillAnswering') };
+        }
         report({ messageEn, messageFa });
         return { completed: false };
       }

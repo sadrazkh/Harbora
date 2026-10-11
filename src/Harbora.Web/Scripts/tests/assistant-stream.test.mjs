@@ -147,7 +147,7 @@ test('parseAssistantFrame returns the parsed JSON for every event the contract n
     const parsed = parseAssistantFrame({ event: name, data: '{"a":1}', id: '' });
     assert.deepEqual(parsed, { name, data: { a: 1 } });
   }
-  assert.deepEqual(ASSISTANT_EVENTS, ['started', 'tool', 'message', 'plan', 'executed', 'error', 'done']);
+  assert.deepEqual(ASSISTANT_EVENTS, ['started', 'tool', 'delta', 'message', 'plan', 'executed', 'error', 'done']);
 });
 
 test('unknown events are ignored rather than guessed at', () => {

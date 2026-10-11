@@ -4,7 +4,8 @@
 // the island hands in a `reactive()` proxy and Vue tracks the same mutations.
 //
 // Item kinds: user, assistant, tool (a live `tool` event), tool-history (a stored tool message),
-// plan, result, error.
+// plan, result, error, notice. An assistant item with `live: true` is the bubble being written by
+// `delta` events; the `message` event that follows replaces its text with the whole answer.
 
 import { createPlanForm } from './assistantPlan.js';
 
@@ -18,6 +19,16 @@ export function createTimeline() {
     items: [],
     // undefined: not known yet; null: unlimited (AgentStatusView.RemainingToday's own meaning).
     remainingToday: undefined,
+    // A turn this pane is streaming right now.
+    streaming: false,
+    // A turn the server is still answering that this pane is not streaming — the person reloaded or
+    // came back mid-answer (AgentConversationView.InProgress). The pane re-reads until it is over.
+    resuming: false,
+    // A conversation is being read.
+    loading: false,
+    // A gentle line above the composer — "still answering", "your last message is back in the box" —
+    // that is information, not a failure.
+    notice: null,
   };
 }
 
@@ -43,7 +54,10 @@ function currentTurnStart(state) {
   return -1;
 }
 
-/** Replaces whatever is shown with a stored conversation. */
+/**
+ * Replaces whatever is shown with a stored conversation. Each `loadConversation` is the server's
+ * whole account of it, so items that existed only on screen (a live bubble, an error line) go.
+ */
 export function loadConversation(state, view) {
   state.conversationId = view?.id ?? null;
   state.title = view?.title ?? '';
@@ -62,8 +76,64 @@ export function loadConversation(state, view) {
   state.items = items;
 }
 
+/** The person's message, drawn at once. Returns its key, so a refused send can take it back. */
 export function addUserMessage(state, text) {
-  state.items.push({ key: nextKey('user'), kind: 'user', text });
+  const key = nextKey('user');
+  state.items.push({ key, kind: 'user', text });
+  return key;
+}
+
+/** A message the server refused to accept (a turn still in progress) — it was never sent. */
+export function withdrawUserMessage(state, key) {
+  const at = state.items.findIndex((i) => i.key === key);
+  if (at >= 0) state.items.splice(at, 1);
+}
+
+/** A message that never reached the server: still shown, marked as not sent. */
+export function markUnsent(state, key) {
+  const item = state.items.find((i) => i.key === key);
+  if (item) item.unsent = true;
+}
+
+function liveBubble(state) {
+  const from = currentTurnStart(state);
+  for (let i = state.items.length - 1; i > from; i--) {
+    const item = state.items[i];
+    if (item.kind === 'assistant' && item.live) return item;
+  }
+  return null;
+}
+
+/**
+ * The bubble being written stops being live. Whitespace alone was never an answer and goes; anything
+ * else stays as what arrived. `cut`: it ended without the `message` that confirms the whole text —
+ * the stream broke, or the server failed after writing it — and the pane says the rest did not arrive.
+ */
+function closeLive(state, { cut }) {
+  const item = liveBubble(state);
+  if (!item) return;
+  if (!item.text.trim()) {
+    state.items.splice(state.items.indexOf(item), 1);
+    return;
+  }
+  item.live = false;
+  if (cut) item.cut = true;
+}
+
+/**
+ * Whether the three-dot indicator shows: a turn has been sent and nothing is being shown for it yet —
+ * after the person's message, after a tool has finished (until the next output) — or a conversation
+ * opened mid-answer is still being answered. Not while text is being written (the text is the sign of
+ * life) and not while a tool line is running (it has its own spinner).
+ */
+export function isThinking(state) {
+  if (state.resuming) return true;
+  if (!state.streaming) return false;
+  const from = currentTurnStart(state);
+  const last = state.items[state.items.length - 1];
+  if (!last || state.items.length - 1 <= from) return true;
+  if (last.kind === 'tool') return last.state === 'done' || last.state === 'failed';
+  return false;
 }
 
 export function applyStreamEvent(state, name, data) {
@@ -87,7 +157,18 @@ export function applyStreamEvent(state, name, data) {
       return;
     }
 
+    case 'delta': {
+      // Purely for display: the next piece of the model's text, appended to the bubble being written.
+      // Rendered as it arrives — no per-character animation holding real text back.
+      if (typeof data.text !== 'string' || data.text === '') return;
+      const last = state.items[state.items.length - 1];
+      if (last && last.kind === 'assistant' && last.live) last.text += data.text;
+      else state.items.push({ key: nextKey('live'), kind: 'assistant', text: data.text, live: true });
+      return;
+    }
+
     case 'tool': {
+      closeLive(state, { cut: false });
       const next = toolState(data.state);
       // The running line for this tool in this turn becomes its outcome; a second call of the same
       // tool, or one in a later turn, gets a line of its own.
@@ -108,13 +189,21 @@ export function applyStreamEvent(state, name, data) {
       return;
     }
 
-    case 'message':
-      if (data.text) {
-        state.items.push({ key: data.id ? `msg-${data.id}` : nextKey('msg'), kind: data.role === 'user' ? 'user' : 'assistant', text: data.text });
+    case 'message': {
+      if (!data.text) return;
+      // The whole text, which counts: it replaces what the deltas built, rather than being drawn twice.
+      const live = data.role === 'user' ? null : liveBubble(state);
+      if (live) {
+        live.text = data.text;
+        live.live = false;
+        return;
       }
+      state.items.push({ key: data.id ? `msg-${data.id}` : nextKey('msg'), kind: data.role === 'user' ? 'user' : 'assistant', text: data.text });
       return;
+    }
 
     case 'plan': {
+      closeLive(state, { cut: false });
       if (!data.id) return;
       const existing = state.items.find((i) => i.kind === 'plan' && i.plan.id === data.id);
       if (existing) existing.plan = data;
@@ -123,10 +212,12 @@ export function applyStreamEvent(state, name, data) {
     }
 
     case 'executed':
+      closeLive(state, { cut: false });
       state.items.push({ key: nextKey('result'), kind: 'result', result: data, plan: null });
       return;
 
     case 'error':
+      closeLive(state, { cut: true });
       state.items.push({ key: nextKey('error'), kind: 'error', messageEn: data.messageEn ?? '', messageFa: data.messageFa ?? '' });
       return;
 
@@ -187,6 +278,7 @@ export function markPlanRejected(state, planId) {
  * becomes a check; nobody said it worked. Safe to call more than once.
  */
 export function settleTurn(state) {
+  closeLive(state, { cut: true });
   const from = currentTurnStart(state);
   for (let i = from + 1; i < state.items.length; i++) {
     const item = state.items[i];

@@ -11,6 +11,7 @@
 
 export const STORAGE_OPEN = 'harbora-assistant-open';
 export const STORAGE_CONVERSATION = 'harbora-assistant-conversation';
+export const STORAGE_OUTBOX = 'harbora-assistant-outbox';
 
 /**
  * localStorage, made safe to call: in a private window or with a full quota the Storage methods
@@ -29,6 +30,17 @@ export function createAssistantPrefs(storage) {
     setConversationId: (id) => attempt(() => (id
       ? storage?.setItem(STORAGE_CONVERSATION, id)
       : storage?.removeItem(STORAGE_CONVERSATION))),
+    /**
+     * The message on its way: `{ conversationId, text, at }`, kept from the moment it is sent until
+     * the server says it has it (`started`). A reload in between finds it here, so the words are not
+     * lost even when the request never got as far as being saved.
+     */
+    outbox: () => attempt(() => {
+      const value = JSON.parse(storage?.getItem(STORAGE_OUTBOX) ?? 'null');
+      return value && typeof value.text === 'string' && value.text ? value : null;
+    }, null),
+    setOutbox: (entry) => attempt(() => storage?.setItem(STORAGE_OUTBOX, JSON.stringify(entry))),
+    clearOutbox: () => attempt(() => storage?.removeItem(STORAGE_OUTBOX)),
   };
 }
 
@@ -38,11 +50,12 @@ export function createAssistantPrefs(storage) {
  *   toggles?: Array<{ setAttribute(name: string, value: string): void }>,
  *   prefs: ReturnType<typeof createAssistantPrefs>,
  *   onOpen?: () => void,
+ *   onClose?: () => void,
  *   isCompact?: () => boolean,
  * }} deps
  *   `isCompact`: whether the drawer is the whole screen right now (a phone; below 640 px).
  */
-export function createAssistantDrawer({ panel, toggles = [], prefs, onOpen, isCompact = () => false }) {
+export function createAssistantDrawer({ panel, toggles = [], prefs, onOpen, onClose, isCompact = () => false }) {
   let open = false;
 
   function paint() {
@@ -57,6 +70,7 @@ export function createAssistantDrawer({ panel, toggles = [], prefs, onOpen, isCo
     paint();
     prefs.setOpen(open);
     if (open) onOpen?.();
+    else onClose?.();
   }
 
   return {
@@ -145,11 +159,18 @@ export function initAssistantDrawer(panel, mountIsland, env = {}) {
     mounted.then(() => doc.dispatchEvent(new CustomEvent('harbora:assistant-opened', { detail: { focus } })));
   }
 
+  // Closing only hides the pane; the island hears it so it can stop re-reading a conversation that
+  // is still being answered (and start again on the next open).
+  function onClose() {
+    mounted?.then(() => doc.dispatchEvent(new CustomEvent('harbora:assistant-closed')));
+  }
+
   const drawer = createAssistantDrawer({
     panel,
     toggles,
     prefs: createAssistantPrefs(storage),
     onOpen,
+    onClose,
     isCompact,
   });
 
