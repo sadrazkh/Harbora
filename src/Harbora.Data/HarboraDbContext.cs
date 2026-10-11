@@ -270,6 +270,15 @@ public class HarboraDbContext : DbContext
     public DbSet<Harbora.Domain.Functions.FunctionCustomEventKey> FunctionCustomEventKeys => Set<Harbora.Domain.Functions.FunctionCustomEventKey>();
     public DbSet<Harbora.Domain.Functions.FunctionQueueDeadLetter> FunctionQueueDeadLetters => Set<Harbora.Domain.Functions.FunctionQueueDeadLetter>();
 
+    // Round six (2026-10-11 assistant-agent design): the in-panel agent's conversations, the plans
+    // waiting for consent, "don't ask again" approvals and the daily cap's counter. All tenant data,
+    // all workspace-filtered — see ConfigureAgent.
+    public DbSet<Harbora.Domain.Agent.AgentConversation> AgentConversations => Set<Harbora.Domain.Agent.AgentConversation>();
+    public DbSet<Harbora.Domain.Agent.AgentMessage> AgentMessages => Set<Harbora.Domain.Agent.AgentMessage>();
+    public DbSet<Harbora.Domain.Agent.AgentPlan> AgentPlans => Set<Harbora.Domain.Agent.AgentPlan>();
+    public DbSet<Harbora.Domain.Agent.AgentToolApproval> AgentToolApprovals => Set<Harbora.Domain.Agent.AgentToolApproval>();
+    public DbSet<Harbora.Domain.Agent.AgentUsageDay> AgentUsageDays => Set<Harbora.Domain.Agent.AgentUsageDay>();
+
     protected override void OnModelCreating(ModelBuilder b)
     {
         base.OnModelCreating(b);
@@ -1363,9 +1372,62 @@ public class HarboraDbContext : DbContext
         });
 
         ConfigureBackupModule(b);
+        ConfigureAgent(b);
 
         DeclareApplicationGeneratedKeys(b);
         ApplyWorkspaceFilters(b);
+    }
+
+    /// <summary>
+    /// The in-panel agent's tables (round six, 2026-10-11 assistant-agent design). No navigation to
+    /// User or Workspace, the same choice SignInToken and AiUserApiKey make: every read is keyed by
+    /// the request's own ids, never enumerated off those entities.
+    /// </summary>
+    private static void ConfigureAgent(ModelBuilder b)
+    {
+        b.Entity<Harbora.Domain.Agent.AgentConversation>(e =>
+        {
+            // The pane's list: one person's conversations in one workspace, most recent first.
+            e.HasIndex(x => new { x.WorkspaceId, x.UserId, x.UpdatedAt });
+            e.Property(x => x.Title).HasMaxLength(Harbora.Domain.Agent.AgentConversation.MaxTitleLength).IsRequired();
+        });
+
+        b.Entity<Harbora.Domain.Agent.AgentMessage>(e =>
+        {
+            // A turn reads its conversation's tail in order; nothing else reads this table.
+            e.HasIndex(x => new { x.ConversationId, x.Sequence });
+            e.Property(x => x.ToolName).HasMaxLength(Harbora.Domain.Agent.AgentMessage.MaxToolNameLength);
+            e.Property(x => x.ToolCallId).HasMaxLength(Harbora.Domain.Agent.AgentMessage.MaxToolCallIdLength);
+            e.Property(x => x.Model).HasMaxLength(Harbora.Domain.Agent.AgentMessage.MaxModelLength);
+            e.Property(x => x.SummaryEn).HasMaxLength(Harbora.Domain.Agent.AgentMessage.MaxSummaryLength);
+            e.Property(x => x.SummaryFa).HasMaxLength(Harbora.Domain.Agent.AgentMessage.MaxSummaryLength);
+            e.HasOne(x => x.Conversation).WithMany(c => c.Messages).HasForeignKey(x => x.ConversationId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<Harbora.Domain.Agent.AgentPlan>(e =>
+        {
+            // The conversation view looks for its pending plan; a new message supersedes it.
+            e.HasIndex(x => new { x.ConversationId, x.Status });
+            e.Property(x => x.StepsJson).IsRequired();
+            e.HasOne(x => x.Conversation).WithMany().HasForeignKey(x => x.ConversationId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<Harbora.Domain.Agent.AgentToolApproval>(e =>
+        {
+            // One "don't ask again" per person, workspace and tool — remembering twice is a no-op, and
+            // the unique index is what makes it one under two concurrent approvals too.
+            e.HasIndex(x => new { x.UserId, x.WorkspaceId, x.ToolName }).IsUnique();
+            e.Property(x => x.ToolName).HasMaxLength(Harbora.Domain.Agent.AgentMessage.MaxToolNameLength).IsRequired();
+        });
+
+        b.Entity<Harbora.Domain.Agent.AgentUsageDay>(e =>
+        {
+            // The cap's counter: exactly one row per workspace per UTC day, so two first calls of the
+            // day racing each other cannot open two counters that each start from zero.
+            e.HasIndex(x => new { x.WorkspaceId, x.Day }).IsUnique();
+        });
     }
 
     /// <summary>
@@ -1724,6 +1786,21 @@ public class HarboraDbContext : DbContext
         // its join to App follow the EnvironmentVariable rule above instead: reached only through the
         // group (or through App, itself filtered), so they stay unfiltered on purpose.
         b.Entity<ConfigGroup>().HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+
+        // Round six: the agent's rows. Each carries its own WorkspaceId (messages and plans too, not
+        // only through their conversation) for the inner-join reason Deployment documents above.
+        // Everything that reads them runs inside the person's own request; there is no sweeper — a
+        // plan's expiry is computed when it is read or approved.
+        b.Entity<Harbora.Domain.Agent.AgentConversation>()
+            .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<Harbora.Domain.Agent.AgentMessage>()
+            .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<Harbora.Domain.Agent.AgentPlan>()
+            .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<Harbora.Domain.Agent.AgentToolApproval>()
+            .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        b.Entity<Harbora.Domain.Agent.AgentUsageDay>()
+            .HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
     }
 
     public override async Task<int> SaveChangesAsync(CancellationToken ct = default)

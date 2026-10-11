@@ -1,0 +1,582 @@
+using System.Text.Json;
+using Harbora.Application.Abstractions;
+using Harbora.Data;
+using Harbora.Domain.Agent;
+using Harbora.Domain.Authorization;
+using Harbora.Domain.Features;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+
+namespace Harbora.Infrastructure.Agent;
+
+/// <summary>
+/// The orchestrator: one person's message in, a stream of events out — the loop "How one message flows"
+/// in the 2026-10-11 assistant-agent design describes.
+///
+/// <para>
+/// The order of the gates is the design's: entitlement, then whether a model can be reached at all,
+/// then the workspace's daily cap. Then the model is called with the system prompt, the snapshot of
+/// what this person can see, where they are in the panel, the conversation's last
+/// <see cref="HistoryMessages"/> messages and the tools their role allows — at most
+/// <see cref="MaxModelCallsPerMessage"/> times. Reads run as soon as they are asked for. A write is
+/// only ever validated: it becomes a step of a draft plan, and the model is told so in the reply to
+/// its call, because a model that believed its call did something would say "done" to the person.
+/// </para>
+///
+/// <para>
+/// Everything runs inside the person's own request, so the workspace filter, <c>ICurrentUser</c> and
+/// project access behave exactly as they do for a click in the panel.
+/// </para>
+///
+/// <para>
+/// The client's failures and availability reasons are shown verbatim only to somebody who manages the
+/// platform (<see cref="Capabilities.PlatformManage"/>). They can carry the provider's own error text,
+/// model ids and a host name from a connection failure — the owner needs exactly that to fix it, and a
+/// customer's member should neither read nor be able to act on it. Everyone else is told plainly that
+/// the assistant cannot answer right now, and the detail goes to the server log.
+/// </para>
+/// </summary>
+public sealed class AgentConversationService(
+    HarboraDbContext db,
+    IAgentChatClient chat,
+    AgentToolRegistry registry,
+    AgentPlanService plans,
+    AgentUsageMeter meter,
+    AgentWorkspaceSnapshot snapshot,
+    IFeatureGate features,
+    IAgentCapabilityCheck capabilities,
+    ISystemClock clock,
+    ILogger<AgentConversationService> logger)
+{
+    /// <summary>The most model calls one message may cause — reads included.</summary>
+    public const int MaxModelCallsPerMessage = 8;
+
+    /// <summary>How much of the conversation is sent back to the model each turn.</summary>
+    public const int HistoryMessages = 20;
+
+    /// <summary>The longest message a person may send.</summary>
+    public const int MaxMessageLength = 4000;
+
+    /// <summary>How many conversations the pane's list shows.</summary>
+    public const int ConversationListSize = 30;
+
+    /// <summary>How many messages the conversation view returns (the newest).</summary>
+    public const int ConversationViewMessages = 200;
+
+    private const int MaxTitleLength = 60;
+
+    // ---- reading -------------------------------------------------------------------------------
+
+    /// <summary>What the pane shows on opening: can the assistant be used now, which model, how much is left today.</summary>
+    public async Task<AgentStatusView> StatusAsync(AgentActor actor, CancellationToken ct)
+    {
+        var model = await chat.GetModelAsync(ct);
+        var remaining = await meter.RemainingAsync(actor.WorkspaceId, ct);
+
+        if (!(await features.EvaluateAsync(actor.WorkspaceId, PlatformFeatures.Assistant, ct)).IsEnabled)
+            return new(false, NotEntitledEn, NotEntitledFa, model, remaining);
+
+        if (await chat.GetAvailabilityAsync(ct) is { } unavailable)
+        {
+            var reason = await UnavailableAsync(actor, unavailable, ct);
+            return new(false, reason.MessageEn, reason.MessageFa, model, remaining);
+        }
+
+        if (remaining == 0)
+            return new(false, CapReachedEn, CapReachedFa, model, 0);
+
+        return new(true, null, null, model, remaining);
+    }
+
+    /// <summary>This person's latest conversations in this workspace, most recently active first.</summary>
+    public async Task<IReadOnlyList<AgentConversationSummaryView>> ListAsync(AgentActor actor, CancellationToken ct) =>
+        await db.AgentConversations.IgnoreQueryFilters().AsNoTracking()
+            .Where(c => c.WorkspaceId == actor.WorkspaceId && c.UserId == actor.UserId)
+            .OrderByDescending(c => c.UpdatedAt)
+            .Take(ConversationListSize)
+            .Select(c => new AgentConversationSummaryView(c.Id, c.Title, c.UpdatedAt))
+            .ToListAsync(ct);
+
+    /// <summary>
+    /// One conversation as the pane renders it, with the plan still waiting for a decision. Null when it
+    /// is not this person's in this workspace. Only what a person should read is returned: their
+    /// messages, the model's text, and the tool messages that carry a summary — not the raw replies
+    /// the model got to a malformed call.
+    /// </summary>
+    public async Task<AgentConversationView?> GetAsync(AgentActor actor, Guid conversationId, bool persian, CancellationToken ct)
+    {
+        var conversation = await db.AgentConversations.IgnoreQueryFilters().AsNoTracking()
+            .FirstOrDefaultAsync(c => c.Id == conversationId && c.WorkspaceId == actor.WorkspaceId && c.UserId == actor.UserId, ct);
+        if (conversation is null) return null;
+
+        var rows = await db.AgentMessages.IgnoreQueryFilters().AsNoTracking()
+            .Where(m => m.ConversationId == conversationId && m.WorkspaceId == actor.WorkspaceId)
+            .OrderByDescending(m => m.Sequence)
+            .Take(ConversationViewMessages)
+            .ToListAsync(ct);
+        rows.Reverse();
+
+        var messages = new List<AgentMessageView>();
+        foreach (var row in rows)
+        {
+            switch (row.Role)
+            {
+                case AgentMessageRole.User:
+                    messages.Add(new(row.Id, "user", row.Text, null, row.CreatedAt));
+                    break;
+                case AgentMessageRole.Assistant when !string.IsNullOrWhiteSpace(row.Text):
+                    messages.Add(new(row.Id, "assistant", row.Text, null, row.CreatedAt));
+                    break;
+                case AgentMessageRole.Tool when row.SummaryEn is not null:
+                    messages.Add(new(row.Id, "tool", persian ? row.SummaryFa ?? row.SummaryEn : row.SummaryEn,
+                        row.ToolName, row.CreatedAt));
+                    break;
+            }
+        }
+
+        var pending = await plans.PendingPlanAsync(actor, conversationId, ct);
+        return new AgentConversationView(conversation.Id, conversation.Title, messages,
+            pending is null ? null : plans.ViewOf(pending));
+    }
+
+    // ---- one message ---------------------------------------------------------------------------
+
+    /// <summary>
+    /// Handles one message. Refusals that need no stream — an unusable message, a workspace without the
+    /// entitlement, a conversation that is not this person's — come back as the outcome with nothing
+    /// emitted, so the caller can still answer with a status code. Otherwise <c>started</c> is emitted
+    /// first and <c>done</c> last, whatever happens in between; a failure after <c>started</c> becomes
+    /// an <c>error</c> event, never an exception — except cancellation, which means nobody is listening.
+    /// </summary>
+    /// <param name="conversationId">Null starts a new conversation.</param>
+    /// <param name="persianInterface">The panel's language, a hint for messages whose own language is unclear.</param>
+    public async Task<AgentSendOutcome> SendAsync(
+        AgentActor actor, Guid? conversationId, AgentSendMessageRequest? request, bool persianInterface,
+        Func<AgentStreamEvent, CancellationToken, Task> emit, CancellationToken ct)
+    {
+        var text = request?.Text?.Trim();
+        if (string.IsNullOrEmpty(text))
+            return new(AgentSendStatus.Invalid, "Type a message first.", "اول پیامی بنویسید.");
+        if (text.Length > MaxMessageLength)
+            return new(AgentSendStatus.Invalid,
+                $"A message can be at most {MaxMessageLength} characters.",
+                $"پیام حداکثر می‌تواند {MaxMessageLength} نویسه باشد.");
+
+        if (!(await features.EvaluateAsync(actor.WorkspaceId, PlatformFeatures.Assistant, ct)).IsEnabled)
+            return new(AgentSendStatus.NotEntitled, NotEntitledEn, NotEntitledFa);
+
+        var now = clock.UtcNow;
+        AgentConversation conversation;
+        if (conversationId is { } id)
+        {
+            var existing = await db.AgentConversations.IgnoreQueryFilters()
+                .FirstOrDefaultAsync(c => c.Id == id && c.WorkspaceId == actor.WorkspaceId && c.UserId == actor.UserId, ct);
+            if (existing is null)
+                return new(AgentSendStatus.NotFound, "There is no such conversation.", "چنین گفت‌وگویی وجود ندارد.");
+            conversation = existing;
+
+            // A card left open while the person moved on is withdrawn, and the turn below is told so.
+            await plans.SupersedePendingAsync(actor, conversation.Id, ct);
+        }
+        else
+        {
+            conversation = new AgentConversation
+            {
+                WorkspaceId = actor.WorkspaceId,
+                UserId = actor.UserId,
+                Title = TitleFrom(text),
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+            db.AgentConversations.Add(conversation);
+        }
+
+        // The person's words are kept whatever happens next, so the conversation they reopen shows what
+        // they asked — including when the answer was an error.
+        await AppendAsync(conversation, new AgentMessage { Role = AgentMessageRole.User, Text = text }, ct);
+
+        await emit(new AgentStreamEvent(AgentStreamEvents.Started, new AgentStartedData(conversation.Id)), ct);
+
+        try
+        {
+            await RunTurnAsync(actor, conversation, request!.Page, persianInterface, emit, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The assistant turn failed in conversation {Conversation}.", conversation.Id);
+            await emit(Error("Something went wrong on the server while answering; nothing further was done.",
+                "هنگام پاسخ‌دادن خطایی در سرور رخ داد؛ کار دیگری انجام نشد."), ct);
+        }
+
+        var remaining = await meter.RemainingAsync(actor.WorkspaceId, ct);
+        await emit(new AgentStreamEvent(AgentStreamEvents.Done, new AgentDoneData(conversation.Id, remaining)), ct);
+        return AgentSendOutcome.Streamed;
+    }
+
+    private async Task RunTurnAsync(
+        AgentActor actor, AgentConversation conversation, AgentPageContext? page, bool persianInterface,
+        Func<AgentStreamEvent, CancellationToken, Task> emit, CancellationToken ct)
+    {
+        if (await chat.GetAvailabilityAsync(ct) is { } unavailable)
+        {
+            await emit(new AgentStreamEvent(AgentStreamEvents.Error, await UnavailableAsync(actor, unavailable, ct)), ct);
+            return;
+        }
+
+        if (await meter.RemainingAsync(actor.WorkspaceId, ct) == 0)
+        {
+            await emit(Error(CapReachedEn, CapReachedFa), ct);
+            return;
+        }
+
+        var context = new AgentToolContext(actor.WorkspaceId, actor.UserId, actor.User, conversation.Id, page);
+        var system = AgentSystemPrompt.Build(
+            await snapshot.DescribeAsync(context, ct),
+            await snapshot.DescribePageAsync(context, ct),
+            persianInterface);
+
+        var messages = new List<AgentChatMessage> { new(AgentRole.System, system) };
+        messages.AddRange(await HistoryAsync(actor, conversation.Id, ct));
+
+        var allowed = await registry.AllowedForAsync(actor.User, ct);
+        var specs = allowed.Select(AgentToolRegistry.SpecOf).ToList();
+        var turn = new Turn(actor, context, await plans.RememberedToolsAsync(actor, ct), allowed);
+
+        var finished = false;
+        var stoppedEarly = false;
+
+        for (var call = 1; call <= MaxModelCallsPerMessage; call++)
+        {
+            // Reserved before the call, so the cap holds under concurrent turns — see AgentUsageMeter.
+            if (!await meter.TryReserveAsync(actor.WorkspaceId, ct))
+            {
+                await emit(Error(CapReachedEn, CapReachedFa), ct);
+                stoppedEarly = true;
+                break;
+            }
+
+            // A copy: the list keeps growing after the call, and a request must stay what was sent.
+            var response = await chat.CompleteAsync(new AgentChatRequest(messages.ToList(), specs), ct);
+            if (!response.Ok || response.Message is null)
+            {
+                await emit(new AgentStreamEvent(AgentStreamEvents.Error, await ProviderFailureAsync(actor, response, ct)), ct);
+                stoppedEarly = true;
+                break;
+            }
+
+            var reply = response.Message;
+            var toolCalls = reply.ToolCalls ?? [];
+
+            var assistant = await AppendAsync(conversation, new AgentMessage
+            {
+                Role = AgentMessageRole.Assistant,
+                Text = string.IsNullOrWhiteSpace(reply.Content) ? null : reply.Content,
+                ToolCallsJson = toolCalls.Count > 0 ? AgentJson.Serialize(toolCalls) : null,
+                Model = Truncate(response.Model, AgentMessage.MaxModelLength),
+                InputTokens = response.Usage?.InputTokens ?? 0,
+                OutputTokens = response.Usage?.OutputTokens ?? 0
+            }, ct);
+            messages.Add(new AgentChatMessage(AgentRole.Assistant, reply.Content, toolCalls.Count > 0 ? toolCalls : null));
+
+            if (assistant.Text is not null)
+                await emit(new AgentStreamEvent(AgentStreamEvents.Message,
+                    new AgentMessageView(assistant.Id, "assistant", assistant.Text, null, assistant.CreatedAt)), ct);
+
+            if (toolCalls.Count == 0)
+            {
+                finished = true;
+                break;
+            }
+
+            foreach (var toolCall in toolCalls)
+            {
+                var answer = await AnswerToolCallAsync(toolCall, turn, emit, ct);
+                await AppendAsync(conversation, new AgentMessage
+                {
+                    Role = AgentMessageRole.Tool,
+                    Text = answer.Content,
+                    ToolCallId = Truncate(toolCall.Id, AgentMessage.MaxToolCallIdLength),
+                    ToolName = Truncate(toolCall.Name, AgentMessage.MaxToolNameLength),
+                    SummaryEn = AgentConversationLog.Bound(answer.SummaryEn),
+                    SummaryFa = AgentConversationLog.Bound(answer.SummaryFa)
+                }, ct);
+                messages.Add(new AgentChatMessage(AgentRole.Tool, answer.Content, ToolCallId: toolCall.Id));
+            }
+        }
+
+        if (!finished && !stoppedEarly)
+            await emit(Error(
+                $"I stopped after {MaxModelCallsPerMessage} steps without finishing. Try a smaller request.",
+                $"پس از {MaxModelCallsPerMessage} مرحله بدون تمام‌کردن کار متوقف شدم. درخواست کوچک‌تری بدهید."), ct);
+
+        if (turn.Draft.Count == 0) return;
+
+        var plan = await plans.CreatePendingAsync(actor, conversation.Id, turn.Draft, ct);
+
+        // Only a finished turn whose every step is a remembered safe tool runs without a card. A turn the
+        // model never finished — the cap, the ceiling, a provider error — may have meant more steps
+        // than it got to propose, so its steps always wait for the person.
+        if (finished && turn.Draft.All(s => s.AutoApproved))
+        {
+            var result = await plans.ExecuteAutoApprovedAsync(actor, plan, ct);
+            await emit(new AgentStreamEvent(AgentStreamEvents.Executed, result), ct);
+        }
+        else
+        {
+            await emit(new AgentStreamEvent(AgentStreamEvents.Plan, plans.ViewOf(plan)), ct);
+        }
+    }
+
+    /// <summary>The state one turn accumulates across its tool calls.</summary>
+    private sealed class Turn(
+        AgentActor actor, AgentToolContext context, IReadOnlySet<string> remembered, IReadOnlyList<IAgentTool> allowed)
+    {
+        public AgentActor Actor { get; } = actor;
+        public AgentToolContext Context { get; } = context;
+        public IReadOnlySet<string> Remembered { get; } = remembered;
+        public IReadOnlyList<IAgentTool> Allowed { get; } = allowed;
+        public AgentPlanScope Scope { get; } = new();
+        public List<AgentPlanStep> Draft { get; } = [];
+    }
+
+    /// <summary>What goes back to the model for one call, and what the person may be shown instead.</summary>
+    private sealed record ToolAnswer(string Content, string? SummaryEn = null, string? SummaryFa = null);
+
+    private async Task<ToolAnswer> AnswerToolCallAsync(
+        AgentToolCall call, Turn turn, Func<AgentStreamEvent, CancellationToken, Task> emit, CancellationToken ct)
+    {
+        var tool = registry.Find(call.Name);
+        if (tool is null)
+            return new(AgentJson.ForModel(
+                $"Unknown tool '{call.Name}'. The tools you can use are: {string.Join(", ", turn.Allowed.Select(t => t.Name))}."));
+
+        if (!await registry.AllowsAsync(turn.Actor.User, tool, ct))
+            return new(AgentJson.ForModel(
+                $"The user's role does not allow '{tool.Name}' (it needs the '{tool.Capability}' permission). Nothing was done; tell the user they cannot do this."));
+
+        if (ParseArguments(call) is not { } args)
+            return new(AgentJson.ForModel(
+                $"The arguments for '{tool.Name}' are not a valid JSON object. Call it again with a JSON object that matches its parameters."));
+
+        return AgentConsentPolicy.RunsImmediately(tool.Kind)
+            ? await RunReadAsync(tool, args, turn, emit, ct)
+            : await ProposeWriteAsync(tool, call, args, turn, ct);
+    }
+
+    private async Task<ToolAnswer> RunReadAsync(
+        IAgentTool tool, JsonElement args, Turn turn, Func<AgentStreamEvent, CancellationToken, Task> emit, CancellationToken ct)
+    {
+        var kind = AgentConsentPolicy.KindLabel(tool.Kind);
+        await emit(new AgentStreamEvent(AgentStreamEvents.Tool, new AgentToolEventData(tool.Name, kind, "running", null, null)), ct);
+
+        AgentToolResult result;
+        try
+        {
+            result = await tool.ExecuteAsync(args, turn.Context, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogError(ex, "Agent read tool {Tool} threw.", tool.Name);
+            result = AgentToolResult.Failed($"The tool '{tool.Name}' failed on the server.", $"ابزار «{tool.Name}» در سرور ناموفق بود.");
+        }
+
+        var summaryEn = result.Ok ? result.SummaryEn ?? $"Looked up: {tool.Name}" : result.Error ?? $"{tool.Name} failed";
+        var summaryFa = result.Ok ? result.SummaryFa ?? $"بررسی شد: {tool.Name}" : result.ErrorFa ?? $"{tool.Name} ناموفق بود";
+        await emit(new AgentStreamEvent(AgentStreamEvents.Tool,
+            new AgentToolEventData(tool.Name, kind, result.Ok ? "done" : "failed", summaryEn, summaryFa)), ct);
+
+        return new(AgentJson.ForModel(result.ResultJson), summaryEn, summaryFa);
+    }
+
+    private async Task<ToolAnswer> ProposeWriteAsync(
+        IAgentTool tool, AgentToolCall call, JsonElement args, Turn turn, CancellationToken ct)
+    {
+        AgentValidation validation;
+        try
+        {
+            validation = await tool.ValidateAsync(args, turn.Context, turn.Scope, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogError(ex, "Agent tool {Tool} threw while validating.", tool.Name);
+            validation = AgentValidation.Refused("The tool could not check this request on the server.",
+                "ابزار نتوانست این درخواست را در سرور بررسی کند.");
+        }
+
+        // A delete with no phrase to type would run on a click. That is a tool bug, and it fails closed.
+        if (validation.Ok && AgentConsentPolicy.NeedsTypedConfirmation(tool.Kind)
+                          && string.IsNullOrWhiteSpace(validation.ConfirmationPhrase))
+        {
+            logger.LogWarning("Destructive agent tool {Tool} validated a call without a confirmation phrase.", tool.Name);
+            validation = AgentValidation.Refused("This step cannot be offered: the tool did not say what to confirm.",
+                "این مرحله قابل ارائه نیست: ابزار مشخص نکرد چه چیزی باید تأیید شود.");
+        }
+
+        if (!validation.Ok)
+            return new(AgentJson.ForModel(
+                $"Refused: {validation.Error} Nothing was added to the plan; correct the arguments and call it again, or ask the user."));
+
+        if (validation.Creates is not null) turn.Scope.Add(validation.Creates);
+
+        var index = turn.Draft.Count + 1;
+        var titleEn = string.IsNullOrWhiteSpace(validation.TitleEn) ? tool.Name : validation.TitleEn;
+        var titleFa = string.IsNullOrWhiteSpace(validation.TitleFa) ? titleEn : validation.TitleFa;
+
+        turn.Draft.Add(new AgentPlanStep(
+            index, tool.Name, tool.Kind, args.GetRawText(), call.Id,
+            titleEn, titleFa, validation.DetailEn, validation.DetailFa,
+            validation.WarningsEn ?? [], validation.WarningsFa ?? [],
+            AgentConsentPolicy.NeedsTypedConfirmation(tool.Kind) ? validation.ConfirmationPhrase!.Trim() : null,
+            AgentConsentPolicy.IsAutoApproved(tool.Kind, turn.Remembered.Contains(tool.Name))));
+
+        return new(
+            AgentJson.ForModel($"Added as step {index} — nothing has run yet; the user will approve it. (Step {index}: {titleEn})"),
+            $"Proposed as step {index}: {titleEn}",
+            $"پیشنهاد به‌عنوان مرحلهٔ {index}: {titleFa}");
+    }
+
+    /// <summary>The call's arguments as a JSON object, or null. Blank counts as "no arguments" — many
+    /// models send an empty string for a tool that takes none.</summary>
+    private static JsonElement? ParseArguments(AgentToolCall call)
+    {
+        var raw = string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson;
+        try
+        {
+            using var document = JsonDocument.Parse(raw);
+            return document.RootElement.ValueKind == JsonValueKind.Object ? document.RootElement.Clone() : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    // ---- history -------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The conversation's tail as chat messages. A window can cut through the middle of a tool exchange,
+    /// and a tool message whose call is not in front of it is refused by every chat-completions
+    /// provider — so an assistant message is only sent together with an answer to each of its calls,
+    /// and an answer only behind its call; anything else in the window is left out.
+    /// </summary>
+    private async Task<IReadOnlyList<AgentChatMessage>> HistoryAsync(AgentActor actor, Guid conversationId, CancellationToken ct)
+    {
+        var rows = await db.AgentMessages.IgnoreQueryFilters().AsNoTracking()
+            .Where(m => m.ConversationId == conversationId && m.WorkspaceId == actor.WorkspaceId)
+            .OrderByDescending(m => m.Sequence)
+            .Take(HistoryMessages)
+            .ToListAsync(ct);
+        rows.Reverse();
+        return Sanitize(rows);
+    }
+
+    internal static IReadOnlyList<AgentChatMessage> Sanitize(IReadOnlyList<AgentMessage> rows)
+    {
+        var history = new List<AgentChatMessage>();
+        var i = 0;
+        while (i < rows.Count)
+        {
+            var row = rows[i];
+            if (row.Role == AgentMessageRole.User)
+            {
+                if (!string.IsNullOrWhiteSpace(row.Text)) history.Add(new(AgentRole.User, row.Text));
+                i++;
+                continue;
+            }
+
+            if (row.Role == AgentMessageRole.Tool)
+            {
+                i++; // an answer with no call in front of it
+                continue;
+            }
+
+            var calls = AgentJson.Deserialize<List<AgentToolCall>>(row.ToolCallsJson) ?? [];
+            if (calls.Count == 0)
+            {
+                if (!string.IsNullOrWhiteSpace(row.Text)) history.Add(new(AgentRole.Assistant, row.Text));
+                i++;
+                continue;
+            }
+
+            var answers = new List<AgentMessage>();
+            var j = i + 1;
+            while (j < rows.Count && rows[j].Role == AgentMessageRole.Tool) answers.Add(rows[j++]);
+
+            var answered = calls.All(c => answers.Any(a => a.ToolCallId == c.Id));
+            if (answered)
+            {
+                history.Add(new(AgentRole.Assistant, row.Text, calls));
+                foreach (var c in calls)
+                    history.Add(new(AgentRole.Tool, answers.First(a => a.ToolCallId == c.Id).Text ?? "", ToolCallId: c.Id));
+            }
+
+            i = j;
+        }
+
+        return history;
+    }
+
+    // ---- writing -------------------------------------------------------------------------------
+
+    private async Task<AgentMessage> AppendAsync(AgentConversation conversation, AgentMessage message, CancellationToken ct)
+    {
+        var now = clock.UtcNow;
+        message.WorkspaceId = conversation.WorkspaceId;
+        message.ConversationId = conversation.Id;
+        message.Sequence = await AgentConversationLog.NextSequenceAsync(db, conversation.Id, ct);
+        message.CreatedAt = now;
+        message.UpdatedAt = now;
+        db.AgentMessages.Add(message);
+        conversation.UpdatedAt = now;
+        await db.SaveChangesAsync(ct);
+        return message;
+    }
+
+    /// <summary>The conversation's title: its first message on one line, cut short.</summary>
+    internal static string TitleFrom(string text)
+    {
+        var oneLine = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return oneLine.Length <= MaxTitleLength ? oneLine : oneLine[..(MaxTitleLength - 1)].TrimEnd() + "…";
+    }
+
+    private static string? Truncate(string? value, int max) =>
+        value is null || value.Length <= max ? value : value[..max];
+
+    private static AgentStreamEvent Error(string en, string fa) =>
+        new(AgentStreamEvents.Error, new AgentErrorData(en, fa));
+
+    /// <summary>Whether this person may read the client's own words — see the class doc.</summary>
+    private Task<bool> SeesProviderDetailAsync(AgentActor actor, CancellationToken ct) =>
+        capabilities.AllowsAsync(actor.User, Capabilities.PlatformManage, ct);
+
+    private async Task<AgentErrorData> ProviderFailureAsync(AgentActor actor, AgentChatResponse response, CancellationToken ct)
+    {
+        if (await SeesProviderDetailAsync(actor, ct))
+            return new(response.Error ?? "The model did not answer.", response.ErrorFa ?? "مدل پاسخی نداد.");
+
+        logger.LogWarning("The AI provider could not answer for workspace {Workspace}: {Error}", actor.WorkspaceId, response.Error);
+        return new(ProviderFailedEn, ProviderFailedFa);
+    }
+
+    private async Task<AgentErrorData> UnavailableAsync(AgentActor actor, Assistant.AssistantUnavailable unavailable, CancellationToken ct)
+    {
+        if (await SeesProviderDetailAsync(actor, ct)) return new(unavailable.Reason, unavailable.ReasonFa);
+
+        logger.LogInformation("The assistant is unavailable for workspace {Workspace}: {Reason}", actor.WorkspaceId, unavailable.Reason);
+        return new(UnavailableEn, UnavailableFa);
+    }
+
+    private const string ProviderFailedEn = "The AI provider could not answer right now. Try again in a moment.";
+    private const string ProviderFailedFa = "ارائه‌دهندهٔ هوش مصنوعی الان نتوانست پاسخ دهد. کمی بعد دوباره امتحان کنید.";
+    private const string UnavailableEn = "The assistant is not available right now. The platform's owner can check its settings.";
+    private const string UnavailableFa = "دستیار الان در دسترس نیست. مالک پلتفرم می‌تواند تنظیمات آن را بررسی کند.";
+
+    private const string NotEntitledEn = "The assistant is not enabled for this workspace.";
+    private const string NotEntitledFa = "دستیار برای این فضای کاری فعال نیست.";
+    private const string CapReachedEn = "This workspace has used all of today's assistant requests. The limit resets at 00:00 UTC.";
+    private const string CapReachedFa = "این فضای کاری همهٔ درخواست‌های امروز دستیار را مصرف کرده است. سقف در ساعت ۰۰:۰۰ UTC از نو شروع می‌شود.";
+}

@@ -414,6 +414,24 @@ public static class DependencyInjection
         // revoked.
         services.AddScoped<IFeatureGate, Features.FeatureGate>();
 
+        // Round six, phase 2 (2026-10-11 assistant-agent design): the in-panel agent's core — the tool
+        // registry, the daily cap, the snapshot, the plan engine and the conversation loop, plus the
+        // read tools. All scoped: they run inside the person's own request, under its workspace filter.
+        // Not registered here, on purpose: IAgentChatClient (phase 1's client, registered with the
+        // agent settings) and IAgentCapabilityCheck (the web host's, over IAuthorizationService).
+        services.AddScoped<Agent.AgentToolRegistry>();
+        services.AddScoped<Agent.AgentUsageMeter>();
+        services.AddScoped<Agent.AgentResourceResolver>();
+        services.AddScoped<Agent.AgentWorkspaceSnapshot>();
+        services.AddScoped<Agent.AgentPlanService>();
+        services.AddScoped<Agent.AgentConversationService>();
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.ListResourcesTool>();
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.GetAppTool>();
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.GetDatabaseTool>();
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.GetCatalogTool>();
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.GetDeploymentTool>();
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.GetUsageTool>();
+
         // Functions: code written in the panel. The generator turns rows into a build context, the
         // invoker knocks on a running host, and the scheduler decides when it should.
         services.AddScoped<Functions.FunctionAppService>();

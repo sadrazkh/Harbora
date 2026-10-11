@@ -133,6 +133,8 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
 
 // Action-level RBAC: one policy per capability, evaluated against the caller's role (doc 10 §2.12).
 builder.Services.AddCapabilityAuthorization();
+// The in-panel agent asks the same policies which tools a person may use (round six, phase 2).
+builder.Services.AddScoped<Harbora.Infrastructure.Agent.IAgentCapabilityCheck, AuthorizationAgentCapabilityCheck>();
 builder.Services.AddAntiforgery(o => o.HeaderName = "X-CSRF-TOKEN");
 
 // Auth cookies and antiforgery tokens are encrypted with the Data Protection keyring. By default it
