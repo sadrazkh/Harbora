@@ -12,6 +12,7 @@ using Harbora.Domain.Tenancy;
 using Harbora.Infrastructure.Agent;
 using Harbora.Infrastructure.Agent.Tools;
 using Harbora.Tests.Fakes;
+using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 namespace Harbora.Tests.Agent;
@@ -209,6 +210,24 @@ public class AgentReadToolsTests
             .Should().BeEquivalentTo(new[] { "wordpress", "mine" });
         json.GetProperty("instanceSizes").EnumerateArray().Select(s => s.GetProperty("key").GetString()).Should().Equal("small");
         json.GetProperty("instanceSizes")[0].GetProperty("memoryMb").GetInt64().Should().Be(1024);
+    }
+
+    [Fact]
+    public async Task Get_catalog_offers_only_the_sizes_the_workspaces_plan_allows()
+    {
+        using var h = new AgentHarness();
+        var plan = new Plan { Name = "Starter", AllowedSizeKeys = "nano, micro" };
+        h.Db.Plans.Add(plan);
+        h.Db.Workspaces.IgnoreQueryFilters().Single(w => w.Id == h.WorkspaceId).PlanId = plan.Id;
+        h.Db.InstanceSizes.AddRange(
+            new InstanceSize { Key = "nano", Name = "Nano", SortOrder = 1 },
+            new InstanceSize { Key = "micro", Name = "Micro", SortOrder = 2 },
+            new InstanceSize { Key = "large", Name = "Large", SortOrder = 3 });
+        h.Db.SaveChanges();
+
+        var json = Payload(await new GetCatalogTool(h.Db, new FakeManagedServiceEngine()).ExecuteAsync(Args("{}"), Context(h), default));
+
+        json.GetProperty("instanceSizes").EnumerateArray().Select(s => s.GetProperty("key").GetString()).Should().Equal("nano", "micro");
     }
 
     [Fact]

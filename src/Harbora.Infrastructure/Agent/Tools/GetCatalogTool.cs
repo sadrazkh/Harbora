@@ -10,7 +10,7 @@ namespace Harbora.Infrastructure.Agent.Tools;
 /// <summary>
 /// <c>get_catalog</c> — what can be created: database engines with the versions an operator offers
 /// (<see cref="ServiceCatalogReader"/>, the same list the create form draws), the templates this
-/// workspace can see (<see cref="TemplateCatalog.IsVisibleTo"/>) and the instance sizes.
+/// workspace can see (<see cref="TemplateCatalog.IsVisibleTo"/>) and the instance sizes its plan allows.
 /// </summary>
 public sealed class GetCatalogTool(HarboraDbContext db, IManagedServiceEngine engine) : AgentReadTool
 {
@@ -43,11 +43,27 @@ public sealed class GetCatalogTool(HarboraDbContext db, IManagedServiceEngine en
             .Select(t => new { key = t.Key, name = t.Name, category = t.Category, description = Clip(t.Description, 140) })
             .ToList();
 
-        var sizes = await db.InstanceSizes.AsNoTracking()
-            .Where(s => s.IsEnabled)
-            .OrderBy(s => s.SortOrder).ThenBy(s => s.CpuCores)
-            .Select(s => new { s.Key, s.Name, s.CpuCores, s.MemoryBytes, s.DiskBytes })
-            .ToListAsync(ct);
+        // The sizes this workspace's plan allows — the same filter the panel's own size choosers apply
+        // (TemplatesController.SizeChoicesAsync): a plan with no list allows every enabled size, and a
+        // workspace with no plan is on the default one.
+        var planId = await db.Workspaces.AsNoTracking()
+            .Where(w => w.Id == context.WorkspaceId).Select(w => w.PlanId).FirstOrDefaultAsync(ct);
+        var allowedKeys = await db.Plans.AsNoTracking()
+            .Where(p => planId != null ? p.Id == planId : p.IsDefault)
+            .Select(p => p.AllowedSizeKeys)
+            .FirstOrDefaultAsync(ct);
+        var allowed = string.IsNullOrWhiteSpace(allowedKeys)
+            ? null
+            : allowedKeys.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var sizes = (await db.InstanceSizes.AsNoTracking()
+                .Where(s => s.IsEnabled)
+                .OrderBy(s => s.SortOrder).ThenBy(s => s.CpuCores)
+                .Select(s => new { s.Key, s.Name, s.CpuCores, s.MemoryBytes, s.DiskBytes })
+                .ToListAsync(ct))
+            .Where(s => allowed is null || allowed.Contains(s.Key))
+            .ToList();
 
         var payload = new
         {
