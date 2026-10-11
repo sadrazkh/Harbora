@@ -112,14 +112,24 @@ public sealed class SignInTokenService(
 
         if (claimed == 0)
         {
+            // Diagnosed off a fresh read, not off `candidate`. `candidate` was read before the claim,
+            // so when two redemptions race, the loser's copy can predate the winner's commit and show
+            // the row as still unredeemed — RefuseRedeem then found nothing wrong and the loser was told
+            // "not valid" instead of "already used". A claim that matched zero rows means the winner's
+            // update has committed by now (Postgres made this update wait for it), so a read taken
+            // after it sees the real reason. The Postgres lane's race test failed on exactly this,
+            // about one run in five.
+            //
             // Diagnosed off the stored ExpiresAt, not recomputed from CreatedAt through
             // SignInTokenAccess.Expired — ExpiresAt is exactly what the WHERE clause above just
             // tested, so the reason given here can never disagree with the check that produced it,
             // including if RedemptionLifetime is ever changed after this row was already written.
+            var current = await db.SignInTokens.IgnoreQueryFilters().AsNoTracking()
+                .FirstOrDefaultAsync(t => t.Id == candidate.Id, ct) ?? candidate;
             var refusal = SignInTokenAccess.RefuseRedeem(
-                alreadyRedeemed: candidate.RedeemedAt is not null,
-                isRevoked: candidate.RevokedAt is not null,
-                isExpired: now >= candidate.ExpiresAt);
+                alreadyRedeemed: current.RedeemedAt is not null,
+                isRevoked: current.RevokedAt is not null,
+                isExpired: now >= current.ExpiresAt);
             return new(null, null, refusal ?? SignInTokenAccess.UnknownTokenMessage);
         }
 
