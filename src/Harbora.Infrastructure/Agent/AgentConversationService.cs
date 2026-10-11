@@ -269,7 +269,7 @@ public sealed class AgentConversationService(
             }
 
             var reply = response.Message;
-            var toolCalls = reply.ToolCalls ?? [];
+            var toolCalls = NormalizeCalls(reply.ToolCalls, call);
 
             var assistant = await AppendAsync(conversation, new AgentMessage
             {
@@ -299,7 +299,7 @@ public sealed class AgentConversationService(
                 {
                     Role = AgentMessageRole.Tool,
                     Text = answer.Content,
-                    ToolCallId = Truncate(toolCall.Id, AgentMessage.MaxToolCallIdLength),
+                    ToolCallId = toolCall.Id,
                     ToolName = Truncate(toolCall.Name, AgentMessage.MaxToolNameLength),
                     SummaryEn = AgentConversationLog.Bound(answer.SummaryEn),
                     SummaryFa = AgentConversationLog.Bound(answer.SummaryFa)
@@ -437,6 +437,29 @@ public sealed class AgentConversationService(
             AgentJson.ForModel($"Added as step {index} — nothing has run yet; the user will approve it. (Step {index}: {titleEn})"),
             $"Proposed as step {index}: {titleEn}",
             $"پیشنهاد به‌عنوان مرحلهٔ {index}: {titleFa}");
+    }
+
+    /// <summary>
+    /// The model's calls with ids that can be answered: a weak model sometimes sends a blank id, or the
+    /// same id twice in one reply, and every answer has to name exactly one call or the provider refuses
+    /// the next request outright. Such an id is replaced by one of ours — the provider only ever sees
+    /// it again in the history this conversation sends back, where it is consistent.
+    /// </summary>
+    private static IReadOnlyList<AgentToolCall> NormalizeCalls(IReadOnlyList<AgentToolCall>? calls, int round)
+    {
+        if (calls is null || calls.Count == 0) return [];
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var normalized = new List<AgentToolCall>(calls.Count);
+        for (var i = 0; i < calls.Count; i++)
+        {
+            var id = calls[i].Id;
+            if (string.IsNullOrWhiteSpace(id) || id.Length > AgentMessage.MaxToolCallIdLength || seen.Contains(id))
+                id = $"call_r{round}_{i + 1}";
+            seen.Add(id);
+            normalized.Add(calls[i] with { Id = id });
+        }
+        return normalized;
     }
 
     /// <summary>The call's arguments as a JSON object, or null. Blank counts as "no arguments" — many

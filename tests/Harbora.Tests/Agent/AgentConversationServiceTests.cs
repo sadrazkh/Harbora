@@ -87,6 +87,23 @@ public class AgentConversationServiceTests
     }
 
     [Fact]
+    public async Task Blank_or_repeated_call_ids_are_replaced_so_every_answer_names_exactly_one_call()
+    {
+        var peek = Reader();
+        using var h = new AgentHarness([peek]);
+        h.Chat.ThenCalls(new AgentToolCall("", "peek", "{}"), new AgentToolCall("dup", "peek", "{}"), new AgentToolCall("dup", "peek", "{}"))
+            .ThenText("Done looking.");
+
+        await h.SendAsync("peek three times");
+
+        var second = h.Chat.Requests[1].Messages;
+        var ids = second.Single(m => m.Role == AgentRole.Assistant).ToolCalls!.Select(c => c.Id).ToList();
+        ids.Should().OnlyHaveUniqueItems().And.NotContain("");
+        second.Where(m => m.Role == AgentRole.Tool).Select(m => m.ToolCallId).Should().Equal(ids);
+        peek.Executions.Should().Be(3);
+    }
+
+    [Fact]
     public async Task Blank_arguments_count_as_an_empty_object()
     {
         var peek = Reader();
