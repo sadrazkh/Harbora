@@ -484,6 +484,21 @@ public class QuotaRefusalReachabilityTests
             "reaches only the operator log, English by the same convention as every other log line",
     };
 
+    /// <summary>
+    /// A file that reads a denied <see cref="QuotaCheck"/> and hands <i>both</i> halves on itself — there
+    /// is no request-scoped catch between it and the reader to pick a language from an exception, so it
+    /// throws none, and is named here with where the Persian half goes. It must still read
+    /// <c>ReasonFa</c>; a file listed here that stops doing so fails like an unfiled one.
+    /// </summary>
+    private static readonly Dictionary<string, string> HandsBothLanguagesOn = new()
+    {
+        ["src/Harbora.Infrastructure/Agent/Tools/RestartAppTool.cs"] =
+            "the assistant's restart_app asks the gate while validating a plan step, and a validation is a " +
+            "value handed back, not a request: Reason goes to AgentValidation.Error (for the model) and " +
+            "ReasonFa to ErrorFa (for a Persian reader's card). Its execution catches the operations " +
+            "service's own QuotaRefusedException and hands on ReasonFa the same way",
+    };
+
     [Fact]
     public void Every_caller_of_the_billing_gate_either_throws_QuotaRefusedException_or_has_filed_why_its_refusal_stays_English()
     {
@@ -500,8 +515,9 @@ public class QuotaRefusalReachabilityTests
             // independently, on the exception's runtime type).
             var carriesBothLanguagesForward = text.Contains("throw new QuotaRefusedException(");
             var filedAsEnglishOnPurpose = PersistedEnglishByDesign.ContainsKey(path);
+            var handsBothOnItself = HandsBothLanguagesOn.ContainsKey(path) && text.Contains("ReasonFa");
 
-            (carriesBothLanguagesForward || filedAsEnglishOnPurpose).Should().BeTrue(
+            (carriesBothLanguagesForward || filedAsEnglishOnPurpose || handsBothOnItself).Should().BeTrue(
                 $"{path} reads IBillingGate's answer and does neither: it does not throw " +
                 "QuotaRefusedException for a request-scoped caller to pick a language with, and it " +
                 "is not filed above with a written reason its refusal stays English. A Persian " +
@@ -514,7 +530,7 @@ public class QuotaRefusalReachabilityTests
     public void Nothing_is_filed_as_English_by_design_for_a_file_that_no_longer_asks_the_gate()
     {
         var callers = BillingGateCallers();
-        var stale = PersistedEnglishByDesign.Keys.Where(p => !callers.Contains(p)).ToList();
+        var stale = PersistedEnglishByDesign.Keys.Concat(HandsBothLanguagesOn.Keys).Where(p => !callers.Contains(p)).ToList();
 
         stale.Should().BeEmpty(
             "these are written down as a deliberate English-only decision about code that no longer " +

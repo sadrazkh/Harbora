@@ -94,6 +94,9 @@ public sealed class RestartAppTool(
             return ($"App '{app.Slug}' has not been deployed yet, so there is nothing to restart; deploy it instead.",
                 $"اپ «{app.Slug}» هنوز مستقر نشده است، پس چیزی برای راه‌اندازی دوباره ندارد؛ آن را مستقر کنید.");
 
+        // Asked before the card, so an empty wallet is said up front. No QuotaRefusedException here: a
+        // validation is handed back, not caught by a request that picks a language, so both halves go
+        // on as they are (filed in QuotaRefusalReachabilityTests.HandsBothLanguagesOn).
         var mayStart = await billing.CanStartAsync(context.WorkspaceId, BilledResourceType.App, app.Id, ct);
         return mayStart.Allowed
             ? null
