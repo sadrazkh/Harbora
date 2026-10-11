@@ -494,6 +494,24 @@ public static class DependencyInjection
         services.AddScoped<Apps.IAppProvisioningService, Apps.AppProvisioningService>();
         services.AddScoped<Apps.IAppConfigurationService, Apps.AppConfigurationService>();
 
+        // Round six, wave B, agent F (2026-10-11 assistant-agent design): the agent's app tools — create,
+        // template, env vars, domains, volumes, deploy, restart, stop, rollback, delete — each over the
+        // same service the matching panel action calls. Scoped, like the read tools: they run inside the
+        // person's own request.
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.CreateAppTool>();
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.DeployTemplateTool>();
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.SetEnvVarsTool>();
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.DeleteEnvVarTool>();
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.AddDomainTool>();
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.RemoveDomainTool>();
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.AddVolumeTool>();
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.RemoveVolumeTool>();
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.DeployAppTool>();
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.RestartAppTool>();
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.StopAppTool>();
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.RollbackAppTool>();
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.DeleteAppTool>();
+
         // Monitoring + notifications.
         services.AddHttpClient();
         services.Configure<Notifications.NotificationOptions>(config.GetSection("Notifications"));
