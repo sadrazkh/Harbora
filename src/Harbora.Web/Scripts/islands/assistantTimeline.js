@@ -224,7 +224,10 @@ export function applyStreamEvent(state, name, data) {
     case 'done':
       if (data.conversationId) state.conversationId = data.conversationId;
       if ('remainingToday' in data) state.remainingToday = data.remainingToday;
-      // The turn is over. A tool line the server never finished must not spin for ever.
+      // The turn ended normally: a bubble still live (its `message` never came) keeps what it has and
+      // stops being live — not marked cut, since nothing says the turn broke. Then a tool line the
+      // server never finished must not spin for ever.
+      closeLive(state, { cut: false });
       settleTurn(state);
       return;
 

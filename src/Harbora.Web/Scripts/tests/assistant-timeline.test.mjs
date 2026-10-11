@@ -358,3 +358,47 @@ test('withdrawing a refused message removes exactly that bubble', () => {
   withdrawUserMessage(state, key);
   assert.deepEqual(state.items.map((i) => i.text), ['one']);
 });
+
+test('text written before a tool call, with no message yet, is kept when the tool line arrives', () => {
+  // "On it." streamed as deltas, then the model calls a tool before any `message` for that text.
+  const state = createTimeline();
+  addUserMessage(state, 'restart shop');
+  applyStreamEvent(state, 'delta', { text: 'On ' });
+  applyStreamEvent(state, 'delta', { text: 'it.' });
+  applyStreamEvent(state, 'tool', { name: 'get_app', state: 'running' });
+  const bubble = state.items[1];
+  assert.deepEqual({ kind: bubble.kind, text: bubble.text, live: bubble.live, cut: bubble.cut }, { kind: 'assistant', text: 'On it.', live: false, cut: undefined });
+  applyStreamEvent(state, 'tool', { name: 'get_app', state: 'done' });
+  applyStreamEvent(state, 'delta', { text: 'shop is running.' });
+  assert.deepEqual(state.items.map((i) => [i.kind, i.text ?? i.name, i.live === true]), [
+    ['user', 'restart shop', false], ['assistant', 'On it.', false], ['tool', 'get_app', false], ['assistant', 'shop is running.', true],
+  ], 'later deltas start a fresh live bubble');
+});
+
+test('a late message after the bubble was finalized replaces nothing and is drawn as its own text', () => {
+  const state = createTimeline();
+  addUserMessage(state, 'x');
+  applyStreamEvent(state, 'delta', { text: 'On it.' });
+  applyStreamEvent(state, 'plan', { id: 'p1', status: 'pending', expiresAt: '2026-10-11T10:15:00Z', steps: [] });
+  assert.equal(state.items[1].text, 'On it.');
+  assert.equal(state.items[1].live, false);
+});
+
+test('a turn that ends with a live bubble and no message keeps the text, not marked cut', () => {
+  const state = createTimeline();
+  addUserMessage(state, 'x');
+  applyStreamEvent(state, 'delta', { text: 'All good.' });
+  applyStreamEvent(state, 'done', { conversationId: 'c', remainingToday: 3 });
+  assert.equal(state.items[1].text, 'All good.');
+  assert.equal(state.items[1].live, false);
+  assert.equal(state.items[1].cut, undefined);
+});
+
+test('a result card after streamed text keeps the text above it', () => {
+  const state = createTimeline();
+  addUserMessage(state, 'x');
+  applyStreamEvent(state, 'delta', { text: 'Done that.' });
+  applyStreamEvent(state, 'executed', { planId: 'p', status: 'executed', steps: [] });
+  assert.deepEqual(state.items.map((i) => i.kind), ['user', 'assistant', 'result']);
+  assert.equal(state.items[1].live, false);
+});
