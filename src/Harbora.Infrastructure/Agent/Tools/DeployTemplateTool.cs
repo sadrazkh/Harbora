@@ -57,8 +57,7 @@ public sealed class DeployTemplateTool(
     IAuditLogger audit,
     IOptions<BillingOptions> billing,
     ILogger<DeployTemplateTool> logger,
-    // Optional so the tool resolves, and fails closed on every handle, on a host that holds no vault yet.
-    IAgentSecretVault? vault = null) : AgentAppTool(resolver, access)
+    IAgentSecretVault vault) : AgentAppTool(resolver, access)
 {
     private const int ShownValueLength = 60;
 
@@ -171,7 +170,7 @@ public sealed class DeployTemplateTool(
         foreach (var (key, value) in call.Variables)
         {
             if (!call.Handles.Contains(key)) { values[key] = value; continue; }
-            if (vault?.Resolve(context.WorkspaceId, context.UserId, value.Trim()) is not { } resolved)
+            if (vault.Resolve(context.WorkspaceId, context.UserId, value.Trim()) is not { } resolved)
                 return NotPossible(Expired(key).En, Expired(key).Fa);
 
             // The service runs every value through its ${{service.field}} substitution. A secret is not
@@ -403,7 +402,7 @@ public sealed class DeployTemplateTool(
                         $"Template '{template.Name}' stores {key} as plain configuration, so a value entered with the lock button cannot go there — it would be saved as plain text. Deploy with a plain value for {key} (or ask the user for one), then set it as a secret afterwards with set_env_vars, using the lock button.",
                         $"قالب «{template.Name}» {key} را به‌صورت تنظیم معمولی ذخیره می‌کند، پس مقداری که با دکمهٔ قفل وارد شده نمی‌تواند آن‌جا برود — به‌صورت متن معمولی ذخیره می‌شد. با مقدار معمولی برای {key} مستقر کنید (یا آن را از کاربر بپرسید)، سپس با set_env_vars و دکمهٔ قفل آن را محرمانه کنید.");
 
-                if (vault?.Resolve(context.WorkspaceId, context.UserId, value.Trim()) is null)
+                if (vault.Resolve(context.WorkspaceId, context.UserId, value.Trim()) is null)
                 {
                     var unknown = executing ? Expired(key) : UnknownHandle(key);
                     return No(unknown.En, unknown.Fa);

@@ -253,7 +253,7 @@ public class AppConfigToolsTests
         h.SeedApp("web");
         var handle = h.Lock("STRIPE_KEY", Secret);
         (await h.ValidateAsync(h.SetEnvVars(), TwoVariables(handle))).Ok.Should().BeTrue();
-        h.Vault.Forget(handle);
+        h.ExpireSecrets();
         var before = h.Snapshot();
 
         var result = await h.ExecuteAsync(h.SetEnvVars(), TwoVariables(handle));
@@ -262,18 +262,6 @@ public class AppConfigToolsTests
         result.Error.Should().Contain("expired").And.Contain("lock button");
         result.ErrorFa.Should().Contain("منقضی");
         h.Snapshot().Should().Be(before, "not even the plain variable beside it was set");
-    }
-
-    [Fact]
-    public async Task Without_a_vault_on_the_host_every_handle_is_refused()
-    {
-        using var h = new AppToolsHarness { HasVault = false };
-        h.SeedApp("web");
-        var handle = h.Lock("STRIPE_KEY", Secret);
-
-        var verdict = await h.ValidateAsync(h.SetEnvVars(), One(new { key = "STRIPE_KEY", value = handle }));
-
-        verdict.Ok.Should().BeFalse("fails closed rather than storing the handle text as the value");
     }
 
     [Theory]

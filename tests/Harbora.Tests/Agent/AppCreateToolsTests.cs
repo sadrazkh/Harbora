@@ -522,7 +522,7 @@ public class AppCreateToolsTests
             variables = new Dictionary<string, string> { ["url"] = "https://blog.example.com", ["SMTP_PASSWORD"] = smtp }
         };
         (await h.ValidateAsync(h.DeployTemplate(), args)).Ok.Should().BeTrue();
-        h.Vault.Forget(smtp);
+        h.ExpireSecrets();
         var before = h.Snapshot();
 
         var result = await h.ExecuteAsync(h.DeployTemplate(), args);

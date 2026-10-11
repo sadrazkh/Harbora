@@ -35,8 +35,7 @@ public sealed class SetEnvVarsTool(
     AgentResourceResolver resolver,
     ProjectAccessService access,
     IAppConfigurationService configuration,
-    // Optional so the tool resolves, and fails closed on every handle, on a host that holds no vault yet.
-    IAgentSecretVault? vault = null) : AgentAppTool(resolver, access)
+    IAgentSecretVault vault) : AgentAppTool(resolver, access)
 {
     private const int ShownValueLength = 60;
 
@@ -165,7 +164,7 @@ public sealed class SetEnvVarsTool(
         {
             var value = variable.Source switch
             {
-                Source.Handle => vault?.Resolve(context.WorkspaceId, context.UserId, variable.Value!.Trim()),
+                Source.Handle => vault.Resolve(context.WorkspaceId, context.UserId, variable.Value!.Trim()),
                 Source.Generated => ServiceCredentials.Generate(GeneratedLength),
                 _ => variable.Value
             };
@@ -312,7 +311,7 @@ public sealed class SetEnvVarsTool(
                 return ([], PlainSecret(variable.Key, offerGenerate: true));
 
             if (variable.Source == Source.Handle
-                && vault?.Resolve(context.WorkspaceId, context.UserId, variable.Value!.Trim()) is null)
+                && vault.Resolve(context.WorkspaceId, context.UserId, variable.Value!.Trim()) is null)
                 return ([], executing ? Expired(variable.Key) : UnknownHandle(variable.Key));
 
             settled.Add(new Settled(variable.Key, variable.Value, variable.Source, secret,
