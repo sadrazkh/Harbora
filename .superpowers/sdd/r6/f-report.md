@@ -432,3 +432,203 @@ All runs used `MSBUILDDISABLENODEREUSE=1` and `-p:UseSharedCompilation=false`, w
    the size.
 9. **Deployments list labelling:** rollbacks queued by the assistant show "Assistant" as their trigger (decision
    6.1).
+
+## Fixes after review
+
+The branch was rebased onto master `9c8617c`, which brought in G's database tools and the secrets contract. The
+rebase applied with no conflicts, so the DI blocks and the census test kept both sides. All the fixes below are
+in `d172f78`.
+
+### 1. Secrets as black boxes (owner decision; u-brief "S", part F)
+
+**set_env_vars.** A value can now arrive in one of three ways.
+
+- **A handle.** When `AgentSecretHandles.IsHandle(value)` is true:
+  - At validation the tool only asks the vault whether the handle exists. The value is never resolved into a card.
+  - At execution the vault resolves the handle, and the value goes straight into `SetEnvAsync`.
+  - A handle always makes the variable secret, even if the call says `secret: false`.
+  - A handle buried in a longer value ("Bearer {{secret:…}}") is refused.
+- **`generate: true`.** The server makes a 48-character value at execution, using `ServiceCredentials.Generate`,
+  the same alphabet as database passwords. The value is never written into the arguments. Giving both a value and
+  `generate` is refused.
+- **A plain value.** Allowed only for a variable that is not secret. A plain value for a secret is refused in both
+  languages, with guidance:
+  - ask the user to use the lock button beside the message box;
+  - the value then reaches the model as `{{secret:…}}`, which it should pass on unchanged;
+  - or use `generate: true`.
+
+Cards and results:
+
+- Cards show `KEY (secret — ••••••, entered with the lock button)` or `KEY (secret — a random value is generated
+  on the server)`.
+- `ResultJson` carries `value: "••••••"` for secret variables and `generated: true` for generated ones.
+
+Handle failures:
+
+- Unknown, foreign or expired handle at validation: refused, telling the person to enter it again with the lock
+  button.
+- Handle that expired between the card and the run: the step fails with nothing applied, not even the plain
+  variables beside it.
+
+The description no longer claims "never shown again, not even to you". It now tells the model to use handles or
+`generate`, and never to ask for a secret in the chat.
+
+**deploy_template.**
+
+- A variable the template marks secret must be given as a handle. A plain value is refused with the lock-button
+  guidance (no `generate` here).
+- The "needs values for" refusal names which missing values are secret and must come through the lock button.
+- Handles are checked against the vault at validation and resolved only at execution.
+- The reference check (`${{…}}`) skips handle values, since the tool cannot see them.
+- The card shows the mask.
+- A handle given for a variable the template left plain is honoured, so the handle still means "secret". The
+  template stores the value, and the tool then makes it secret through `IAppConfigurationService.SetEnvAsync`
+  before the first deploy is queued. If that fails, the step fails and says the value is stored as plain text and
+  that nothing was deployed.
+
+**The vault is an optional constructor parameter** (`IAgentSecretVault? vault = null`) on both tools.
+
+- Agent D is building `InMemoryAgentSecretVault` in parallel, and nothing on master registers an
+  `IAgentSecretVault` yet.
+- A required parameter would break the panel's tool registry until D lands. The registry resolves every
+  `IAgentTool`; the registration test proves this.
+- Without a vault, every handle is refused (fail closed).
+- Once D registers the vault, MS DI injects it with no change here.
+
+### 2. A remembered set_env_vars can no longer turn a secret plain
+
+- When `secret` is omitted, the variable keeps the existing row's value; for a new variable it is false.
+- When `availableAtBuild` is omitted, it also keeps the existing row's value; for a new variable it is false.
+- The flags are read at both validation and execution.
+- An explicit `secret: false` on a secret is refused through the assistant: "Leave secret out to keep it secret,
+  or change it in the panel".
+- A plain value for an existing secret with `secret` omitted is refused as a plain secret.
+- The schema text says all of this.
+
+### 3. The rollback target is pinned
+
+`rollback_app` without `number` is refused at both validation and execution. The refusal reads "The previous
+successful deployment of 'web' is #1 (commit aaaaaaaa). Propose rollback_app again with number: 1, so the plan
+names exactly what is restored", in both languages. A step can therefore only be carded with the number in its
+stored arguments. The description and schema say so.
+
+### Minors
+
+- **The census guard matches `mayStart.ReasonFa`, not the bare substring.**
+- **Narrower exception mapping.** `DeployRefusal` now maps only:
+  - the three typed preflight refusals;
+  - an `InvalidOperationException` that the `IDeploymentEngine` implementation itself threw (`ThrownBy` walks the
+    exception's `TargetSite` declaring types, which handles async state machines).
+
+  Anything else propagates, and the plan engine logs it and reports a failed step in neutral words. A test shows an
+  EF-style exception from elsewhere is not passed off as a refusal.
+- **deploy_template's exception handling:**
+  - The service's own refusals count only if they are `QuotaRefusedException`, `CreationPaymentRequiredException`,
+    or something thrown by `TemplateDeploymentService` itself. Those are told in its words.
+  - Anything else gets the neutral text plus a log line.
+  - Either way, the tool checks whether the project was committed, which the service does before it queues
+    provisioning. If it was: "Project 'ghost' was created, but the template did not finish: …", with the project
+    link.
+  - An unexpected failure while queueing the first deploy after the commit is logged. The step is reported done,
+    saying the first deployment could not be queued.
+- **Persian status words for every deployment state:**
+  - در صف (queued)
+  - در حال ساخت (building)
+  - در حال ارسال ایمیج (pushing)
+  - در حال استقرار (deploying)
+  - در حال بررسی سلامت (health check)
+  - منتظر تأیید (waiting for approval)
+  - موفق (succeeded)
+  - ناموفق (failed)
+  - لغوشده (cancelled)
+  - بازگردانده‌شده (rolled back)
+
+  These are also used in the rollback in-flight refusal.
+- **Repository URLs with a token in the query string are refused** (`access_token`, `token`, `private_token`,
+  `oauth_token`, `password`, `auth`, case-insensitive), alongside the existing user-info refusal.
+
+### Tests
+
+Tests now total 221 (+20). Per class: Common 89, Create 55, Config 46, Lifecycle 26, Scenario 4, Registration 1.
+
+**New tests:**
+
+- **Config:**
+  - a handle is applied encrypted, and its value appears on no card or result and in no audit entry; even the
+    handle text is absent from the card;
+  - a plain secret is refused (×2) and a downgrade to plain is refused (×1), each with the guidance;
+  - `generate` gives 48 encrypted characters that differ on every run;
+  - omitted flags keep the row's values;
+  - a handle forces a secret against `secret: false`;
+  - unknown and someone else's handles are refused;
+  - a handle that expires between card and run changes nothing;
+  - no vault means every handle is refused;
+  - two new malformed cases: value plus `generate`, and a handle inside a longer text.
+- **Create:**
+  - query-string tokens refused (3 cases);
+  - a plain value for a template secret is refused;
+  - a missing secret is asked for through the lock button;
+  - a handle for a plain template variable is stored as a secret;
+  - an expired template handle creates nothing;
+  - a template that throws after its commit says the project exists;
+  - an unexpected first-deploy failure still reports the project.
+- **Lifecycle:**
+  - a rollback without a number is refused at validation and execution with the number to use, and with the
+    number it rolls back exactly there;
+  - a non-engine exception propagates;
+  - Persian status in the joined-deploy summary.
+- **Scenario 2, rewritten.** The secret arrives as a handle, inside the person's message and the model's call.
+  Across three turns the value appears in:
+  - no model request at all, `EverythingSent()` included (the handle does appear there, as expected);
+  - no event;
+  - no stored message (`Text`, `ToolCallsJson`, `SummaryEn/Fa`);
+  - no plan (`StepsJson`, `ResultsJson`);
+  - no audit entry.
+
+  It is stored as `enc:` plus the value, and as secret.
+- **Existing tests moved over.** The template tests now pass handles, and the rollback calls give `number: 1`.
+
+**Mutation checks** (run by hand, restored with `git checkout`, touched and rebuilt):
+
+- Putting the resolved value on the set_env_vars card failed three tests: the card test, the planned-app test, and
+  scenario 2 (the plan's `StepsJson`).
+- Ignoring the existing secret flag failed the plain-secret refusal case.
+
+### Commands and output
+
+All runs used `MSBUILDDISABLENODEREUSE=1` and `-p:UseSharedCompilation=false`.
+
+- **Focused run:** `--filter "FullyQualifiedName~Harbora.Tests.Agent.|FullyQualifiedName~QuotaRefusal|FullyQualifiedName~AssistantHttpTests"`
+  gave `Passed! - Failed: 0, Passed: 474, Total: 474`.
+- **Full run:**
+  - `dotnet build Harbora.slnx --nologo -v q -p:UseSharedCompilation=false` gave `BUILD_EXIT=0` with
+    `28 Warning(s)` (the package warnings) and 0 `warning CS`.
+  - `dotnet test Harbora.slnx --nologo -v q --no-build` gave `EXIT=0`:
+    ```
+    Skipped! - Failed:     0, Passed:     0, Skipped:   108, Total:   108 - Harbora.Postgres.Tests.dll (net10.0)
+    Passed!  - Failed:     0, Passed:   500, Skipped:    17, Total:   517 - Harbora.NodeAgent.Tests.dll (net10.0)
+    Passed!  - Failed:     0, Passed:    15, Skipped:     0, Total:    15 - Harbora.NodeIngress.Tests.dll (net10.0)
+    Passed!  - Failed:     0, Passed:  7172, Skipped:     0, Total:  7172 - Harbora.Tests.dll (net10.0)
+    ```
+  - `grep -c "Harbora.Tests.dll"` returned 2.
+  - 7172 = 221 app-tool tests + 6951 from master `9c8617c`. The master figure was not run separately.
+
+### Concerns after the fixes
+
+- **Concern 1 (secrets in replayed or stored tool-call arguments) is resolved for app tools that use handles.**
+  The value is never in the arguments. It still applies to anything a model passes in plain text: plain variable
+  values are, by definition, not secret.
+- **The vault is optional in DI until D's `InMemoryAgentSecretVault` is registered.** Until then every handle is
+  refused. Once it is on master, the `= null` defaults can stay or be removed.
+- **The `TargetSite`-based "thrown by the service itself" test relies on stack information.** It holds for
+  exceptions thrown with `throw` in the service, but it would misclassify a refusal the service rethrows from a
+  helper in another class. Today there are none.
+- **Concerns 2, 3, 4, 6, 7, 8 and 9 from §10 are unchanged:**
+  - `AgentTracker`'s ordering;
+  - the operations service's status writes;
+  - the template service has no validate method;
+  - no client IP in audits;
+  - the planned `add_domain` reserved-host check;
+  - the first-hour heuristic;
+  - the "Assistant" label on rollbacks.
+- **Concern 5 (the rollback target moving) is fixed by item 3.**
