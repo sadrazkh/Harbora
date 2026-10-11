@@ -326,6 +326,19 @@ public static class DependencyInjection
         // of DatabasesController so the panel and the agent's tools run one set of checks and audits.
         services.AddScoped<Services.IDatabaseProvisioningService, Services.DatabaseProvisioningService>();
         services.AddScoped<Services.IDatabaseAttachmentService, Services.DatabaseAttachmentService>();
+        // Round six, wave B, agent G (in-panel agent): the assistant's project and database write tools,
+        // each over the service the matching ProjectsController/DatabasesController action calls. Here,
+        // beside the services they wrap, rather than with the agent core's read tools further down.
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.CreateProjectTool>();
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.AddEnvironmentTool>();
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.CreateDatabaseTool>();
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.AttachDatabaseTool>();
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.DetachDatabaseTool>();
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.RotateDatabasePasswordTool>();
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.StopDatabaseTool>();
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.StartDatabaseTool>();
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.DeleteDatabaseTool>();
+        services.AddScoped<Agent.IAgentTool, Agent.Tools.DeleteProjectTool>();
         // 2.3 (round-2 market-gaps plan): scheduled VACUUM/ANALYZE/REINDEX/OPTIMIZE, run through the
         // same grant executor's one-off seam. The scheduler is the queueing half of BackupScheduler's
         // own shape, ticking a cron schedule rather than an interval.
