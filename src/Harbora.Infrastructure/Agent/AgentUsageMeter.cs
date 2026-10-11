@@ -71,19 +71,26 @@ public sealed class AgentUsageMeter(HarboraDbContext db, ISystemClock clock)
         if (!db.Database.IsRelational())
             return await TryReserveInMemoryAsync(workspaceId, today, limit, ct);
 
-        // Two attempts: the second exists only for the first call of the day losing the race to
-        // insert the day's row — the unique index refuses the loser's insert, and the loser then
-        // takes the ordinary conditional-update path against the winner's row.
-        for (var attempt = 0; attempt < 2; attempt++)
+        // A few attempts, because the first calls of a day can race to open the day's row: the unique
+        // index refuses every insert but one, and a loser — or a caller whose update ran a moment before
+        // the row existed — goes round again and takes the ordinary conditional update against it. Only
+        // a row that is really at the limit is a refusal.
+        for (var attempt = 0; attempt < 3; attempt++)
         {
             var reserved = await db.AgentUsageDays.IgnoreQueryFilters()
                 .Where(u => u.WorkspaceId == workspaceId && u.Day == today && (limit == 0 || u.ModelCalls < limit))
                 .ExecuteUpdateAsync(s => s.SetProperty(u => u.ModelCalls, u => u.ModelCalls + 1), ct);
             if (reserved == 1) return true;
 
-            var exists = await db.AgentUsageDays.IgnoreQueryFilters().AsNoTracking()
-                .AnyAsync(u => u.WorkspaceId == workspaceId && u.Day == today, ct);
-            if (exists) return false;
+            var calls = await db.AgentUsageDays.IgnoreQueryFilters().AsNoTracking()
+                .Where(u => u.WorkspaceId == workspaceId && u.Day == today)
+                .Select(u => (int?)u.ModelCalls)
+                .FirstOrDefaultAsync(ct);
+            if (calls is { } used)
+            {
+                if (limit != 0 && used >= limit) return false;
+                continue; // the row appeared after the update above ran
+            }
 
             var row = new AgentUsageDay { WorkspaceId = workspaceId, Day = today, ModelCalls = 1 };
             db.AgentUsageDays.Add(row);
