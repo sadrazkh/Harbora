@@ -106,7 +106,7 @@ public interface IAppProvisioningService
     Task<ServiceOutcome<AppCreateResult>> CreateAsync(AppCreateRequest request, CancellationToken ct);
 }
 
-public sealed record AppActor(Guid WorkspaceId, Guid UserId, string? ClientIp = null);
+public sealed record AppActor(Guid WorkspaceId, string? ClientIp = null);   // no user id: see "Fixes after review"
 
 public sealed record AppItemRef(Guid? Id, string? Name)   // Id wins when both are set
 {
@@ -144,8 +144,8 @@ Notes on the semantics:
     If the workspace has no environment yet, validate asks about `ResourcePlacement(null, null)`.
   - Every configuration method: `CanTouchAppAsync(appId, Capabilities.AppsEnv)`. AppsEnv is the
     capability all six controller policies use, the volume actions included.
-  - Access is judged for `ICurrentUser`, the request's signed-in user. `UserId` is what gets recorded
-    (the deployment's `TriggeredByUserId`). In every caller these exist for, the two are the same person.
+  - Access is judged for `ICurrentUser`, the request's signed-in user. `AppCreateRequest.UserId` is what gets recorded
+    as the deployment's `TriggeredByUserId`. `AppActor` has no user id: the access check and the audit actor both read `ICurrentUser`.
 - **Workspace scoping.** Reads go through the request's tenant filter, plus `a.WorkspaceId == actor.WorkspaceId`.
   `IgnoreQueryFilters` appears only where the code already used it: the platform-wide slug check and
   the slug derivation.
@@ -216,7 +216,7 @@ Every entry passes `workspaceId: request/actor.WorkspaceId` explicitly, plus the
 
 | Action | targetId | metadata |
 |---|---|---|
-| `app.created` (new) | app id | name, slug, sourceType, kind, environmentId, serverId, instanceSize, templateId, host. Never the Git token |
+| `app.created` (new) | `{app}:{slug}` | appId, name, slug, sourceType, kind, environmentId, serverId, instanceSize, templateId, host. Never the Git token |
 | `app.env_set` (new, one per key) | `{app}:{KEY}` | key, secret, availableAtBuild, created. Never the value |
 | `app.env_deleted` (new) | `{app}:{KEY}` | key, secret. Never the value |
 | `app.domain_added` (new) | `{app}:{host}` | host, ssl, primary |
@@ -373,3 +373,120 @@ not been exercised by me.
    contract.
 3. **The behaviour changes above.** Items 1, 2 and 4 are visible to users, though only in edge cases
    or in Persian. Revert them if the owner wants strict parity over honesty.
+
+## Fixes after review
+
+**Rebase.** I rebased onto master (`1585e37`, with agents B and C landed). The only conflicts were the
+two source-scanning census lists. In each I kept both sides: B's `DatabaseProvisioningService.cs` line
+replaced `DatabasesController.cs`, and my app-service lines replaced `AppsController.cs`.
+- `ResourceCreationBillingTests`: `AppProvisioningService.cs` + `DatabaseProvisioningService.cs`.
+- `WorkspaceGovernanceQuotaTests`: `AppProvisioningService.cs` + `AppConfigurationService.cs` +
+  `DatabaseProvisioningService.cs`.
+
+`AppScopeCensusTests`, `QuotaRefusalBilingualismTests` and `DependencyInjection.cs` merged without
+conflicts. B made `ProjectService` take an optional `IAuditLogger` and write `project.created` itself.
+My provisioning service gets `ProjectService` from DI, so a default project created during an app
+create is now audited by `ProjectService`. My test harness builds it without an audit logger.
+
+**1. Every check now runs inside the creation lock (the Important fix).**
+- `AppConfigurationService.AddVolumeAsync` takes `AcquireCreationLockAsync` first, then runs
+  `CheckVolumeAsync(track: true)` inside it. That check covers access, app, mount-path rules and the
+  duplicate test against freshly read `app.Volumes`. The quota check follows. There is no unique index
+  on a volume's mount path, so this ordering is now the only thing that stops a duplicate. No
+  migration was added.
+- `AddDomainAsync` works the same way with `CheckDomainAsync`, which does the platform-wide host test
+  and the reserved-host test.
+- `AppProvisioningService.CreateAsync` takes the lock before `CheckFormAsync` and `SizeAsync`, so
+  slug availability is read inside it too.
+- I reworded `IAppProvisioningService.CreateAsync`'s doc to promise exactly this. It also says
+  plainly what a per-workspace lock cannot do: the app slug and a typed host are unique
+  platform-wide, and another workspace can claim either in the same instant. The unique indexes
+  refuse that second insert, and it surfaces as an exception, as it always did. `AddDomainAsync`'s
+  comment says the same for hosts.
+
+**2. Minor fixes.**
+- **Default project over the plan's ceiling** (behaviour change #6). The refusal is now added to the
+  list. The workspace checks (quota, access with a `(null, null)` placement, capacity, template) still
+  run, and everything collected is returned. `ValidateCreateAsync` now asks the same question when
+  the workspace has no environment: `CanAddGovernedResourcesAsync(Projects: 1, Environments: 1)`,
+  placed where the create resolves the environment. So validate and create return identical lists.
+- **`AppActor.UserId` removed.** The record is now `AppActor(Guid WorkspaceId, string? ClientIp = null)`.
+  Its doc says the person is always `ICurrentUser`, which both the access check and the audit actor
+  read. I did this so Wave B is not misled into thinking a caller can choose attribution.
+  `AppCreateRequest.UserId` stays: it is read, as the first deployment's `TriggeredByUserId`. I also
+  corrected the signature line earlier in this report.
+- **`app.created` target** is now `{app.Name}:{app.Slug}`, the same `{app}:{what}` shape as the other
+  entries. The app id moved into the metadata as `appId`. The audit table above is corrected.
+- **New tests**, 6 cases in total:
+  - `AppProvisioningServiceTests`:
+    - `A_template_whose_manifest_does_not_parse_is_refused_by_name`
+    - `The_plans_scheduled_job_ceiling_is_refused_in_both_languages`
+    - `A_default_project_past_the_plans_ceiling_is_refused_alongside_every_other_reason` (asserts
+      the form refusal survives and validate equals create)
+    - `A_slug_another_workspace_takes_while_this_create_waits_for_the_lock_is_refused_not_duplicated`
+  - `AppConfigurationServiceTests`:
+    - `A_volume_another_request_adds_while_this_one_waits_for_the_lock_is_seen_and_refused`
+    - `A_host_another_request_claims_while_this_one_waits_for_the_lock_is_refused_as_in_use`
+- **How the three lock tests work.** The harness wraps the real `QuotaService` in `LockHookQuota`.
+  Right after `AcquireCreationLockAsync` returns, a one-shot `OnCreationLock` hook commits a row through
+  a second context over the same store, standing in for another request that committed while this one
+  waited. A check made before the lock cannot see that row; a check inside the lock must.
+- **Mutation check, reverted afterwards.** I put the checks back before the lock in all three methods,
+  rebuilt (`BUILD_EXIT=0`) and reran the two service test classes. The result was
+  `Failed! - Failed: 3, Passed: 50, Total: 53`, and the three failures were exactly the three lock
+  tests. I then restored the files, touched them and rebuilt.
+- I also updated the existing `app.created` test to the new target and the `appId` metadata.
+
+**3. Behaviour changes the first report left out.** These are in addition to the six listed above.
+- **(a) A model-binding error now also runs stage-two checks.** When the form arrives with a binding or
+  annotation error, the controller calls `ValidateCreateAsync`. If stage one passes, that also runs
+  the address check (Reserved/Taken) and the governance quota. The old action returned after stage
+  one, so those errors can now appear alongside a binding error where they did not before. Nothing is
+  created either way.
+- **(b) A domain or volume quota refusal with a null `Reason`** now shows "Plan quota exceeded." (or
+  the Persian fallback). Before, `TempData["Error"]` was set to null and no banner appeared.
+  `QuotaService` documents `Reason` as never null when refused, so this is only reachable with another
+  `IQuotaService`.
+- **(c) `AddRefusals` drops a service refusal for a field that model binding already flagged.** This
+  avoids a doubled "name is required". The side effect: a field with a binding error never shows the
+  service's own refusal for it in the same post. For example, `Name` with both `[Required]` and a
+  service refusal shows only the annotation message.
+
+**Commands and output.**
+
+The tests covering the change were `AppProvisioningServiceTests`, `AppConfigurationServiceTests`,
+`AppCreate*HttpTests`, `AppAddress*`, `AppDetailTabsHttpTests`, `BuildArgCheckboxHttpTests`,
+`StatusPageDomainHttpTests`, `VolumeProtectionHttpTests`, `VolumeBackupHttpTests`,
+`AppScopeCensusTests`, `NodeChannelDeploymentTests`, `WorkspaceGovernanceQuotaTests`,
+`ResourceCreationBillingTests`, `AppsControllerLogSearchTests`, `QuotaRefusalBilingualismTests` and
+B's `DatabaseProvisioningServiceTests`, because of the shared census files:
+
+```
+dotnet test tests/Harbora.Tests --no-build --nologo -v q --filter "FullyQualifiedName~AppProvisioningServiceTests|FullyQualifiedName~AppConfigurationServiceTests"
+  Passed!  - Failed:     0, Passed:    53, Skipped:     0, Total:    53 - Harbora.Tests.dll (net10.0)
+dotnet test tests/Harbora.Tests --no-build --nologo -v q --filter "<the list above>"
+  Passed!  - Failed:     0, Passed:   266, Skipped:     0, Total:   266 - Harbora.Tests.dll (net10.0)
+```
+
+Full suite, run with the CONSTRAINTS recipe:
+
+```
+export MSBUILDDISABLENODEREUSE=1
+LOG=/tmp/test-r6-app-services.log
+dotnet build Harbora.slnx --nologo -v q -p:UseSharedCompilation=false > "$LOG.build" 2>&1; echo "BUILD_EXIT=$?"
+  BUILD_EXIT=0        (warnings: NU1900 x48, NU1903 x8 only — no CS warnings)
+dotnet test Harbora.slnx --nologo -v q --no-build > "$LOG" 2>&1; echo "EXIT=$?"
+  EXIT=0
+  Skipped! - Failed:     0, Passed:     0, Skipped:   104, Total:   104 - Harbora.Postgres.Tests.dll (net10.0)
+  Passed!  - Failed:     0, Passed:   500, Skipped:    17, Total:   517 - Harbora.NodeAgent.Tests.dll (net10.0)
+  Passed!  - Failed:     0, Passed:    15, Skipped:     0, Total:    15 - Harbora.NodeIngress.Tests.dll (net10.0)
+  Passed!  - Failed:     0, Passed:  6690, Skipped:     0, Total:  6690 - Harbora.Tests.dll (net10.0)
+grep -c "Harbora.Tests.dll" "$LOG"   ->  2
+```
+
+**How 6690 breaks down.** The 6690 is master's count plus 54 from this branch: 53 service cases (47
+before review, 6 added now) and 1 extra census InlineData case. That puts master at 6636, which matches
+6429 + 62 (B's report) + 145 (C's report). I did not run master separately.
+
+`Harbora.Postgres.Tests` still all skip here because there is no Docker, so the Postgres advisory-lock
+behaviour remains unverified locally.
