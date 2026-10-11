@@ -184,6 +184,32 @@ public sealed class FakeTool(string name, AgentToolKind kind, string? capability
     }
 }
 
+/// <summary>A host lifetime whose shutdown a test can start — a self-deploy in the middle of a turn.</summary>
+public sealed class FakeLifetime : Microsoft.Extensions.Hosting.IHostApplicationLifetime
+{
+    private readonly CancellationTokenSource _stopping = new();
+    public CancellationToken ApplicationStarted => CancellationToken.None;
+    public CancellationToken ApplicationStopping => _stopping.Token;
+    public CancellationToken ApplicationStopped => CancellationToken.None;
+    public void StopApplication() => _stopping.Cancel();
+}
+
+/// <summary>Keeps every log entry, for asserting on its level and its text.</summary>
+public sealed class ListLogger<T> : Microsoft.Extensions.Logging.ILogger<T>
+{
+    private readonly List<(Microsoft.Extensions.Logging.LogLevel Level, string Text)> _entries = [];
+    public IReadOnlyList<(Microsoft.Extensions.Logging.LogLevel Level, string Text)> Entries { get { lock (_entries) return _entries.ToList(); } }
+
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+    public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+    public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state,
+        Exception? exception, Func<TState, Exception?, string> formatter)
+    {
+        lock (_entries) _entries.Add((logLevel, formatter(state, exception) + (exception is null ? "" : " | " + exception)));
+    }
+}
+
 public sealed class MutableClock(DateTimeOffset now) : ISystemClock
 {
     public DateTimeOffset UtcNow { get; set; } = now;
@@ -312,7 +338,11 @@ public sealed class AgentHarness : IDisposable
     public AgentUsageMeter Meter => new(Db, Clock);
     public IAgentCapabilityCheck Capabilities { get; } = new AuthorizationAgentCapabilityCheck(Authorization);
     public AgentToolRegistry Registry => new(Tools, Capabilities);
-    public AgentPlanService Plans => new(Db, Registry, Audit, Clock, NullLogger<AgentPlanService>.Instance);
+    public AgentPlanService Plans => new(Db, Registry, Audit, Clock, NullLogger<AgentPlanService>.Instance, Vault);
+
+    /// <summary>The lock-button vault this person's turns and plans redact against.</summary>
+    public InMemoryAgentSecretVault Vault => _vault ??= new InMemoryAgentSecretVault(Protector, Clock);
+    private InMemoryAgentSecretVault? _vault;
 
     public AgentConversationService Service => ServiceOver();
 
@@ -321,15 +351,17 @@ public sealed class AgentHarness : IDisposable
     /// would be), another chat client, or a shorter turn deadline.
     /// </summary>
     public AgentConversationService ServiceOver(
-        HarboraDbContext? db = null, IAgentChatClient? chat = null, TimeSpan? turnDeadline = null)
+        HarboraDbContext? db = null, IAgentChatClient? chat = null, TimeSpan? turnDeadline = null,
+        Microsoft.Extensions.Hosting.IHostApplicationLifetime? lifetime = null,
+        Microsoft.Extensions.Logging.ILogger<AgentConversationService>? logger = null)
     {
         db ??= Db;
         var access = new ProjectAccessService(db, new Caller(UserId, WorkspaceId));
         var registry = new AgentToolRegistry(Tools, Capabilities);
         return new AgentConversationService(
-            db, chat ?? Chat, registry, new AgentPlanService(db, registry, Audit, Clock, NullLogger<AgentPlanService>.Instance),
+            db, chat ?? Chat, registry, new AgentPlanService(db, registry, Audit, Clock, NullLogger<AgentPlanService>.Instance, Vault),
             new AgentUsageMeter(db, Clock), new AgentWorkspaceSnapshot(db, new AgentResourceResolver(db, access), access),
-            new FeatureGate(db), Capabilities, Clock, NullLogger<AgentConversationService>.Instance)
+            new FeatureGate(db), Capabilities, Clock, logger ?? NullLogger<AgentConversationService>.Instance, lifetime, Vault)
         {
             TurnDeadline = turnDeadline ?? AgentConversationService.DefaultTurnDeadline
         };

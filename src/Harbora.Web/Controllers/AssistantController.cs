@@ -34,6 +34,7 @@ namespace Harbora.Web.Controllers;
 public sealed class AssistantController(
     AgentConversationService conversations,
     AgentPlanService plans,
+    AgentSecretService secrets,
     ICurrentUser currentUser,
     ILogger<AssistantController> logger) : Controller
 {
@@ -75,6 +76,25 @@ public sealed class AssistantController(
                 messageEn = "The assistant is not enabled for this workspace.",
                 messageFa = "دستیار برای این فضای کاری فعال نیست."
             }) { StatusCode = StatusCodes.Status403Forbidden };
+
+    /// <summary>
+    /// The lock button: holds a secret in the vault and answers with its handle — never the value. The
+    /// pane inserts the handle into the message, the model passes it on unchanged, and a tool resolves it
+    /// on the server. 400 for a name or value out of bounds, 403 without the entitlement.
+    /// </summary>
+    [HttpPost("secrets")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> HoldSecret(
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] AgentSecretRequest? request, CancellationToken ct)
+    {
+        var outcome = await secrets.HoldAsync(Actor, request, ct);
+        if (outcome.Ok) return Json(outcome.View);
+
+        var body = new { error = outcome.Code, messageEn = outcome.MessageEn, messageFa = outcome.MessageFa };
+        return outcome.Code == "feature_not_enabled"
+            ? new ObjectResult(body) { StatusCode = StatusCodes.Status403Forbidden }
+            : BadRequest(body);
+    }
 
     private NotFoundObjectResult NoSuchConversation() => NotFound(new
     {

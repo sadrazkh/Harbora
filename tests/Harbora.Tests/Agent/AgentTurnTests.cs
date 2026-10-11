@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Harbora.Data;
 using Harbora.Domain.Agent;
 using Harbora.Infrastructure.Agent;
 using Microsoft.EntityFrameworkCore;
@@ -158,6 +159,96 @@ public class AgentTurnTests
             }
             return new AgentChatResponse(true, new AgentChatMessage(AgentRole.Assistant, string.Concat(pieces)), "probe/model",
                 new AgentChatUsage(1, 1), "stop", null, null);
+        }
+    }
+
+    // ---- fixes after review --------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_fully_streamed_answer_is_saved_even_when_the_turn_runs_out_of_time_as_it_finishes()
+    {
+        using var h = new AgentHarness();
+        // The answer is complete, but the turn's deadline passes before it can be saved.
+        h.Chat.ThenStreamed(new AgentChatResponse(true, new AgentChatMessage(AgentRole.Assistant, "All of it."), "m", null, "stop", null, null),
+            ["All ", "of it."], after: async ct =>
+            {
+                try { await Task.Delay(Timeout.Infinite, ct); }
+                catch (OperationCanceledException) { }
+            });
+
+        var (_, events) = await Send(h.ServiceOver(turnDeadline: TimeSpan.FromSeconds(1)), h, "everything");
+
+        events.Names().Should().ContainInOrder("delta", "delta", "message").And.EndWith("done");
+        events.Single<AgentMessageView>("message").Text.Should().Be("All of it.");
+        using var other = h.NewContext();
+        (await other.AgentMessages.CountAsync(m => m.Role == AgentMessageRole.Assistant && m.Text == "All of it."))
+            .Should().Be(1, "text the person watched being written is never lost to the deadline");
+    }
+
+    [Fact]
+    public async Task A_streamed_answer_whose_save_fails_still_closes_its_bubble_before_the_error()
+    {
+        using var h = new AgentHarness();
+        using var failing = new HarboraDbContext(
+            new DbContextOptionsBuilder<HarboraDbContext>().UseInMemoryDatabase(h.DatabaseName)
+                .AddInterceptors(new FailAssistantSave("Answered.")).Options,
+            new Harbora.Application.Abstractions.FixedWorkspaceScope(h.WorkspaceId));
+        h.Chat.ThenStreamedText("Answ", "ered.");
+
+        var (_, events) = await Send(h.ServiceOver(db: failing), h, "go");
+
+        events.Names().Should().Equal("started", "delta", "delta", "message", "error", "done");
+        events.Single<AgentMessageView>("message").Text.Should().Be("Answered.");
+    }
+
+    [Fact]
+    public async Task A_server_shutting_down_mid_turn_ends_it_cleanly_and_releases_its_mark()
+    {
+        using var h = new AgentHarness([Reader()]);
+        var lifetime = new FakeLifetime();
+        h.Chat.ThenCall("peek").ThenText("never", before: ct =>
+        {
+            lifetime.StopApplication();
+            return Task.Delay(Timeout.Infinite, ct);
+        });
+
+        var (outcome, events) = await Send(h.ServiceOver(lifetime: lifetime), h, "work");
+
+        outcome.Status.Should().Be(AgentSendStatus.Streamed);
+        events.Names().Should().Equal("started", "tool", "tool", "error", "done");
+        events.Single<AgentErrorData>("error").MessageEn.Should().StartWith("The server is restarting");
+        using var other = h.NewContext();
+        (await other.AgentConversations.SingleAsync()).TurnStartedAt.Should().BeNull("no 409s for 3½ minutes after a self-deploy");
+    }
+
+    [Theory]
+    [InlineData(typeof(IOException), Microsoft.Extensions.Logging.LogLevel.Information)]
+    [InlineData(typeof(OperationCanceledException), Microsoft.Extensions.Logging.LogLevel.Information)]
+    [InlineData(typeof(InvalidOperationException), Microsoft.Extensions.Logging.LogLevel.Warning)]
+    public async Task A_listener_that_fails_is_logged_quietly_only_when_the_failure_is_a_departure(Type failure, Microsoft.Extensions.Logging.LogLevel level)
+    {
+        using var h = new AgentHarness();
+        var logger = new ListLogger<AgentConversationService>();
+        h.Chat.ThenText("hi");
+        var writes = 0;
+        Task Sink(AgentStreamEvent e, CancellationToken _) =>
+            ++writes == 1 ? Task.CompletedTask : throw (Exception)Activator.CreateInstance(failure, "boom")!;
+
+        await Send(h.ServiceOver(logger: logger), h, "hello", sink: Sink);
+
+        logger.Entries.Should().ContainSingle(e => e.Text.Contains("listener")).Which.Level.Should().Be(level);
+    }
+
+    private sealed class FailAssistantSave(string text) : Microsoft.EntityFrameworkCore.Diagnostics.SaveChangesInterceptor
+    {
+        public override ValueTask<Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int>> SavingChangesAsync(
+            Microsoft.EntityFrameworkCore.Diagnostics.DbContextEventData eventData,
+            Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        {
+            if (eventData.Context!.ChangeTracker.Entries<AgentMessage>()
+                .Any(e => e.State == EntityState.Added && e.Entity.Text == text))
+                throw new DbUpdateException("The database refused the write.");
+            return base.SavingChangesAsync(eventData, result, cancellationToken);
         }
     }
 

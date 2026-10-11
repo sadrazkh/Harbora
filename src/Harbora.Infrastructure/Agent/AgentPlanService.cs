@@ -38,7 +38,8 @@ public sealed class AgentPlanService(
     AgentToolRegistry registry,
     IAuditLogger audit,
     ISystemClock clock,
-    ILogger<AgentPlanService> logger)
+    ILogger<AgentPlanService> logger,
+    IAgentSecretValues? secretValues = null)
 {
     public const string StepExecutedAction = "assistant.step_executed";
     public const string PlanRejectedAction = "assistant.plan_rejected";
@@ -515,7 +516,7 @@ public sealed class AgentPlanService(
             logger.LogError(again, "Plan {Plan} could not be recorded either; it stays executing.", plan.Id);
             db.ChangeTracker.Clear();
             return new ClaimedRun(new AgentPlanResultView(plan.Id, StatusName(status),
-                ledger.Results.Select(x => x!).ToList()), ledger.Refusal);
+                ledger.Results.Select(x => Scrub(x!, KnownSecrets(plan))).ToList()), ledger.Refusal);
         }
     }
 
@@ -614,7 +615,8 @@ public sealed class AgentPlanService(
     private async Task<List<AgentPlanStepResultView>> FinishAsync(
         AgentPlan plan, AgentPlanStatus status, RunLedger ledger, DateTimeOffset? executedAt, CancellationToken ct)
     {
-        var results = ledger.Results.Select(r => r!).ToList();
+        var known = KnownSecrets(plan);
+        var results = ledger.Results.Select(r => Scrub(r!, known)).ToList();
 
         // Plain tracked write: this call owns the plan since it won the claim, so there is no race left.
         var tracked = await db.AgentPlans.IgnoreQueryFilters().FirstAsync(p => p.Id == plan.Id, ct);
@@ -791,6 +793,7 @@ public sealed class AgentPlanService(
     private async Task AddOutcomeMessagesAsync(AgentPlan plan, IReadOnlyList<StepOutcome> outcomes, DateTimeOffset now, CancellationToken ct)
     {
         if (outcomes.Count == 0) return;
+        var known = KnownSecrets(plan);
 
         var sequence = await AgentConversationLog.NextSequenceAsync(db, plan.ConversationId, ct);
         var calls = outcomes.Select(o => new AgentToolCall(CallId(plan, o.Step), o.Step.Tool, o.Step.ArgumentsJson)).ToList();
@@ -828,9 +831,9 @@ public sealed class AgentPlanService(
                 Role = AgentMessageRole.Tool,
                 ToolCallId = CallId(plan, outcome.Step),
                 ToolName = outcome.Step.Tool,
-                Text = AgentJson.ForModel(content.ToJsonString(AgentJson.Options)),
-                SummaryEn = AgentConversationLog.Bound(outcome.SummaryEn),
-                SummaryFa = AgentConversationLog.Bound(outcome.SummaryFa),
+                Text = AgentJson.ForModel(content.ToJsonString(AgentJson.Options), known),
+                SummaryEn = AgentConversationLog.Bound(Scrub(outcome.SummaryEn, known)),
+                SummaryFa = AgentConversationLog.Bound(Scrub(outcome.SummaryFa, known)),
                 PlanId = plan.Id,
                 CreatedAt = now,
                 UpdatedAt = now
@@ -839,6 +842,26 @@ public sealed class AgentPlanService(
 
         await AgentConversationLog.TouchAsync(db, plan.ConversationId, now, ct);
     }
+
+    /// <summary>
+    /// The values the plan's person holds in the lock-button vault. A step resolves a handle at execution
+    /// and applies the value; if its result or error then echoes it, it is scrubbed here by value before
+    /// it reaches the plan's results, the conversation or the model.
+    /// </summary>
+    private IReadOnlyList<string> KnownSecrets(AgentPlan plan) =>
+        secretValues?.LiveValues(plan.WorkspaceId, plan.UserId) ?? [];
+
+    private static string? Scrub(string? text, IReadOnlyList<string> known) =>
+        text is null || known.Count == 0 ? text : Assistant.AssistantRedaction.Redact(text, known).Text;
+
+    private static AgentPlanStepResultView Scrub(AgentPlanStepResultView result, IReadOnlyList<string> known) =>
+        known.Count == 0 ? result : result with
+        {
+            SummaryEn = Scrub(result.SummaryEn, known),
+            SummaryFa = Scrub(result.SummaryFa, known),
+            ErrorEn = Scrub(result.ErrorEn, known),
+            ErrorFa = Scrub(result.ErrorFa, known)
+        };
 
     private static string CallId(AgentPlan plan, AgentPlanStep step) => $"plan_{plan.Id:N}_{step.Index}";
 

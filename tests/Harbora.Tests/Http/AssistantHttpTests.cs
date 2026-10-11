@@ -496,6 +496,41 @@ public class AssistantHttpTests(AssistantPanelFixture fixture) : IClassFixture<A
         view.GetProperty("messages").EnumerateArray().Select(m => m.GetProperty("role").GetString()).Should().Equal("user", "assistant");
     }
 
+    // ---- secrets as black boxes ----------------------------------------------------------------
+
+    [Fact]
+    public async Task The_lock_button_holds_a_secret_and_answers_with_a_handle_the_model_only_ever_sees()
+    {
+        const string value = "sk-live-Do-Not-Send-Me-9f3c";
+        fixture.GivenUser(fixture.WorkspaceId, "secret-owner@example.com");
+        var (client, csrf) = await fixture.SignedInAs("203.0.113.194", "secret-owner@example.com");
+        Chat.Clear();
+
+        (await PostAsync(client, "/assistant/secrets", csrf: null, new { name = "STRIPE_KEY", value }))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest, "a POST like any other: the antiforgery header is required");
+        var empty = await PostAsync(client, "/assistant/secrets", csrf, new { name = "STRIPE_KEY", value = "" });
+        empty.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await empty.JsonAsync()).GetProperty("messageFa").GetString().Should().NotBeNullOrEmpty();
+
+        var held = await PostAsync(client, "/assistant/secrets", csrf, new { name = "STRIPE_KEY", value });
+        held.StatusCode.Should().Be(HttpStatusCode.OK);
+        var raw = await held.Content.ReadAsStringAsync();
+        raw.Should().NotContain(value, "the value is never sent back");
+        var view = JsonDocument.Parse(raw).RootElement;
+        var handle = view.GetProperty("handle").GetString()!;
+        AgentSecretHandles.IsHandle(handle).Should().BeTrue();
+        view.GetProperty("name").GetString().Should().Be("STRIPE_KEY");
+        view.TryGetProperty("expiresAt", out _).Should().BeTrue();
+
+        fixture.Read(db => db.AuditLogs.Where(a => a.Action == AgentSecretService.SecretHeldAction).Select(a => a.MetadataJson).ToList())
+            .Should().Contain(m => m!.Contains("STRIPE_KEY")).And.OnlyContain(m => !m!.Contains(value));
+
+        Chat.ThenText("I will use it.");
+        await SendAsync(client, csrf, "new", $"set STRIPE_KEY to {handle}");
+        Chat.EverythingSent().Should().Contain(handle).And.NotContain(value);
+        fixture.Read(db => db.AgentMessages.Any(m => m.Text != null && m.Text.Contains(value))).Should().BeFalse();
+    }
+
     [Fact]
     public async Task Refusals_before_the_stream_are_ordinary_status_codes()
     {

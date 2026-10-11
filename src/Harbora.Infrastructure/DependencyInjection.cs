@@ -438,6 +438,13 @@ public static class DependencyInjection
         services.AddScoped<Agent.AgentWorkspaceSnapshot>();
         services.AddScoped<Agent.AgentPlanService>();
         services.AddScoped<Agent.AgentConversationService>();
+        // The lock-button vault (2026-10-12 owner decision, "secrets as black boxes"): one in-memory store
+        // for the whole process — a singleton because it is the store, and a restart forgetting every
+        // handle is the safe failure. The same instance answers both the contract and the redaction view.
+        services.AddSingleton<Agent.InMemoryAgentSecretVault>();
+        services.AddSingleton<Agent.IAgentSecretVault>(sp => sp.GetRequiredService<Agent.InMemoryAgentSecretVault>());
+        services.AddSingleton<Agent.IAgentSecretValues>(sp => sp.GetRequiredService<Agent.InMemoryAgentSecretVault>());
+        services.AddScoped<Agent.AgentSecretService>();
         services.AddScoped<Agent.IAgentTool, Agent.Tools.ListResourcesTool>();
         services.AddScoped<Agent.IAgentTool, Agent.Tools.GetAppTool>();
         services.AddScoped<Agent.IAgentTool, Agent.Tools.GetDatabaseTool>();

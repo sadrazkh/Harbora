@@ -6,6 +6,7 @@ using Harbora.Domain.Agent;
 using Harbora.Domain.Authorization;
 using Harbora.Domain.Features;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Harbora.Infrastructure.Agent;
@@ -47,7 +48,9 @@ public sealed class AgentConversationService(
     IFeatureGate features,
     IAgentCapabilityCheck capabilities,
     ISystemClock clock,
-    ILogger<AgentConversationService> logger)
+    ILogger<AgentConversationService> logger,
+    IHostApplicationLifetime? lifetime = null,
+    IAgentSecretValues? secretValues = null)
 {
     /// <summary>The most model calls one message may cause — reads included.</summary>
     public const int MaxModelCallsPerMessage = 8;
@@ -243,9 +246,6 @@ public sealed class AgentConversationService(
                 return new(AgentSendStatus.Busy,
                     "Still answering your previous message — wait for it to finish, then send this one.",
                     "هنوز در حال پاسخ به پیام قبلی شماست — صبر کنید تمام شود، بعد این یکی را بفرستید.");
-
-            // A conversation created ahead of its first message takes its title from that message.
-            if (conversation.Title.Length == 0) conversation.Title = TitleFrom(text);
         }
         else
         {
@@ -261,14 +261,28 @@ public sealed class AgentConversationService(
             db.AgentConversations.Add(conversation);
         }
 
-        // From here the turn is taken on: it runs to its end on its own token, whoever is listening.
-        using var deadline = new CancellationTokenSource(TurnDeadline);
+        // From here the turn is taken on: it runs to its end on its own token, whoever is listening —
+        // bounded by its deadline, and by the server shutting down (a self-deploy), so a restart ends the
+        // turn cleanly instead of leaving the conversation marked as answering until the mark lapses.
+        var stopping = lifetime?.ApplicationStopping ?? CancellationToken.None;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(stopping);
+        deadline.CancelAfter(TurnDeadline);
         var turn = deadline.Token;
         var listener = new Listener(emit, logger);
         emit = listener.EmitAsync;
 
+        // The try starts the moment the turn is held, so nothing after the claim — not even bringing the
+        // tracked copy in line with it — can leave a mark that the finally does not clear.
         try
         {
+            if (conversationId is not null)
+            {
+                await RefreshAfterClaimAsync(conversation);
+
+                // A conversation created ahead of its first message takes its title from that message.
+                if (conversation.Title.Length == 0) conversation.Title = TitleFrom(text);
+            }
+
             // The design's gates after the entitlement: can a model be reached, and is any of today's
             // allowance left. Asked before anything else changes, so a message that cannot be answered
             // does not withdraw a card that could still have been approved.
@@ -291,6 +305,15 @@ public sealed class AgentConversationService(
                     await emit(new AgentStreamEvent(AgentStreamEvents.Error, refusal), turn);
                 else
                     await RunTurnAsync(actor, conversation, request!.Page, persianInterface, emit, turn);
+            }
+            catch (OperationCanceledException) when (turn.IsCancellationRequested && stopping.IsCancellationRequested)
+            {
+                logger.LogWarning("The assistant turn in conversation {Conversation} was stopped by the server shutting down.",
+                    conversation.Id);
+                await emit(Error(
+                    "The server is restarting, so this answer was stopped. What was done so far is saved — ask again in a moment.",
+                    "سرور در حال راه‌اندازی دوباره است و این پاسخ متوقف شد. آنچه تا اینجا انجام شده ذخیره شده است — کمی بعد دوباره بپرسید."),
+                    CancellationToken.None);
             }
             catch (OperationCanceledException) when (turn.IsCancellationRequested)
             {
@@ -339,8 +362,11 @@ public sealed class AgentConversationService(
             catch (Exception ex)
             {
                 _gone = true;
-                logger.LogInformation("The listener left during an assistant turn ({Error}); the turn carries on and is saved.",
-                    ex.GetType().Name);
+                if (ex is OperationCanceledException or IOException or ObjectDisposedException)
+                    logger.LogInformation("The listener left during an assistant turn ({Error}); the turn carries on and is saved.",
+                        ex.GetType().Name);
+                else
+                    logger.LogWarning(ex, "Writing to the listener of an assistant turn failed unexpectedly; the turn carries on, unheard.");
             }
         }
     }
@@ -360,9 +386,8 @@ public sealed class AgentConversationService(
             var claimed = await db.AgentConversations.IgnoreQueryFilters()
                 .Where(c => c.Id == conversation.Id && (c.TurnStartedAt == null || c.TurnStartedAt <= staleBefore))
                 .ExecuteUpdateAsync(s => s.SetProperty(c => c.TurnStartedAt, stamp), ct);
-            // The tracked copy is brought in line, so later saves of this conversation never write the
-            // stale mark back (the same reason as AgentPlanService.RefreshTrackedAsync).
-            if (claimed > 0) await db.Entry(conversation).ReloadAsync(CancellationToken.None);
+            // The tracked copy is brought in line by RefreshAfterClaimAsync, inside the turn's try, so a
+            // reload that fails after the update committed still ends in the finally that clears the mark.
             return claimed > 0;
         }
 
@@ -370,6 +395,16 @@ public sealed class AgentConversationService(
         conversation.TurnStartedAt = stamp;
         await db.SaveChangesAsync(ct);
         return true;
+    }
+
+    /// <summary>
+    /// After a relational claim, the tracked copy of the conversation is reloaded, so later saves of it
+    /// never write the stale mark back (the reason AgentPlanService.RefreshTrackedAsync gives). The
+    /// InMemory claim already wrote through the tracked copy.
+    /// </summary>
+    private async Task RefreshAfterClaimAsync(AgentConversation conversation)
+    {
+        if (db.Database.IsRelational()) await db.Entry(conversation).ReloadAsync(CancellationToken.None);
     }
 
     /// <summary>
@@ -421,7 +456,8 @@ public sealed class AgentConversationService(
 
         var allowed = await registry.AllowedForAsync(actor.User, ct);
         var specs = allowed.Select(AgentToolRegistry.SpecOf).ToList();
-        var turn = new Turn(actor, context, await plans.RememberedToolsAsync(actor, ct), allowed);
+        var turn = new Turn(actor, context, await plans.RememberedToolsAsync(actor, ct), allowed,
+            secretValues?.LiveValues(actor.WorkspaceId, actor.UserId) ?? []);
 
         var finished = false;
         var stoppedEarly = false;
@@ -476,15 +512,30 @@ public sealed class AgentConversationService(
             var reply = response.Message;
             var toolCalls = NormalizeCalls(reply.ToolCalls, call);
 
-            var assistant = await AppendAsync(conversation, new AgentMessage
+            // An answer the person watched being written is saved on no token: the turn's own may run out
+            // at this very moment, and losing text that was already shown is the one outcome the deltas
+            // must never cause. If the save itself fails, the bubble is still closed with the text before
+            // the failure goes on to become the turn's error.
+            AgentMessage assistant;
+            try
             {
-                Role = AgentMessageRole.Assistant,
-                Text = string.IsNullOrWhiteSpace(reply.Content) ? null : reply.Content,
-                ToolCallsJson = toolCalls.Count > 0 ? AgentJson.Serialize(toolCalls) : null,
-                Model = Truncate(response.Model, AgentMessage.MaxModelLength),
-                InputTokens = response.Usage?.InputTokens ?? 0,
-                OutputTokens = response.Usage?.OutputTokens ?? 0
-            }, ct);
+                assistant = await AppendAsync(conversation, new AgentMessage
+                {
+                    Role = AgentMessageRole.Assistant,
+                    Text = string.IsNullOrWhiteSpace(reply.Content) ? null : reply.Content,
+                    ToolCallsJson = toolCalls.Count > 0 ? AgentJson.Serialize(toolCalls) : null,
+                    Model = Truncate(response.Model, AgentMessage.MaxModelLength),
+                    InputTokens = response.Usage?.InputTokens ?? 0,
+                    OutputTokens = response.Usage?.OutputTokens ?? 0
+                }, streamed.Length > 0 ? CancellationToken.None : ct);
+            }
+            catch (Exception) when (streamed.Length > 0)
+            {
+                await emit(new AgentStreamEvent(AgentStreamEvents.Message, new AgentMessageView(
+                    Guid.CreateVersion7(), "assistant", string.IsNullOrWhiteSpace(reply.Content) ? null : reply.Content,
+                    null, clock.UtcNow)), CancellationToken.None);
+                throw;
+            }
             messages.Add(new AgentChatMessage(AgentRole.Assistant, reply.Content, toolCalls.Count > 0 ? toolCalls : null));
 
             if (assistant.Text is not null || streamed.Length > 0)
@@ -527,6 +578,9 @@ public sealed class AgentConversationService(
         // than it got to propose, so its steps always wait for the person.
         if (finished && turn.Draft.All(s => s.AutoApproved))
         {
+            // The turn's token only guards the claim here. Once claimed, the plan runs to its end on no
+            // token (AgentPlanService.RunClaimedAsync) — it is not bound by the turn's deadline or a
+            // shutdown, because a plan abandoned half-way would be worse than one that overruns.
             var result = await plans.ExecuteAutoApprovedAsync(actor, plan, ct);
             await emit(new AgentStreamEvent(AgentStreamEvents.Executed, result), ct);
         }
@@ -568,12 +622,17 @@ public sealed class AgentConversationService(
 
     /// <summary>The state one turn accumulates across its tool calls.</summary>
     private sealed class Turn(
-        AgentActor actor, AgentToolContext context, IReadOnlySet<string> remembered, IReadOnlyList<IAgentTool> allowed)
+        AgentActor actor, AgentToolContext context, IReadOnlySet<string> remembered, IReadOnlyList<IAgentTool> allowed,
+        IReadOnlyList<string> known)
     {
         public AgentActor Actor { get; } = actor;
         public AgentToolContext Context { get; } = context;
         public IReadOnlySet<string> Remembered { get; } = remembered;
         public IReadOnlyList<IAgentTool> Allowed { get; } = allowed;
+
+        /// <summary>The values this person holds in the lock-button vault: scrubbed, by value, from everything
+        /// the turn sends the model or stores, so a tool that echoed one it applied cannot pass it on.</summary>
+        public IReadOnlyList<string> Known { get; } = known;
         public AgentPlanScope Scope { get; } = new();
         public List<AgentPlanStep> Draft { get; } = [];
     }
@@ -581,20 +640,28 @@ public sealed class AgentConversationService(
     /// <summary>What goes back to the model for one call, and what the person may be shown instead.</summary>
     private sealed record ToolAnswer(string Content, string? SummaryEn = null, string? SummaryFa = null);
 
+    /// <summary>A tool answer for the model: redacted by the person's held values and by shape, then cut
+    /// to size — <see cref="AgentJson.ForModel"/> with the turn's <see cref="Turn.Known"/>.</summary>
+    private static string ForModel(Turn turn, string? text) => AgentJson.ForModel(text, turn.Known);
+
+    /// <summary>A line for the person, scrubbed of held values — it is stored with the conversation.</summary>
+    private static string? Scrub(Turn turn, string? text) =>
+        text is null || turn.Known.Count == 0 ? text : Assistant.AssistantRedaction.Redact(text, turn.Known).Text;
+
     private async Task<ToolAnswer> AnswerToolCallAsync(
         AgentToolCall call, Turn turn, Func<AgentStreamEvent, CancellationToken, Task> emit, CancellationToken ct)
     {
         var tool = registry.Find(call.Name);
         if (tool is null)
-            return new(AgentJson.ForModel(
+            return new(ForModel(turn,
                 $"Unknown tool '{call.Name}'. The tools you can use are: {string.Join(", ", turn.Allowed.Select(t => t.Name))}."));
 
         if (!await registry.AllowsAsync(turn.Actor.User, tool, ct))
-            return new(AgentJson.ForModel(
+            return new(ForModel(turn,
                 $"The user's role does not allow '{tool.Name}' (it needs the '{tool.Capability}' permission). Nothing was done; tell the user they cannot do this."));
 
         if (ParseArguments(call) is not { } args)
-            return new(AgentJson.ForModel(
+            return new(ForModel(turn,
                 $"The arguments for '{tool.Name}' are not a valid JSON object. Call it again with a JSON object that matches its parameters."));
 
         return AgentConsentPolicy.RunsImmediately(tool.Kind)
@@ -628,12 +695,12 @@ public sealed class AgentConversationService(
         if (dropped.Count > 0)
             logger.LogWarning("Agent read tool {Tool} left unsaved changes ({Types}); they were dropped.", tool.Name, string.Join(", ", dropped));
 
-        var summaryEn = result.Ok ? result.SummaryEn ?? $"Looked up: {tool.Name}" : result.Error ?? $"{tool.Name} failed";
-        var summaryFa = result.Ok ? result.SummaryFa ?? $"بررسی شد: {tool.Name}" : result.ErrorFa ?? $"{tool.Name} ناموفق بود";
+        var summaryEn = Scrub(turn, result.Ok ? result.SummaryEn ?? $"Looked up: {tool.Name}" : result.Error ?? $"{tool.Name} failed");
+        var summaryFa = Scrub(turn, result.Ok ? result.SummaryFa ?? $"بررسی شد: {tool.Name}" : result.ErrorFa ?? $"{tool.Name} ناموفق بود");
         await emit(new AgentStreamEvent(AgentStreamEvents.Tool,
             new AgentToolEventData(tool.Name, kind, result.Ok ? "done" : "failed", summaryEn, summaryFa)), ct);
 
-        return new(AgentJson.ForModel(result.ResultJson), summaryEn, summaryFa);
+        return new(ForModel(turn, result.ResultJson), summaryEn, summaryFa);
     }
 
     private async Task<ToolAnswer> ProposeWriteAsync(
@@ -667,7 +734,7 @@ public sealed class AgentConversationService(
         }
 
         if (!validation.Ok)
-            return new(AgentJson.ForModel(
+            return new(ForModel(turn,
                 $"Refused: {validation.Error} Nothing was added to the plan; correct the arguments and call it again, or ask the user."));
 
         if (validation.Creates is not null) turn.Scope.Add(validation.Creates);
@@ -687,7 +754,7 @@ public sealed class AgentConversationService(
             AgentConsentPolicy.IsAutoApproved(tool.Kind, turn.Remembered.Contains(tool.Name))));
 
         return new(
-            AgentJson.ForModel($"Added as step {number} — nothing has run yet; the user will approve it. (Step {number}: {titleEn})"),
+            ForModel(turn, $"Added as step {number} — nothing has run yet; the user will approve it. (Step {number}: {titleEn})"),
             $"Proposed as step {number}: {titleEn}",
             $"پیشنهاد به‌عنوان مرحلهٔ {number}: {titleFa}");
     }
