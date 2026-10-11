@@ -237,7 +237,9 @@ public sealed class AgentConversationService(
                 return new(AgentSendStatus.NotFound, "There is no such conversation.", "چنین گفت‌وگویی وجود ندارد.");
             conversation = existing;
 
-            if (!await TryClaimTurnAsync(conversation, stamp, ct))
+            // On no token: a claim that committed and was then reported cancelled would leave a mark that
+            // no finally clears, and the conversation would refuse every message until it lapsed.
+            if (!await TryClaimTurnAsync(conversation, stamp, CancellationToken.None))
                 return new(AgentSendStatus.Busy,
                     "Still answering your previous message — wait for it to finish, then send this one.",
                     "هنوز در حال پاسخ به پیام قبلی شماست — صبر کنید تمام شود، بعد این یکی را بفرستید.");
