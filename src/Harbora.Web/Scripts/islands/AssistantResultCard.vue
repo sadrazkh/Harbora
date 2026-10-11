@@ -2,7 +2,7 @@
 import { computed } from 'vue';
 import { Check, CircleCheck, CircleHelp, ExternalLink, Minus, TriangleAlert, X } from 'lucide';
 import { AssistantIcon } from './assistantIcon';
-import { stepResultState, summarizeResult } from './assistantPlan.js';
+import { stepResultState, summarizeResult, resultNote } from './assistantPlan.js';
 import { safeHref, textDirection } from './assistantFormat.js';
 
 // What a plan actually did (AgentPlanResultView), from approve or from an `executed` event. A step
@@ -33,15 +33,7 @@ const title = (r: any, i: number) => {
   const text = s ? (props.fa ? s.titleFa || s.titleEn : s.titleEn || s.titleFa) : null;
   return text || t(`Step ${i + 1}`, `گام ${i + 1}`);
 };
-const pick = (en?: string | null, persian?: string | null) => (props.fa ? persian || en : en || persian) || '';
-const note = (r: any) => {
-  switch (stepResultState(r)) {
-    case 'done': return pick(r.summaryEn, r.summaryFa);
-    case 'failed': return pick(r.errorEn, r.errorFa) || t('Failed.', 'ناموفق بود.');
-    case 'skipped': return t('Skipped — an earlier step failed, so this did not run.', 'رد شد — گام قبلی ناموفق بود، پس این اجرا نشد.');
-    default: return t('The result did not say whether this ran.', 'نتیجه نگفت که این اجرا شد یا نه.');
-  }
-};
+const note = (r: any) => resultNote(r, props.fa);
 const iconFor = (r: any) => ({ done: Check, failed: X, skipped: Minus } as Record<string, any>)[stepResultState(r)] ?? CircleHelp;
 const iconClass = (r: any) => ({ done: 'bg-ok-soft text-ok', failed: 'bg-danger-soft text-danger', skipped: 'bg-surface-2 text-ink-faint' } as Record<string, string>)[stepResultState(r)] ?? 'bg-surface-2 text-ink-faint';
 </script>

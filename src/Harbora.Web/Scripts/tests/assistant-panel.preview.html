@@ -10,7 +10,7 @@
     ?scenario=cut      the stream stops before `done`
     ?scenario=down     the assistant is unavailable
     ?scenario=expired  approving the stored plan is refused as expired (use with ?history)
-    ?scenario=refuse   approving is refused for step 4, which stays highlighted (use with ?history)
+    ?scenario=refuse   approving is refused at re-check for step 4 (409, failed): "not run", step 4 highlighted (with ?history)
     ?scenario=locked   every request answers 403 feature_not_enabled
     ?scenario=resume   the stored conversation is still being answered: dots, re-read until done (with ?history)
     ?scenario=busy     sending answers 409 "still answering" (with ?history)
@@ -100,7 +100,8 @@ const conversation = {
   id: conversations[0].id, title: conversations[0].title,
   messages: [
     { id: 'm1', role: 'user', text: fa ? 'برای shop یک دیتابیس Postgres بساز، وصلش کن و old-db را پاک کن' : 'Make a Postgres database for shop, attach it, and delete old-db', toolName: null, createdAt: minutesFromNow(-13) },
-    { id: 'm2', role: 'tool', text: '{"apps":[{"slug":"shop","status":"Running"}],"databases":[{"name":"old-db","engine":"postgres","version":"15"}]}', toolName: 'list_resources', createdAt: minutesFromNow(-13) },
+    // GET conversations/{id} returns a saved tool message as its person-facing summary, in the panel's language.
+    { id: 'm2', role: 'tool', text: fa ? 'منابع خوانده شد: ۱ اپ (shop) و ۱ دیتابیس (old-db)' : 'Read the resources: 1 app (shop) and 1 database (old-db)', toolName: 'list_resources', createdAt: minutesFromNow(-13) },
     { id: 'm3', role: 'assistant', text: fa
         ? 'این برنامه را آماده کردم:\n- ساخت `shop-db` (PostgreSQL 16)\n- وصل کردنش به `shop`\n- حذف `old-db`\n\nتا تأیید نکنید چیزی اجرا نمی‌شود. <b>این متن HTML نیست</b>'
         : 'I prepared this plan:\n- create `shop-db` (PostgreSQL 16)\n- attach it to `shop`\n- delete `old-db`\n\nNothing runs until you approve it. <b>This is not HTML</b>',
@@ -184,7 +185,8 @@ window.fetch = async (url, init = {}) => {
     return json({ error: 'plan_expired', messageEn: 'This plan expired before it was approved; nothing ran.', messageFa: 'این برنامه پیش از تأیید منقضی شد؛ هیچ کاری اجرا نشد.', status: 'expired' }, 409);
   }
   if (path.endsWith('/approve') && scenario === 'refuse') {
-    return json({ error: 'step_refused', messageEn: 'Step 4 can no longer run: old-db is still attached to two apps.', messageFa: 'گام ۴ دیگر قابل اجرا نیست: old-db هنوز به دو اپ وصل است.', status: 'pending', stepIndex: 3 }, 400);
+    // AssistantController's real shape for a step refused at re-check: 409, the plan failed, nothing ran.
+    return json({ error: 'revalidation_refused', messageEn: 'Nothing ran: step 4 was refused when the plan was checked again. old-db is still attached to two apps.', messageFa: 'هیچ‌چیز اجرا نشد: مرحلهٔ ۴ هنگام بررسی دوباره رد شد. old-db هنوز به دو اپ وصل است.', status: 'failed', stepIndex: 3 }, 409);
   }
   if (path.endsWith('/approve')) return json(result);
   if (path.endsWith('/reject')) return new Response(null, { status: 204 });

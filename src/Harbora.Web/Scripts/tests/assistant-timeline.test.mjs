@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createTimeline, loadConversation, addUserMessage, applyStreamEvent, applyPlanResult,
-  markPlanRejected, settleTurn, applyApproveRefusal, isThinking, withdrawUserMessage,
+  markPlanRejected, settleTurn, applyApproveRefusal, isThinking, withdrawUserMessage, restoreSuperseded,
 } from '../islands/assistantTimeline.js';
 
 // The conversation as the pane draws it: one list of items fed by GET /assistant/conversations/{id}
@@ -472,4 +472,54 @@ test('when only a prefix matches, the newest bubble that it starts is the one co
   applyStreamEvent(state, 'delta', { text: 'shop is' });
   applyStreamEvent(state, 'message', { id: 'm', role: 'assistant', text: 'shop is running.' });
   assert.deepEqual(state.items.filter((i) => i.kind === 'assistant').map((b) => b.text), ['shop', 'shop is running.']);
+});
+
+// ---- final review --------------------------------------------------------------------------------
+
+test('a plan refused at re-check is "not run", not "already ran", and the refused step is marked', () => {
+  const state = createTimeline();
+  applyStreamEvent(state, 'plan', plan());
+  applyApproveRefusal(state, PLAN_ID, {
+    status: 409, code: 'revalidation_refused', planStatus: 'failed', stepIndex: 0,
+    messageEn: 'Nothing ran: step 1 was refused when the plan was checked again.', messageFa: 'x',
+  });
+  const card = state.items[0];
+  assert.equal(card.plan.status, 'failed');
+  assert.equal(card.notRun, true);
+  assert.equal(card.errorStep, 0);
+});
+
+test('"already decided" (not_pending, failed) is not mistaken for a refusal at re-check', () => {
+  const state = createTimeline();
+  applyStreamEvent(state, 'plan', plan());
+  applyApproveRefusal(state, PLAN_ID, { status: 409, code: 'not_pending', planStatus: 'failed', messageEn: 'This plan is already failed.', messageFa: 'x' });
+  assert.equal(state.items[0].notRun, false);
+});
+
+test('a failed status from any other refusal code also means nothing ran here', () => {
+  const state = createTimeline();
+  applyStreamEvent(state, 'plan', plan());
+  applyApproveRefusal(state, PLAN_ID, { status: 409, code: 'something_new', planStatus: 'failed', messageEn: 'x', messageFa: 'x' });
+  assert.equal(state.items[0].notRun, true);
+});
+
+test('a card superseded on started gets its real status back when the turn was refused at the gate', () => {
+  const state = createTimeline();
+  applyStreamEvent(state, 'plan', plan());
+  addUserMessage(state, 'next');
+  applyStreamEvent(state, 'started', { conversationId: 'c1' });
+  assert.equal(state.items[0].superseded, true);
+  restoreSuperseded(state, { id: 'c1', messages: [], pendingPlan: plan() });
+  assert.equal(state.items[0].superseded, false);
+  assert.equal(state.items[0].plan.status, 'pending');
+});
+
+test('a superseded card the server did withdraw stays withdrawn', () => {
+  const state = createTimeline();
+  applyStreamEvent(state, 'plan', plan());
+  addUserMessage(state, 'next');
+  applyStreamEvent(state, 'started', { conversationId: 'c1' });
+  restoreSuperseded(state, { id: 'c1', messages: [], pendingPlan: null });
+  assert.equal(state.items[0].superseded, true);
+  assert.equal(state.items[0].plan.status, 'expired');
 });

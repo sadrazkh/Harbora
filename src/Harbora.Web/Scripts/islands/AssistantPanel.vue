@@ -249,7 +249,10 @@ async function runPlan(item: any) {
   } catch (e: any) {
     // The server's refusal, in its words, with the step it names and the plan's status now — a
     // late approve is how a card learns it expired; this pane never decides that by its clock.
-    applyApproveRefusal(timeline, item.plan.id, { ...words(e), stepIndex: e?.stepIndex ?? null, planStatus: e?.planStatus ?? null });
+    applyApproveRefusal(timeline, item.plan.id, { ...words(e), stepIndex: e?.stepIndex ?? null, planStatus: e?.planStatus ?? null, code: e?.code ?? null });
+    // Approved meanwhile in another tab and running there: this card cannot see that run end, so the
+    // conversation is read once more shortly, and shows what it did.
+    if (e?.code === 'not_pending' && e?.planStatus === 'executing') session.rereadSoon();
   } finally {
     item.busy = false;
   }
@@ -264,7 +267,8 @@ async function cancelPlan(item: any) {
     await api.reject(item.plan.id);
     markPlanRejected(timeline, item.plan.id);
   } catch (e: any) {
-    applyApproveRefusal(timeline, item.plan.id, { ...words(e), stepIndex: null, planStatus: e?.planStatus ?? null });
+    applyApproveRefusal(timeline, item.plan.id, { ...words(e), stepIndex: null, planStatus: e?.planStatus ?? null, code: e?.code ?? null });
+    if (e?.code === 'not_pending' && e?.planStatus === 'executing') session.rereadSoon();
   } finally {
     item.busy = false;
   }
@@ -458,13 +462,13 @@ const Back = fa ? ChevronRight : ChevronLeft;
           <span class="min-w-0 truncate" :dir="textDirection(toolText(item))">{{ toolText(item) }}</span>
         </div>
 
-        <details v-else-if="item.kind === 'tool-history'" class="group text-[11px] text-ink-muted">
-          <summary class="flex cursor-pointer list-none items-center gap-2 [&::-webkit-details-marker]:hidden">
-            <AssistantIcon :icon="Wrench" :size="14" />
-            <span>{{ t('Tool result:', 'نتیجهٔ ابزار:') }} <code dir="ltr" class="font-mono">{{ item.toolName }}</code></span>
-          </summary>
-          <pre class="mt-1.5 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-surface-2 p-2 font-mono text-[11px] leading-4 text-ink-muted" dir="ltr">{{ item.text }}</pre>
-        </details>
+        <!-- A saved tool message: the server keeps the person-facing summary, in the panel's language
+             ("shop خوانده شد: در حال اجرا"), so it reads as the same status line it was when it ran —
+             neutral, never a check, since a saved summary does not say whether the tool succeeded. -->
+        <div v-else-if="item.kind === 'tool-history'" class="flex items-start gap-2 text-sm text-ink-muted" data-tool-history :title="item.toolName">
+          <AssistantIcon :icon="Wrench" :size="14" class="mt-1 text-ink-faint" />
+          <span class="min-w-0 break-words" :dir="textDirection(item.text)">{{ item.text || item.toolName }}</span>
+        </div>
 
         <AssistantPlanCard v-else-if="item.kind === 'plan'" :item="item" :fa="fa" :locked="answering"
                            @run="runPlan(item)" @cancel="cancelPlan(item)" />

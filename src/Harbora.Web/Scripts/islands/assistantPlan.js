@@ -117,3 +117,43 @@ export function summarizeResult(result) {
   }
   return { ...counts, allDone: counts.total > 0 && counts.done === counts.total };
 }
+
+/**
+ * The plan card's heading for its state. "failed" has three meanings and they must not be confused:
+ * it ran and stopped (a result is on screen), it was already decided elsewhere, or — a refusal at
+ * re-check, `notRun` — nothing ran at all.
+ */
+export function planHeading(item, fa) {
+  const t = (en, persian) => (fa ? persian : en);
+  const resulted = item?.resulted === true;
+  switch (item?.plan?.status) {
+    case 'pending': return t('Plan — waiting for your approval', 'برنامه — منتظر تأیید شما');
+    case 'executing': return t('Running…', 'در حال اجرا…');
+    case 'executed': return resulted ? t('Plan ran — see the result below', 'برنامه اجرا شد — نتیجه در پایین') : t('This plan has already run', 'این برنامه قبلاً اجرا شده است');
+    case 'failed':
+      if (resulted) return t('Plan stopped — see the result below', 'برنامه متوقف شد — نتیجه در پایین');
+      return item.notRun
+        ? t('Not run — a step was refused when it was checked again', 'اجرا نشد — یکی از گام‌ها هنگام بررسی دوباره رد شد')
+        : t('This plan has already run and stopped', 'این برنامه قبلاً اجرا شده و متوقف شده است');
+    case 'rejected': return t('Cancelled — nothing ran', 'لغو شد — هیچ کاری اجرا نشد');
+    case 'expired': return item.superseded ? t('Not run — you sent a new message', 'اجرا نشد — پیام تازه‌ای فرستادید') : t('This plan expired — nothing ran', 'این برنامه منقضی شد — هیچ کاری اجرا نشد');
+    default: return t('Plan', 'برنامه');
+  }
+}
+
+/**
+ * The line under a step of the result card. The server's own words come first — for a skipped step
+ * it says why ("not run: another step was refused when the plan was re-checked"); the generic wording
+ * is only for a result that carries none.
+ */
+export function resultNote(stepResult, fa) {
+  const t = (en, persian) => (fa ? persian : en);
+  const pick = (en, persian) => (fa ? persian || en : en || persian) || '';
+  switch (stepResultState(stepResult)) {
+    case 'done': return pick(stepResult.summaryEn, stepResult.summaryFa);
+    case 'failed': return pick(stepResult.errorEn, stepResult.errorFa) || t('Failed.', 'ناموفق بود.');
+    case 'skipped': return pick(stepResult.summaryEn, stepResult.summaryFa)
+      || t('Skipped — an earlier step failed, so this did not run.', 'رد شد — گام قبلی ناموفق بود، پس این اجرا نشد.');
+    default: return t('The result did not say whether this ran.', 'نتیجه نگفت که این اجرا شد یا نه.');
+  }
+}

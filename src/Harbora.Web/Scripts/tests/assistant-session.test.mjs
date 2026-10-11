@@ -514,3 +514,73 @@ test('an abandoned create leaves a later message\'s waiting words alone', async 
   assert.deepEqual(await first, { sent: false, restoreDraft: 'first words' });
   assert.equal(s.prefs.outbox(null).text, 'second words', 'the second message still waits under "new"');
 });
+
+// ---- final review ----
+
+test('a turn refused at the gate gives a superseded card its real status back', async () => {
+  const pending = { id: '0199d0c4-6a1e-7000-8000-0000000000f1', status: 'pending', expiresAt: '2026-10-11T10:15:00Z', steps: [] };
+  const s = setup({
+    script: {
+      views: [view({ messages: [userMessage('first')], pendingPlan: pending }), view({ messages: [userMessage('first'), userMessage('second', 'u2')], pendingPlan: pending })],
+      send: async (args) => {
+        args.onEvent('started', { conversationId: CONVO });
+        args.onEvent('error', { messageEn: 'Today\'s assistant requests are used up.', messageFa: 'x' });
+        args.onEvent('done', { conversationId: CONVO, remainingToday: 0 });
+        return { completed: true };
+      },
+    },
+  });
+  await s.session.open(CONVO);
+  await s.session.send('second');
+  const card = s.timeline.items.find((i) => i.kind === 'plan');
+  assert.equal(card.superseded, false);
+  assert.equal(card.plan.status, 'pending');
+  assert.ok(s.timeline.items.some((i) => i.kind === 'error'), 'the error that explains it is still shown');
+  assert.equal(s.calls.filter((c) => c.op === 'get').length, 2);
+});
+
+test('a turn that got past the gate leaves the card superseded and does not re-read', async () => {
+  const pending = { id: '0199d0c4-6a1e-7000-8000-0000000000f1', status: 'pending', expiresAt: '2026-10-11T10:15:00Z', steps: [] };
+  const s = setup({
+    script: {
+      views: [view({ messages: [userMessage('first')], pendingPlan: pending })],
+      send: async (args) => {
+        args.onEvent('started', { conversationId: CONVO });
+        args.onEvent('tool', { name: 'get_app', state: 'done' });
+        args.onEvent('error', { messageEn: 'The provider failed.', messageFa: 'x' });
+        args.onEvent('done', { conversationId: CONVO, remainingToday: 3 });
+        return { completed: true };
+      },
+    },
+  });
+  await s.session.open(CONVO);
+  await s.session.send('second');
+  assert.equal(s.timeline.items.find((i) => i.kind === 'plan').superseded, true);
+  assert.equal(s.calls.filter((c) => c.op === 'get').length, 1);
+});
+
+test('a plan running in another tab: the conversation is read once more, shortly after', async () => {
+  const s = setup({ script: { views: [view({ messages: [userMessage('q')] }), view({ messages: [userMessage('q'), { id: 't1', role: 'tool', text: 'shop restarted', toolName: 'restart_app', createdAt: '2026-10-11T10:00:09Z' }] })] } });
+  await s.session.open(CONVO);
+  s.session.rereadSoon(3000);
+  assert.equal(s.timers.queue.length, 1);
+  assert.equal(s.timers.queue[0].ms, 3000);
+  await s.timers.next();
+  assert.equal(s.timeline.items.at(-1).text, 'shop restarted');
+  assert.equal(s.timers.queue.length, 0, 'once, not a poll');
+});
+
+test('the delayed re-read is skipped when the person moved on, and dropped on dispose', async () => {
+  const s = setup({ script: { views: [view({ messages: [userMessage('q')] })] } });
+  await s.session.open(CONVO);
+  s.session.rereadSoon(3000);
+  s.session.startNew();
+  await s.timers.next();
+  assert.equal(s.calls.filter((c) => c.op === 'get').length, 1, 'no read for a conversation no longer on screen');
+
+  const t = setup({ script: { views: [view()] } });
+  await t.session.open(CONVO);
+  t.session.rereadSoon(3000);
+  t.session.dispose();
+  assert.equal(t.timers.queue.length, 0);
+});

@@ -386,3 +386,17 @@ test('a 409 with no words of its own gets the pane\'s "still answering", not the
   assert.match(outcome.notice.messageEn, /still answering your previous message/);
   assert.doesNotMatch(outcome.notice.messageEn, /already have run/);
 });
+
+test('a refusal keeps the server\'s machine reason as a code, never as the words shown', async () => {
+  const { fetch } = recordingFetch(() => jsonResponse({
+    error: 'revalidation_refused', messageEn: 'Nothing ran: step 2 was refused when the plan was checked again.', messageFa: 'هیچ‌چیز اجرا نشد.',
+    status: 'failed', stepIndex: 1,
+  }, 409));
+  await assert.rejects(createAssistantApi({ fetch }).approve('p', {}), (err) => {
+    assert.equal(err.code, 'revalidation_refused');
+    assert.equal(err.planStatus, 'failed');
+    assert.equal(err.stepIndex, 1);
+    assert.doesNotMatch(err.messageEn, /revalidation_refused/);
+    return true;
+  });
+});

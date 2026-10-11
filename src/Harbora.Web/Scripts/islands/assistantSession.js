@@ -18,7 +18,7 @@
 
 import { createTurnTracker, isGuid } from './assistantApi.js';
 import {
-  addUserMessage, applyStreamEvent, loadConversation, markUnsent, settleTurn, withdrawUserMessage,
+  addUserMessage, applyStreamEvent, loadConversation, markUnsent, restoreSuperseded, settleTurn, withdrawUserMessage,
 } from './assistantTimeline.js';
 
 const OUTBOX_LIFETIME_MS = 60 * 60 * 1000;
@@ -125,6 +125,8 @@ export function createAssistantSession({
   timers, pollIntervalMs = 2500,
 }) {
   const turns = createTurnTracker();
+  const clock = timers ?? { setTimeout: globalThis.setTimeout.bind(globalThis), clearTimeout: globalThis.clearTimeout.bind(globalThis) };
+  let reread = null;
   const poller = createResumePoller({
     load: (id) => api.conversation(id),
     onUpdate: (view) => {
@@ -335,6 +337,10 @@ export function createAssistantSession({
 
       let outcome = null;
       let started = false;
+      // Whether the turn got past the server's gate: any output at all. An error with none before it
+      // was a refusal at the gate (no model, today's cap), which withdraws no waiting card.
+      let progressed = false;
+      let refusedAtGate = false;
       try {
         outcome = await api.send({
           conversationId,
@@ -348,6 +354,8 @@ export function createAssistantSession({
               started = true;
               prefs.clearOutbox(conversationId);
             }
+            if (['tool', 'delta', 'message', 'plan', 'executed'].includes(name)) progressed = true;
+            if (name === 'error' && started && !progressed) refusedAtGate = true;
             if ((name === 'started' || name === 'done') && timeline.conversationId) prefs.setConversationId(timeline.conversationId);
             onChange(name);
           },
@@ -406,8 +414,43 @@ export function createAssistantSession({
         return { sent: false, restoreDraft: message };
       }
 
+      // Refused at the gate: the cards marked superseded on `started` were not withdrawn after all —
+      // the server's own account of the conversation says what they are.
+      if (refusedAtGate && conversationId && timeline.items.some((i) => i.kind === 'plan' && i.superseded)) {
+        try {
+          const view = await api.conversation(conversationId);
+          if (timeline.conversationId === conversationId) restoreSuperseded(timeline, view);
+        } catch {
+          // Unreadable just now: the card stays as drawn; the next open shows the truth.
+        }
+      }
+
       onChange('ended');
       return { sent: true };
+    },
+
+    /**
+     * Reads the conversation once more after `delayMs` — for a plan someone approved in another tab
+     * ("not_pending", status "executing"): its card cannot know when that run ends, and the
+     * conversation will say what it did. Skipped if the person has moved on, or a turn is running.
+     */
+    rereadSoon(delayMs = 3000) {
+      const conversationId = timeline.conversationId;
+      if (!conversationId) return;
+      if (reread !== null) clock.clearTimeout(reread);
+      reread = clock.setTimeout(async () => {
+        reread = null;
+        if (timeline.conversationId !== conversationId || timeline.streaming || timeline.loading) return;
+        try {
+          const view = await api.conversation(conversationId);
+          if (timeline.conversationId !== conversationId || timeline.streaming) return;
+          loadConversation(timeline, view);
+          resumeIfAnswering(view);
+          onChange('reread');
+        } catch {
+          // Nothing more to do; the next open reads it again.
+        }
+      }, delayMs);
     },
 
     /** The drawer closed: stop re-reading (the island stays mounted). */
@@ -426,6 +469,8 @@ export function createAssistantSession({
     dispose() {
       poller.stop();
       turns.abort();
+      if (reread !== null) clock.clearTimeout(reread);
+      reread = null;
     },
 
     get polling() { return poller.running; },

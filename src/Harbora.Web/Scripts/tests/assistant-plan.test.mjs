@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   kindLabel, needsPhrase, phraseMatches, isRememberable, rememberableTools,
   createPlanForm, checkPlanForm, buildApproveBody, planIsExpired, planIsActionable,
-  stepResultState, summarizeResult,
+  stepResultState, summarizeResult, planHeading, resultNote,
 } from '../islands/assistantPlan.js';
 
 // Shapes exactly as AgentViews.cs serialises them (camelCase): AgentPlanView, AgentPlanStepView,
@@ -162,4 +162,22 @@ test('a result summary counts each state and calls it complete only when every s
   const allDone = { ...result, status: 'executed', steps: [result.steps[0]] };
   assert.equal(summarizeResult(allDone).allDone, true);
   assert.equal(summarizeResult({ ...result, steps: [] }).allDone, false, 'nothing ran is not "all done"');
+});
+
+test('a card refused at re-check says nothing ran; one decided elsewhere says it already ran', () => {
+  const failed = { ...plan, status: 'failed' };
+  assert.equal(planHeading({ plan: failed, resulted: false, notRun: true }, false), 'Not run — a step was refused when it was checked again');
+  assert.equal(planHeading({ plan: failed, resulted: false, notRun: true }, true), 'اجرا نشد — یکی از گام‌ها هنگام بررسی دوباره رد شد');
+  assert.equal(planHeading({ plan: failed, resulted: false, notRun: false }, false), 'This plan has already run and stopped');
+  assert.equal(planHeading({ plan: failed, resulted: true, notRun: true }, false), 'Plan stopped — see the result below');
+  assert.equal(planHeading({ plan: { ...plan, status: 'expired' }, superseded: true }, false), 'Not run — you sent a new message');
+});
+
+test('a skipped step shows the server\'s own reason, and the generic words only when there is none', () => {
+  const skipped = { index: 2, state: 'skipped', summaryEn: 'Not run: another step was refused when the plan was re-checked.', summaryFa: 'اجرا نشد: مرحلهٔ دیگری هنگام بررسی دوباره رد شد.', errorEn: null, errorFa: null, links: [] };
+  assert.equal(resultNote(skipped, false), 'Not run: another step was refused when the plan was re-checked.');
+  assert.equal(resultNote(skipped, true), 'اجرا نشد: مرحلهٔ دیگری هنگام بررسی دوباره رد شد.');
+  assert.match(resultNote({ ...skipped, summaryEn: null, summaryFa: null }, false), /earlier step failed/);
+  assert.equal(resultNote({ index: 0, state: 'failed', errorEn: null, errorFa: null }, false), 'Failed.');
+  assert.match(resultNote({ index: 0, state: 'weird' }, false), /did not say/);
 });

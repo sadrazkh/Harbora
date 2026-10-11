@@ -302,6 +302,27 @@ export function applyApproveRefusal(state, planId, error) {
   item.error = { messageEn: error?.messageEn ?? '', messageFa: error?.messageFa ?? error?.messageEn ?? '' };
   item.errorStep = Number.isInteger(error?.stepIndex) ? error.stepIndex : null;
   if (typeof error?.planStatus === 'string' && error.planStatus) item.plan = { ...item.plan, status: error.planStatus };
+  // "failed" from a refusal is not "it ran and stopped". A step refused when the plan was checked
+  // again (revalidation_refused — after a deploy, say, which empties the secret vault) failed the plan
+  // with nothing run. Only "not_pending" means the plan was already decided before this approve.
+  item.notRun = error?.code === 'revalidation_refused'
+    || (item.plan.status === 'failed' && typeof error?.code === 'string' && error.code !== 'not_pending');
+}
+
+/**
+ * A turn refused before it got anywhere (the gate: no model, today's cap) does not supersede the card
+ * that was waiting — the server only withdraws a plan for a message it will answer. Cards this pane
+ * marked superseded on `started` get the server's word back from a fresh read of the conversation.
+ */
+export function restoreSuperseded(state, view) {
+  const pending = view?.pendingPlan ?? null;
+  for (const item of state.items) {
+    if (item.kind !== 'plan' || !item.superseded) continue;
+    if (pending && pending.id === item.plan.id) {
+      item.plan = pending;
+      item.superseded = false;
+    }
+  }
 }
 
 export function markPlanRejected(state, planId) {

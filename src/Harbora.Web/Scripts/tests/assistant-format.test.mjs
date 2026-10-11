@@ -202,3 +202,13 @@ test('settling keeps the side a long paragraph was already given while it was wr
   assert.equal(dir('این برنامه را آماده کردم', 0), 'rtl');
   assert.equal(dir.settle('این برنامه را آماده کردم with a lot of English words added at the very end of it', 0), 'rtl', 'no flip at the end');
 });
+
+test('a saved tool message is drawn as a status line in its own direction, not as a monospace code block', () => {
+  const source = readFileSync(new URL('../islands/AssistantPanel.vue', import.meta.url), 'utf8');
+  const start = source.indexOf("item.kind === 'tool-history'");
+  const end = source.indexOf('<AssistantPlanCard', start);
+  assert.ok(start > 0 && end > start);
+  const markup = source.slice(start, end);
+  assert.equal(/<pre\b|<details\b|font-mono|dir="ltr"/.test(markup), false, markup);
+  assert.ok(markup.includes('textDirection(item.text)'));
+});

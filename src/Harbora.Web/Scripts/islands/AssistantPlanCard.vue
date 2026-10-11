@@ -3,7 +3,7 @@ import { computed } from 'vue';
 import { Ban, Check, CircleCheck, Clock, ListChecks, LoaderCircle, ShieldAlert, TriangleAlert } from 'lucide';
 import { AssistantIcon } from './assistantIcon';
 import {
-  kindLabel, needsPhrase, isRememberable, planIsActionable, planIsExpired,
+  kindLabel, needsPhrase, isRememberable, planIsActionable, planIsExpired, planHeading,
 } from './assistantPlan.js';
 import { textDirection } from './assistantFormat.js';
 
@@ -24,6 +24,7 @@ interface PlanItem {
   errorStep: number | null;
   superseded: boolean;
   resulted: boolean;
+  notRun?: boolean;
 }
 
 // `locked`: a turn is streaming. The server expires a waiting plan when it receives a new message,
@@ -43,18 +44,7 @@ const validUntil = computed(() => {
   return Number.isNaN(at.getTime()) ? null : new Intl.DateTimeFormat(props.fa ? 'fa-IR' : 'en-GB', { timeStyle: 'short' }).format(at);
 });
 
-const heading = computed(() => {
-  const resulted = props.item.resulted;
-  switch (plan.value.status) {
-    case 'pending': return t('Plan — waiting for your approval', 'برنامه — منتظر تأیید شما');
-    case 'executing': return t('Running…', 'در حال اجرا…');
-    case 'executed': return resulted ? t('Plan ran — see the result below', 'برنامه اجرا شد — نتیجه در پایین') : t('This plan has already run', 'این برنامه قبلاً اجرا شده است');
-    case 'failed': return resulted ? t('Plan stopped — see the result below', 'برنامه متوقف شد — نتیجه در پایین') : t('This plan has already run and stopped', 'این برنامه قبلاً اجرا شده و متوقف شده است');
-    case 'rejected': return t('Cancelled — nothing ran', 'لغو شد — هیچ کاری اجرا نشد');
-    case 'expired': return props.item.superseded ? t('Not run — you sent a new message', 'اجرا نشد — پیام تازه‌ای فرستادید') : t('This plan expired — nothing ran', 'این برنامه منقضی شد — هیچ کاری اجرا نشد');
-    default: return t('Plan', 'برنامه');
-  }
-});
+const heading = computed(() => planHeading(props.item, props.fa));
 
 // The heading is a band of its own — tint, icon and weight — so it never reads as one more step.
 const band = computed(() => {

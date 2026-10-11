@@ -94,7 +94,7 @@ function statusWords(status) {
  * "expired") — the server's word on both, since the pane does not judge expiry by its own clock.
  */
 export class AssistantRequestError extends Error {
-  constructor(status, messageEn, messageFa, { stepIndex = null, planStatus = null } = {}) {
+  constructor(status, messageEn, messageFa, { stepIndex = null, planStatus = null, code = null } = {}) {
     super(messageEn);
     this.name = 'AssistantRequestError';
     this.status = status;
@@ -102,6 +102,9 @@ export class AssistantRequestError extends Error {
     this.messageFa = messageFa;
     this.stepIndex = stepIndex;
     this.planStatus = planStatus;
+    // The server's machine-readable reason (`error`: "revalidation_refused", "not_pending", …) — never
+    // shown to a person, but it is what tells "nothing ran" from "it already ran".
+    this.code = code;
   }
 }
 
@@ -153,6 +156,7 @@ async function describeFailure(response) {
     ...(fromServer ?? fallback),
     fromServer: fromServer !== null,
     stepIndex: Number.isInteger(body?.stepIndex) ? body.stepIndex : null,
+    code: typeof body?.error === 'string' && body.error ? body.error : null,
     // ProblemDetails has a numeric `status` too; only a plan status the contract names counts.
     planStatus: typeof body?.status === 'string' && PLAN_STATUSES.has(body.status) ? body.status : null,
   };
