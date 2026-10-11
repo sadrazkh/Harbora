@@ -105,6 +105,12 @@ public class AppScopeCensusTests
             "The GET: renders a blank creation form with no project or environment chosen yet, the "
             + "same reason ProjectsController's own Create GET needs nothing — there is no resource "
             + "or placement to ask about until the POST, which does check (AllowsAsync).",
+        ["AppsController.cs:Create(CreateAppViewModel model"] =
+            "The POST: the placement it asks about is the environment the new app resolves to, and "
+            + "resolving that is part of creating it, so the question moved with the creation into "
+            + "AppProvisioningService (round six, phase 0a), which asks AllowsAsync(placement, "
+            + "AppsCreate) on both its validate and create paths — the AI agent's tool reaches the same "
+            + "check without going through this action. AppProvisioningServiceTests proves the refusal.",
 
         ["ConfigGroupsController.cs:Create(string name"] =
             "Config groups are workspace-wide shared variable catalogues (this controller's own "

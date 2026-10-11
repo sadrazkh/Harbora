@@ -557,17 +557,25 @@ public class NodeChannelDeploymentTests
         // route on the node channel's host is therefore a second router on that SNI name with the
         // DEFAULT TLS options — the two-routers-one-host conflict the last commit removed, rebuilt
         // from outside, on the one host where the panel trusts a client-settable header.
-        var controller = File.ReadAllText(
-            Path.Combine(RepoRoot(), "src", "Harbora.Web", "Controllers", "AppsController.cs"));
+        //
+        // Both paths live in the app services since round six's phase 0a moved them out of
+        // AppsController, so the panel's forms and the AI agent's tools share one guard.
+        var configuration = File.ReadAllText(
+            Path.Combine(RepoRoot(), "src", "Harbora.Infrastructure", "Apps", "AppConfigurationService.cs"));
+        var provisioning = File.ReadAllText(
+            Path.Combine(RepoRoot(), "src", "Harbora.Infrastructure", "Apps", "AppProvisioningService.cs"));
 
-        controller.Should().Contain("ReservedHosts.IsReserved");
+        configuration.Should().Contain("ReservedHosts.IsReserved");
 
         // Both places a tenant can type a host, not just the domains form: an app can be created
-        // with a custom domain in the same request that creates it.
-        Between(controller, "public async Task<IActionResult> AddDomain", "app.Domains.Add")
-            .Should().Contain("ReservedHost", "the domains form is the obvious way in");
+        // with a custom domain in the same request that creates it. Adding a domain attaches nothing
+        // before its shared check has run, and that check asks the reserved-host question.
+        Between(configuration, "public async Task<ServiceOutcome<AppDomainAdded>> AddDomainAsync", "app.Domains.Add")
+            .Should().Contain("CheckDomainAsync(", "the domains form is the obvious way in");
+        Between(configuration, "private async Task<DomainCheck> CheckDomainAsync", "return new DomainCheck(app, host, null)")
+            .Should().Contain("IsReservedHostAsync(", "the domains form is the obvious way in");
 
-        Between(controller, "var addressed = await addresses.AssignAsync", "string? templateAdvice")
+        Between(provisioning, "var addressed = await addresses.AssignAsync", "return addressed;")
             .Should().Contain("ReservedHost", "and app creation takes a typed domain too");
     }
 

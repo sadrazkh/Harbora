@@ -88,7 +88,6 @@ public class AppsControllerLogSearchTests
             deployEngine: new Unused(),
             ops: ops,
             quota: new Unused(),
-            scheduler: new Unused(),
             protector: new PassthroughProtector(),
             audit: new SilentAudit(),
             rollbackPlanner: new Unused(),
@@ -100,7 +99,6 @@ public class AppsControllerLogSearchTests
             proxy: new Unused(),
             logger: NullLogger<AppsController>.Instance,
             jobs: new NoopJobQueue(),
-            config: new ConfigurationBuilder().Build(),
             currentUser: currentUser,
             creationBilling: new Harbora.Infrastructure.Billing.ResourceCreationBilling(
                 db, new FixedClock(DateTimeOffset.UnixEpoch),
@@ -110,7 +108,11 @@ public class AppsControllerLogSearchTests
             addresses: new Harbora.Infrastructure.Networking.AppAddressAssigner(db, new ConfigurationBuilder().Build()),
             backupSnapshots: null!,
             lifecycle: new Harbora.Infrastructure.Monitoring.LifecycleHistory(db),
-            configOverrides: new Unused())
+            configOverrides: new Unused(),
+            // The app services behind Create and the env/domain/volume actions, none of which these
+            // tests call.
+            provisioning: null!,
+            configuration: null!)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
         };

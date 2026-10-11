@@ -237,7 +237,6 @@ public class QuotaRefusalBilingualismTests
             deployEngine: unused,
             ops: new RefusingOperations(),
             quota: unused,
-            scheduler: unused,
             protector: protector,
             audit: new SilentAudit(),
             rollbackPlanner: unused,
@@ -249,7 +248,6 @@ public class QuotaRefusalBilingualismTests
             proxy: unused,
             logger: NullLogger<AppsController>.Instance,
             jobs: new NoopJobQueue(),
-            config: new ConfigurationBuilder().Build(),
             currentUser: currentUser,
             creationBilling: new Harbora.Infrastructure.Billing.ResourceCreationBilling(
                 db, clock, Microsoft.Extensions.Options.Options.Create(
@@ -265,7 +263,11 @@ public class QuotaRefusalBilingualismTests
                 Microsoft.Extensions.Logging.Abstractions.NullLogger<
                     Harbora.Modules.Backup.Infrastructure.BackupSnapshotService>.Instance),
             lifecycle: new Harbora.Infrastructure.Monitoring.LifecycleHistory(db),
-            configOverrides: new Unused())
+            configOverrides: new Unused(),
+            // The app services behind Create and the env/domain/volume actions, none of which these
+            // tests call.
+            provisioning: null!,
+            configuration: null!)
         {
             ControllerContext = new ControllerContext { HttpContext = RequestWithServices() }
         };

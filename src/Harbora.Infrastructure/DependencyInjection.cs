@@ -451,6 +451,11 @@ public static class DependencyInjection
         // The one place every app-creation path asks what hostname an app should get.
         services.AddScoped<Networking.AppAddressAssigner>();
 
+        // Round six, phase 0a (in-panel AI agent): creating an app and changing its env vars, domains
+        // and volumes, moved out of AppsController so the agent's tools call the same code the forms do.
+        services.AddScoped<Apps.IAppProvisioningService, Apps.AppProvisioningService>();
+        services.AddScoped<Apps.IAppConfigurationService, Apps.AppConfigurationService>();
+
         // Monitoring + notifications.
         services.AddHttpClient();
         services.Configure<Notifications.NotificationOptions>(config.GetSection("Notifications"));

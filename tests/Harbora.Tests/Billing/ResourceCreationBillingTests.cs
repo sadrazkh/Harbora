@@ -19,7 +19,7 @@ public sealed class ResourceCreationBillingTests
         new(2026, 8, 9, 19, 30, 0, TimeSpan.Zero);
 
     [Theory]
-    [InlineData("src/Harbora.Web/Controllers/AppsController.cs")]
+    [InlineData("src/Harbora.Infrastructure/Apps/AppProvisioningService.cs")]
     [InlineData("src/Harbora.Infrastructure/Services/DatabaseProvisioningService.cs")]
     [InlineData("src/Harbora.Infrastructure/Templates/TemplateDeploymentService.cs")]
     [InlineData("src/Harbora.Infrastructure/Projects/EnvironmentCloner.cs")]

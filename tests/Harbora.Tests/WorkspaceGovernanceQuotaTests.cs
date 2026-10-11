@@ -41,7 +41,8 @@ public sealed class WorkspaceGovernanceQuotaTests : IDisposable
         new(_db, Options.Create(new BillingOptions { Enabled = billing }));
 
     [Theory]
-    [InlineData("src/Harbora.Web/Controllers/AppsController.cs")]
+    [InlineData("src/Harbora.Infrastructure/Apps/AppProvisioningService.cs")]
+    [InlineData("src/Harbora.Infrastructure/Apps/AppConfigurationService.cs")]
     [InlineData("src/Harbora.Infrastructure/Services/DatabaseProvisioningService.cs")]
     [InlineData("src/Harbora.Web/Controllers/BackupsController.cs")]
     [InlineData("src/Harbora.Web/Controllers/UsersController.cs")]
