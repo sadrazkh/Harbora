@@ -151,3 +151,16 @@ handle; value never reaches the model) — owner chose to build it in this round
 
 A transient network error (SSL verification) killed three agents once; all resumed from their worktrees
 with nothing lost.
+
+## Second production deploy (write tools, streaming, resilient turns, secrets) — 2026-10-12
+
+- CI green on d389285 (every job incl. the Postgres lane: AgentTurnInProgress migration and the claim races).
+- Pre-flight: checkout clean at 9a99c4a, disk 37%, panel healthy, 17 containers, no executing plans.
+- Rollback image: `harbora/panel:before-d389285`.
+- `install.sh update` run detached (nohup) → HEAD d389285, UPDATE_EXIT=0, every verify check passed;
+  panel healthy, restarts 0.
+- Migration `20261011135957_AgentTurnInProgress` applied (121 total). No fail/crit lines in the panel log.
+- 17 containers before and after (same names). /assistant/* anonymous → 302 to login.
+- Not yet done: a smoke test of one streamed turn that proposes a write, against the real model (needs the
+  owner, or a one-time sign-in token for the coordinator).
+- Round-six worktrees removed after merge (all clean). Harbora.Tests 7304, node 230.
