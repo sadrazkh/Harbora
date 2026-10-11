@@ -212,3 +212,175 @@ NodeAgent 500 + 17 skipped, NodeIngress 15.
    messages so far. Text being written right now on the server appears only when D saves it as a
    message; there are no deltas in a re-read.
 5. **Ctrl+J** is still unverified in desktop Chrome and Firefox, as in earlier rounds.
+
+## Fixes after review
+
+The review praised the indicator, the streamed bubble, the polling guard and double-click safety, and
+found three Important gaps plus minors. All are fixed in `eb4666b` (originally `5591ace`, before the
+rebase onto master `9c8617c`).
+
+### Important
+
+1. **Dots stuck on and the composer locked after a failed open.**
+   - `open()` remembers whether the conversation on screen was being followed, and whether a turn in
+     it was just abandoned.
+   - When the read fails, the conversation on screen is followed again through a new `follow()`.
+     Otherwise `resuming` is cleared.
+   - `resuming` is never left true without a poller. The one exception is while the drawer is closed,
+     because of the `paused` flag below, and `wake()` restarts the poller on the next open.
+2. **A reload during the create lost the words.** The outbox entry is now written before
+   `createConversation()`, under `new`, and moved to the new id once it exists (`prefs.moveOutbox`). A
+   reload mid-create finds the words under `new` and `restore()` gives them back.
+3. **A failed read on reload was swallowed.**
+   - `restore()` opens with `holdOnFailure`. A failure other than 404/403 sets
+     `timeline.loadError = { conversationId, messageEn, messageFa }`.
+   - The remembered id and the waiting outbox are kept.
+   - `send()` is refused while `loadError` is set, so nothing can start a new conversation and orphan
+     the old one.
+   - The pane shows an error card with "Try again", which calls `session.retry()`, and "Start a new
+     conversation".
+
+### Minors
+
+- **"Not sent" is checked before it is said.** When `started` never arrived and the conversation id is
+  known, the pane re-reads the conversation first.
+  - If the person's last message there is this one, the send counts as done: the conversation is drawn
+    and followed if still answering, with nothing offered for resending.
+  - If the read fails, the bubble says «شاید فرستاده نشده باشد» ("May not have been sent") with a
+    softer notice.
+  - Only a read that shows the message absent says «فرستاده نشد».
+- **Notices are cleared** on every `open()`. A "still answering" notice (kind `busy`) also goes when the
+  answer it was waiting for is in.
+- **The outbox is keyed by conversation** (`new` for one not created yet), so one conversation's
+  waiting words are never overwritten by another's. The single-entry format of the previous version is
+  still read.
+- **An abandoned create gives the words back** to the composer, and nothing is sent.
+- **A drawer closed during the restore read** no longer starts polling. `pause()` sets `paused`, and
+  `follow()` waits for `wake()`.
+- **Streamed bubbles hold their direction** (`createSteadyDirection`).
+  - A paragraph follows its first letter until it has 4 words, then is decided once by word count and
+    held.
+  - Pure first-letter direction would have laid out «shop-db ساخته شد…» left to right for good. In the
+    browser that case corrected once, at the 4th word, then stayed RTL through the final message.
+- **"Thinking…" for screen readers** now lives in a persistent `role="status"` region outside the log.
+  The log is `aria-busy` during a turn, and changes inside a busy region are held back.
+- **The over-claiming test was renamed** to "a plan arriving while a bubble is live finalizes it…",
+  and the late-message case it named was added.
+- **A `message` arriving after its `tool` line replaces the bubble instead of doubling it.**
+  - The `message` handler first looks for an unconfirmed streamed bubble in this turn whose text is the
+    same as the message, or the start of it, and replaces that one; otherwise it replaces the live
+    bubble.
+  - A late message for an earlier bubble does not touch the one being written now.
+  - A cut-off bubble is completed by its late message and loses the cut note.
+
+**Tests added:**
+- session (13): every item above, including resuming with a poller after a failed open, words kept
+  during the create, `loadError` with retry and starting new from it, the keyed outbox, the abandoned
+  create, the "not sent" re-check (sent vs unsure), the busy notice clearing, notices cleared on open,
+  and no polling while paused;
+- timeline (4): the late message after the tool line, the late message not touching the live bubble,
+  the cut bubble completed, an unmatched message drawn on its own;
+- format (3): the held direction.
+
+**Mutation checks:** I broke the code under each Important fix and its test failed, then I restored it.
+- removing the follow-again → the failed-open test fails;
+- moving the outbox write after the create → the mid-create reload test fails;
+- disabling `holdOnFailure` → the reload-failure test fails;
+- going back to live-bubble-only for `message` → 3 timeline tests fail.
+
+**Browser harness** (new `?scenario=loadfail`): the error card showed, Send was disabled, the
+remembered id was kept and no empty state was drawn; "Try again" loaded the conversation with its
+plan.
+
+## S — the lock button (pane)
+
+Owner: «سکرت رو بگیره ولی برای مدل به عنوان بلک باکس بفرسته و بگیره اینور اعمال کنه». The branch was
+rebased onto master `9c8617c`, which has the contract `AgentSecretContracts.cs`. Commit `7517273`.
+
+- **`assistantSecrets.js`** (new):
+  - `SECRET_HANDLE`, `isHandle` and `splitSecrets` follow the contract's pattern,
+    `{{secret:` + 22 URL-safe characters + `}}`.
+  - `looksLikeSecret` is the warning heuristic. It catches a secret-ish key (password, token,
+    api_key, …, or «رمز»/«گذرواژه», with up to a few words before the `:`/`=`) followed by a value, and
+    well-known token formats: `sk-…`, `ghp_…`, `github_pat_…`, `xox…-`, `AKIA…`, PEM private keys.
+    Handles never count.
+  - `createSecretBook` holds handle → name and placeholder, and never a value. It provides `add`,
+    `insert` at the cursor, `expand` (placeholder → handle, for sending), `collapse` (handle →
+    placeholder, for words given back to the composer) and `nameOf`.
+  - `createSecretForm` is the form state. Name must be 1–100 characters and value 1–8,000, as on the
+    server. It posts once and resets on success and on close. After a refused post the value stays
+    only in the still-open form, so the person can retry.
+- **`assistantApi.js`**: `holdSecret({ name, value })` → `POST /assistant/secrets`, with the
+  `X-CSRF-TOKEN` header. It is the only request that ever carries a value.
+- **`AssistantPanel.vue`**:
+  - A lock button beside Send opens an inline form, as its own `<form>` so Enter adds the secret
+    instead of sending the message. The form has a name field and a masked value field with a
+    show/hide toggle, plus the line "the AI sees a placeholder, never the secret; kept for 30 minutes".
+  - Adding inserts `[🔒 NAME]` into the draft at the cursor. At send the draft is expanded, so the
+    message carries `{{secret:…}}`.
+  - The warning shows live, checked against the expanded draft so a placeholder never sets it off. The
+    first Send of such a draft is held and the warning says "press Send again to send it as it is";
+    it also offers the lock button.
+- **`AssistantSecretText.vue`** (new) draws handles in user bubbles and in assistant text as lock chips
+  with the name, or «سکرت»/"secret" when this pane did not hold it, for example after a reload. Text
+  only, no HTML.
+
+**Tests:** `assistant-secrets.test.mjs`, 15 tests.
+- handle pattern and splitting, including the global-regex `lastIndex` trap;
+- the warning, both for what it catches (13 phrasings) and what it ignores (8, including handles);
+- placeholders: insertion at the cursor, distinct names, expand/collapse, nameOf;
+- the form: posts once, then forgets; close forgets; validation; a refused post keeps the form open;
+- `holdSecret`'s request;
+- end to end through the real session: the value is absent from the draft, the sent text, the outbox
+  during the send, localStorage and the timeline, and only the handle travels;
+- a placeholder in the draft does not set off the warning.
+
+**Browser harness** (fake `POST /assistant/secrets`; its log line withholds the body):
+- The lock form posted the value to `/assistant/secrets` only.
+- The draft got `… روی [🔒 DB_PASSWORD]`.
+- The message request carried `{{secret:58d89208ec2d4f2c9cfa27}}`.
+- The user bubble showed a lock chip "DB_PASSWORD".
+- localStorage never contained the value.
+- «رمز دیتابیس: hunter22 …» raised the warning and the first Send was held. This check found that the
+  first version of the Persian pattern needed «رمز» directly before the colon. It now allows a few
+  words in between, and a test covers it.
+
+## Commands and output — after both pieces
+
+The final run was on `7517273`, after the rebase onto master `9c8617c`, with `MSBUILDDISABLENODEREUSE=1`,
+`-p:UseSharedCompilation=false` and log `/tmp/test-r6-chat-pane.log`.
+
+- **Node:** `node --test src/Harbora.Web/Scripts/tests/*.test.mjs` → `# tests 202  # pass 202  # fail 0`.
+  By file: api 33, drawer 20, format 23, plan 15, secrets 15, session 29, stream 15, timeline 40, plus 12
+  that were already there.
+- **Bundle:** `npm run build`, run alone → `NPM_EXIT=0`,
+  `AssistantPanel-*.js 65.57 kB │ gzip: 21.84 kB`, `✓ built in 5.63s`, and the manifest names
+  `"Scripts/main.ts"`.
+
+```
+BUILD_EXIT=0   28 Warning(s) (48x NU1900 + 8x NU1903 lines, the package-feed warnings only)   0 Error(s)
+dotnet test tests/Harbora.Tests --no-build --filter "FullyQualifiedName~AssistantPaneHttpTests"
+Passed!  - Failed: 0, Passed:    10, Skipped:  0, Total:   10 - Harbora.Tests.dll
+dotnet test Harbora.slnx --no-build
+EXIT=0
+Passed!  - Failed: 0, Passed:   500, Skipped: 17, Total:  517 - Harbora.NodeAgent.Tests.dll
+Passed!  - Failed: 0, Passed:    15, Skipped:  0, Total:   15 - Harbora.NodeIngress.Tests.dll
+Passed!  - Failed: 0, Passed:  6951, Skipped:  0, Total: 6951 - Harbora.Tests.dll
+dll=2 msb3030=0
+```
+
+This branch adds no tests to Harbora.Tests (no Razor change). 6951 is master `9c8617c`'s count,
+which has grown with the other agents' landed work since `d20cd0c` (6828).
+
+## Concerns (both pieces)
+
+1. **Not verified against D's server.** `POST /assistant/secrets` and the U endpoints are on D's
+   branch, not on master `9c8617c`. Both pieces are coded to the contracts and checked in the harness
+   only.
+2. **Placeholders are plain text in the textarea, not real chips.** Editing a placeholder by hand
+   stops it expanding: it is then sent as literal text, which never contains the value.
+3. **After a reload, held secrets show as «سکرت».** The handle → name book lives in memory only.
+4. **The warning heuristic is deliberately gentle and incomplete.** A secret with no recognisable key
+   or format passes unnoticed.
+5. **The handle is the only check on secret use.** Anything sent as a handle is resolved by the server's
+   tools (F); the pane does not check that the tool is the right one for that secret.
