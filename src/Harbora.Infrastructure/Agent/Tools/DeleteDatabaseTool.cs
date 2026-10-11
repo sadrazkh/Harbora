@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Harbora.Domain.Authorization;
+using Harbora.Infrastructure.Security;
 using Harbora.Infrastructure.Services;
+using static Harbora.Infrastructure.Agent.Tools.ProjectDatabaseToolSupport;
 
 namespace Harbora.Infrastructure.Agent.Tools;
 
@@ -13,7 +15,10 @@ namespace Harbora.Infrastructure.Agent.Tools;
 /// typed.
 /// </summary>
 public sealed class DeleteDatabaseTool(
-    IDatabaseProvisioningService provisioning, AgentResourceResolver resolver) : AgentWriteTool
+    IDatabaseProvisioningService provisioning,
+    AgentResourceResolver resolver,
+    ServiceUsageService usage,
+    ProjectAccessService access) : AgentWriteTool
 {
     public override string Name => "delete_database";
 
@@ -56,23 +61,46 @@ public sealed class DeleteDatabaseTool(
         var what = $"{AgentResourceResolver.Lower(service.Type)} {service.Version} in {AgentResourceResolver.Place(service)}.";
         var whatFa = $"{AgentResourceResolver.Lower(service.Type)} نسخهٔ {service.Version} در {AgentResourceResolver.Place(service)}.";
 
-        return deleteData
-            ? new AgentValidation(true,
+        // Who still points at it — the panel's ConfirmRemove list (ServiceUsageService), which also finds apps
+        // wired the pre-attachment way, by a copied connection string the structural refusal cannot see.
+        var users = await VisibleUsersAsync(usage, access, service.Id, ct);
+        var warningsEn = new List<string>
+        {
+            users.Count == 0
+                ? "No app you can see uses it."
+                : $"{DatabaseProvisioningService.NamedList(users, isFa: false)} — still configured to use it, and will fail to connect once it is gone."
+        };
+        var warningsFa = new List<string>
+        {
+            users.Count == 0
+                ? "هیچ اپی که به آن دسترسی دارید از آن استفاده نمی‌کند."
+                : $"{DatabaseProvisioningService.NamedList(users, isFa: true)} — هنوز برای استفاده از آن تنظیم شده‌اند و پس از حذف آن نمی‌توانند وصل شوند."
+        };
+
+        if (deleteData)
+        {
+            warningsEn.Add("All of its data is deleted for good. This cannot be undone; take a backup first if it may be needed.");
+            warningsFa.Add("همهٔ داده‌هایش برای همیشه پاک می‌شود و برگشت‌پذیر نیست؛ اگر ممکن است لازم شود، اول پشتیبان بگیرید.");
+            return new AgentValidation(true,
                 TitleEn: $"Delete database {service.Name} and its data",
                 TitleFa: $"حذف دیتابیس {service.Name} همراه با داده‌هایش",
                 DetailEn: $"{what} The container is removed and its data volume {service.VolumeName} is deleted with it.",
                 DetailFa: $"{whatFa} کانتینر حذف می‌شود و والیوم داده‌اش، {service.VolumeName}، هم همراه آن پاک می‌شود.",
-                WarningsEn: ["All of its data is deleted for good. This cannot be undone; take a backup first if it may be needed."],
-                WarningsFa: ["همهٔ داده‌هایش برای همیشه پاک می‌شود و برگشت‌پذیر نیست؛ اگر ممکن است لازم شود، اول پشتیبان بگیرید."],
-                ConfirmationPhrase: service.Name)
-            : new AgentValidation(true,
-                TitleEn: $"Delete database {service.Name}, keeping its data",
-                TitleFa: $"حذف دیتابیس {service.Name} با نگه‌داشتن داده‌هایش",
-                DetailEn: $"{what} The container is removed; its data volume {service.VolumeName} is kept on the server.",
-                DetailFa: $"{whatFa} کانتینر حذف می‌شود؛ والیوم داده‌اش، {service.VolumeName}، روی سرور می‌ماند.",
-                WarningsEn: [$"The database is gone from the panel. Its data stays on the server's disk in {service.VolumeName} and keeps using space until someone removes it."],
-                WarningsFa: [$"دیتابیس از پنل حذف می‌شود. داده‌هایش در {service.VolumeName} روی دیسک سرور می‌ماند و تا وقتی کسی آن را پاک نکند فضا می‌گیرد."],
+                WarningsEn: warningsEn,
+                WarningsFa: warningsFa,
                 ConfirmationPhrase: service.Name);
+        }
+
+        warningsEn.Add($"The database is gone from the panel. Its data stays on the server's disk in {service.VolumeName} and keeps using space until someone removes it.");
+        warningsFa.Add($"دیتابیس از پنل حذف می‌شود. داده‌هایش در {service.VolumeName} روی دیسک سرور می‌ماند و تا وقتی کسی آن را پاک نکند فضا می‌گیرد.");
+        return new AgentValidation(true,
+            TitleEn: $"Delete database {service.Name}, keeping its data",
+            TitleFa: $"حذف دیتابیس {service.Name} با نگه‌داشتن داده‌هایش",
+            DetailEn: $"{what} The container is removed; its data volume {service.VolumeName} is kept on the server.",
+            DetailFa: $"{whatFa} کانتینر حذف می‌شود؛ والیوم داده‌اش، {service.VolumeName}، روی سرور می‌ماند.",
+            WarningsEn: warningsEn,
+            WarningsFa: warningsFa,
+            ConfirmationPhrase: service.Name);
     }
 
     public override async Task<AgentToolResult> ExecuteAsync(JsonElement args, AgentToolContext context, CancellationToken ct)

@@ -79,10 +79,10 @@ internal sealed class DatabaseToolRig : IDisposable
 
     public AttachDatabaseTool Attach() => new(Db, Attachments, Access, Resolver);
     public DetachDatabaseTool Detach() => new(Db, Attachments, Resolver);
-    public RotateDatabasePasswordTool Rotate() => new(Db, Engine, Access, Resolver, Usage, H.Protector);
+    public RotateDatabasePasswordTool Rotate() => new(Db, Engine, Access, Resolver, Usage, H.Protector, NullLogger<RotateDatabasePasswordTool>.Instance);
     public StopDatabaseTool Stop(TimeSpan? timeout = null) => new(Db, Engine, Access, Resolver, Usage) { EngineTimeout = timeout ?? TimeSpan.FromMinutes(2) };
     public StartDatabaseTool Start(TimeSpan? timeout = null) => new(Db, Engine, Access, Resolver, Options.Create(Billing)) { EngineTimeout = timeout ?? TimeSpan.FromMinutes(2) };
-    public DeleteDatabaseTool DeleteDatabase() => new(Provisioning, Resolver);
+    public DeleteDatabaseTool DeleteDatabase() => new(Provisioning, Resolver, Usage, Access);
 
     public DeleteProjectTool DeleteProject() => new(
         new ProjectDeletionService(Db, AppOps, Engine, NullLogger<ProjectDeletionService>.Instance), Access, Resolver, H.Audit);
@@ -250,7 +250,8 @@ internal sealed class ToolEngine(HarboraDbContext db, ISecretProtector protector
     public bool Hang { get; set; }
     public string? RotateRefusal { get; set; }
     public bool RotateDoesNothing { get; set; }
-    public bool RotateFailsAfterStoring { get; set; }
+    public Exception? RotateThrowsBeforeStoring { get; set; }
+    public Exception? RotateThrowsAfterStoring { get; set; }
     public List<RotatedApp> Rewrites { get; } = [];
 
     public Task QueueProvisionAsync(Guid serviceId, CancellationToken ct)
@@ -290,12 +291,12 @@ internal sealed class ToolEngine(HarboraDbContext db, ISecretProtector protector
     {
         Rotated.Add(serviceId);
         if (RotateRefusal is { } refusal) throw new InvalidOperationException(refusal);
+        if (RotateThrowsBeforeStoring is { } before) throw before;
         if (RotateDoesNothing) return [];
         var service = await db.ManagedServices.FirstAsync(s => s.Id == serviceId, ct);
         service.EncryptedPassword = protector.Protect(NewPassword);
         await db.SaveChangesAsync(ct);
-        if (RotateFailsAfterStoring)
-            throw new InvalidOperationException("The container could not be recreated with the new password.");
+        if (RotateThrowsAfterStoring is { } after) throw after;
         return Rewrites.ToList();
     }
 

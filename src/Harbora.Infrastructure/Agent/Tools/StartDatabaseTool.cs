@@ -92,8 +92,8 @@ public sealed class StartDatabaseTool(
 
         if (!finished)
             return new AgentToolResult(false, AgentJson.Serialize(new { database = service.Name, started = false, timedOut = true }),
-                Error: $"The server did not finish starting {service.Name} within {EngineTimeout.TotalSeconds:0} seconds. Check its page for its state.",
-                ErrorFa: $"سرور راه‌اندازی {service.Name} را در {EngineTimeout.TotalSeconds:0} ثانیه تمام نکرد. وضعیتش را در صفحهٔ آن ببینید.",
+                Error: $"The server did not finish starting {service.Name} within {EngineTimeout.TotalSeconds:0} seconds; it may still finish on the server. Check its page for its state.",
+                ErrorFa: $"سرور راه‌اندازی {service.Name} را در {EngineTimeout.TotalSeconds:0} ثانیه تمام نکرد؛ ممکن است روی سرور همچنان انجام شود. وضعیتش را در صفحهٔ آن ببینید.",
                 Links: links);
 
         var status = await db.ManagedServices.AsNoTracking()

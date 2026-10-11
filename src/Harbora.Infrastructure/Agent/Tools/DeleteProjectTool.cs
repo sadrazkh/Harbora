@@ -167,10 +167,6 @@ public sealed class DeleteProjectTool(
                 $"{string.Join(", ", guarded)} in this project has a protected volume, so deleting the project would stop part-way and leave it half-deleted. Unprotect the volume first, or delete the rest one by one.",
                 $"{string.Join("، ", guarded)} در این پروژه والیوم محافظت‌شده دارد و حذف پروژه نیمه‌کاره می‌ماند. اول محافظت والیوم را بردارید، یا بقیه را یکی‌یکی حذف کنید."));
 
-        // The panel's own rule: the typed text must satisfy the plan's own comparison.
-        if (!plan.IsConfirmed(plan.ProjectName.Trim()))
-            return (null, AgentValidation.Refused("This project cannot be confirmed by name.", "این پروژه با نام قابل تأیید نیست."));
-
         return ((project, plan), null);
     }
 }

@@ -562,9 +562,12 @@ public class DatabaseToolsTests
 
         stop.Ok.Should().BeFalse();
         stop.ResultJson.Should().Contain("\"timedOut\":true");
-        stop.ErrorFa.Should().Contain("ثانیه");
+        stop.Error.Should().Contain("it may still finish on the server", "a deadline passing is not the work being undone");
+        stop.ErrorFa.Should().Contain("ممکن است روی سرور همچنان انجام شود");
         start.Ok.Should().BeFalse();
         start.ResultJson.Should().Contain("\"timedOut\":true");
+        start.Error.Should().Contain("it may still finish on the server");
+        start.ErrorFa.Should().Contain("ممکن است روی سرور همچنان انجام شود");
     }
 
     [Fact]
@@ -619,12 +622,37 @@ public class DatabaseToolsTests
         keep.ConfirmationPhrase.Should().Be("shop-db");
         keep.TitleEn.Should().Be("Delete database shop-db, keeping its data");
         keep.DetailEn.Should().Contain("is kept on the server");
-        keep.WarningsEn.Should().ContainSingle().Which.Should().Contain("harbora-svc-shop-db-data");
+        keep.WarningsEn.Should().Equal(
+            "No app you can see uses it.",
+            "The database is gone from the panel. Its data stays on the server's disk in harbora-svc-shop-db-data and keeps using space until someone removes it.");
         wipe.ConfirmationPhrase.Should().Be("shop-db", "the phrase is the database's exact name, not the words the model used");
         wipe.TitleFa.Should().Be("حذف دیتابیس shop-db همراه با داده‌هایش");
-        wipe.WarningsEn.Should().ContainSingle().Which.Should().Contain("deleted for good");
-        wipe.WarningsFa.Should().ContainSingle().Which.Should().Contain("برای همیشه");
+        wipe.WarningsEn.Should().HaveCount(2).And.Contain(w => w.Contains("deleted for good"));
+        wipe.WarningsFa.Should().HaveCount(2).And.Contain(w => w.Contains("برای همیشه"));
         rig.Counts().Should().Be(before);
+    }
+
+    [Fact]
+    public async Task Delete_database_names_the_apps_still_wired_to_it_by_a_copied_connection_string()
+    {
+        // The pre-attachment wiring: a connection string copied into the app's own variables, no join row — so
+        // the structural refusal lets the delete through, and only the usage reader (the panel's ConfirmRemove
+        // list) knows the app will lose its database.
+        using var rig = new DatabaseToolRig();
+        rig.SeedDatabase("shop-db");
+        var legacy = rig.SeedApp("legacy");
+        rig.Db.EnvironmentVariables.Add(new Harbora.Domain.Apps.EnvironmentVariable
+        {
+            AppId = legacy.Id, Key = "DATABASE_URL", IsSecret = true,
+            Value = rig.H.Protector.Protect("postgres://harbora:x@harbora-svc-shop-db:5432/shop_db")
+        });
+        await rig.Db.SaveChangesAsync();
+
+        var verdict = await rig.ValidateAsync(rig.DeleteDatabase(), """{"database":"shop-db"}""");
+
+        verdict.Ok.Should().BeTrue(verdict.Error);
+        verdict.WarningsEn![0].Should().Be("1 app: legacy — still configured to use it, and will fail to connect once it is gone.");
+        verdict.WarningsFa![0].Should().StartWith("1 اپ: legacy — هنوز برای استفاده از آن تنظیم شده‌اند");
     }
 
     [Fact]
@@ -785,7 +813,7 @@ public class DatabaseToolsTests
     {
         using var rig = new DatabaseToolRig();
         var oldCipher = rig.SeedDatabase("cache", type: ManagedServiceType.Redis).EncryptedPassword;
-        rig.Engine.RotateFailsAfterStoring = true;
+        rig.Engine.RotateThrowsAfterStoring = new InvalidOperationException("The container could not be recreated with the new password.");
 
         var result = await rig.ExecuteAsync(rig.Rotate(), """{"database":"cache"}""");
 
@@ -794,6 +822,62 @@ public class DatabaseToolsTests
         result.ErrorFa.Should().StartWith("رمز cache عوض شد");
         result.ResultJson.Should().Contain("\"rotated\":true");
         (await rig.Db.ManagedServices.AsNoTracking().SingleAsync()).EncryptedPassword.Should().NotBe(oldCipher);
+    }
+
+    [Fact]
+    public async Task A_docker_failure_after_the_new_password_is_stored_is_told_as_changed_with_the_new_password_redacted()
+    {
+        // Not the engine's own InvalidOperationException: whatever a node or Docker throws during the Redis
+        // recreate, after the new password was stored — here echoing the one-off's command line, which names the
+        // new password in a form no shape rule recognises.
+        using var rig = new DatabaseToolRig();
+        rig.SeedDatabase("cache", type: ManagedServiceType.Redis);
+        rig.Engine.RotateThrowsAfterStoring = new HttpRequestException(
+            $"docker run redis-server --requirepass {ToolEngine.NewPassword} failed: connection reset by peer");
+
+        var result = await rig.ExecuteAsync(rig.Rotate(), """{"database":"cache"}""");
+
+        result.Ok.Should().BeFalse();
+        result.Error.Should().StartWith("The password of cache was changed, but the rest of the rotation failed:")
+            .And.Contain("connection reset by peer").And.EndWith("the apps that use it need a redeploy.");
+        result.ErrorFa.Should().StartWith("رمز cache عوض شد");
+        string[] everything = [result.Error!, result.ErrorFa!, result.ResultJson];
+        everything.Should().NotContain(text => text.Contains(ToolEngine.NewPassword),
+            "the new password is read back and redacted by value before the engine's words are shown");
+        result.Links.Should().ContainSingle(l => l.Kind == "database");
+    }
+
+    [Fact]
+    public async Task A_non_engine_failure_before_anything_is_stored_says_the_password_did_not_change()
+    {
+        using var rig = new DatabaseToolRig();
+        var shop = rig.SeedDatabase("shop-db");
+        var cipher = shop.EncryptedPassword;
+        rig.Engine.RotateThrowsBeforeStoring = new HttpRequestException("The node did not answer.");
+
+        var result = await rig.ExecuteAsync(rig.Rotate(), """{"database":"shop-db"}""");
+
+        result.Should().BeEquivalentTo(new
+        {
+            Ok = false,
+            Error = "The password was not changed. The node did not answer.",
+            ErrorFa = "رمز عوض نشد. The node did not answer."
+        });
+        (await rig.Db.ManagedServices.AsNoTracking().SingleAsync()).EncryptedPassword.Should().Be(cipher);
+    }
+
+    [Fact]
+    public async Task A_billing_refusal_during_the_rotation_reaches_a_persian_reader_in_persian()
+    {
+        using var rig = new DatabaseToolRig();
+        rig.SeedDatabase("cache", type: ManagedServiceType.Redis);
+        rig.Engine.RotateThrowsAfterStoring = new QuotaRefusedException(
+            QuotaCheck.Deny("This workspace is suspended.", "این فضای کاری معلق است."));
+
+        var result = await rig.ExecuteAsync(rig.Rotate(), """{"database":"cache"}""");
+
+        result.Error.Should().Contain("rotation failed: This workspace is suspended.");
+        result.ErrorFa.Should().Contain("ناموفق ماند: این فضای کاری معلق است.").And.NotContain("suspended");
     }
 
     // ---- every tool: another workspace's database is not there ----------------------------------

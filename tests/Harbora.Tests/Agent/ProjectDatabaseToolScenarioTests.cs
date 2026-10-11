@@ -194,8 +194,8 @@ public class ProjectDatabaseToolScenarioTests
         var planId = events.Single<AgentPlanView>("plan").Id;
         step.Kind.Should().Be("destructive");
         step.ConfirmationPhrase.Should().Be("shop-db");
-        step.WarningsEn.Should().ContainSingle().Which.Should().Contain("deleted for good");
-        step.WarningsFa.Should().ContainSingle().Which.Should().Contain("برای همیشه");
+        step.WarningsEn.Should().Contain(w => w.Contains("deleted for good"));
+        step.WarningsFa.Should().Contain(w => w.Contains("برای همیشه"));
 
         var wrong = await rig.H.Plans.ApproveAsync(rig.H.Actor, planId,
             Approve(new Dictionary<int, string> { [0] = "Shop-DB" }), CancellationToken.None);

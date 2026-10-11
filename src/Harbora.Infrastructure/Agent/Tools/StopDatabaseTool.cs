@@ -92,8 +92,8 @@ public sealed class StopDatabaseTool(
 
         if (!await WithinAsync(EngineTimeout, token => engine.StopAsync(service.Id, token), ct))
             return new AgentToolResult(false, AgentJson.Serialize(new { database = service.Name, stopped = false, timedOut = true }),
-                Error: $"The server did not finish stopping {service.Name} within {EngineTimeout.TotalSeconds:0} seconds. Check its page for its state.",
-                ErrorFa: $"سرور توقف {service.Name} را در {EngineTimeout.TotalSeconds:0} ثانیه تمام نکرد. وضعیتش را در صفحهٔ آن ببینید.",
+                Error: $"The server did not finish stopping {service.Name} within {EngineTimeout.TotalSeconds:0} seconds; it may still finish on the server. Check its page for its state.",
+                ErrorFa: $"سرور توقف {service.Name} را در {EngineTimeout.TotalSeconds:0} ثانیه تمام نکرد؛ ممکن است روی سرور همچنان انجام شود. وضعیتش را در صفحهٔ آن ببینید.",
                 Links: links);
 
         var status = await db.ManagedServices.AsNoTracking()

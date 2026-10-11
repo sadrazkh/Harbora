@@ -7,6 +7,7 @@ using Harbora.Infrastructure.Assistant;
 using Harbora.Infrastructure.Security;
 using Harbora.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using static Harbora.Infrastructure.Agent.Tools.ProjectDatabaseToolSupport;
 
 namespace Harbora.Infrastructure.Agent.Tools;
@@ -31,7 +32,8 @@ public sealed class RotateDatabasePasswordTool(
     ProjectAccessService access,
     AgentResourceResolver resolver,
     ServiceUsageService usage,
-    ISecretProtector protector) : AgentWriteTool
+    ISecretProtector protector,
+    ILogger<RotateDatabasePasswordTool> logger) : AgentWriteTool
 {
     public override string Name => "rotate_database_password";
 
@@ -105,26 +107,34 @@ public sealed class RotateDatabasePasswordTool(
         {
             rewritten = await engine.RotatePasswordAsync(service.Id, ct);
         }
-        catch (InvalidOperationException ex)
+        catch (Exception ex) when (!ct.IsCancellationRequested)
         {
-            // The engine's own refusals: an engine it cannot rotate, or the database refusing the new
-            // password — after which nothing was stored. Its words can carry a one-off container's output, so
-            // they are redacted (by this database's passwords, then by shape) and cut before anyone reads them.
-            var reason = AssistantRedaction.Redact(ex.Message, secrets).Text;
-            if (reason.Length > 400) reason = reason[..400] + "…";
+            // Every failure but the caller's own cancellation: the engine's refusals (an engine it cannot rotate,
+            // the database refusing the new password — after which nothing was stored), and anything a node or
+            // Docker throws, possibly after the new password was stored (recreating a Redis container, say).
+            logger.LogWarning(ex, "Rotating the password of database {Service} failed.", service.Id);
 
-            // Asked, not assumed: a failure after the new password was stored (recreating a Redis container,
-            // say) must not be reported as a password that did not change.
-            if (await StoredPasswordAsync(service.Id, ct) != before)
+            // Asked, not assumed: a failure after the new password was stored must not be reported as a password
+            // that did not change.
+            var stored = await db.ManagedServices.AsNoTracking().FirstOrDefaultAsync(s => s.Id == service.Id, ct);
+            var changed = stored is not null && stored.EncryptedPassword != before;
+
+            // The engine's words can carry a one-off container's output — its command line too, which names the
+            // new password in a form no shape rule matches — so once it changed, its new value is redacted as well.
+            if (changed)
+                secrets = [.. secrets, .. await AgentSecrets.ForDatabaseAsync(db, protector, stored!, ct)];
+            var (reason, reasonFa) = Reasons(ex, secrets);
+
+            if (changed)
                 return new AgentToolResult(false,
                     AgentJson.Serialize(new { database = service.Name, rotated = true, completed = false }),
                     Error: $"The password of {service.Name} was changed, but the rest of the rotation failed: {reason} Check the database's page; the apps that use it need a redeploy.",
-                    ErrorFa: $"رمز {service.Name} عوض شد، ولی بقیهٔ کار ناموفق ماند: {reason} صفحهٔ دیتابیس را بررسی کنید؛ اپ‌های استفاده‌کننده باید دوباره مستقر شوند.",
+                    ErrorFa: $"رمز {service.Name} عوض شد، ولی بقیهٔ کار ناموفق ماند: {reasonFa} صفحهٔ دیتابیس را بررسی کنید؛ اپ‌های استفاده‌کننده باید دوباره مستقر شوند.",
                     Links: [DatabaseLink(service.Id, service.Name)]);
 
             return AgentToolResult.Failed(
                 $"The password was not changed. {reason}",
-                $"رمز عوض نشد. {reason}");
+                $"رمز عوض نشد. {reasonFa}");
         }
 
         // The engine returns quietly when its read finds nothing; a rotation that did not happen is not one.
@@ -164,6 +174,23 @@ public sealed class RotateDatabasePasswordTool(
                 ? $"رمز دیتابیس {service.Name} عوض شد. هیچ اپی که به آن دسترسی دارید به استقرار دوباره نیاز ندارد."
                 : $"رمز دیتابیس {service.Name} عوض شد. {string.Join("، ", names)} را دوباره مستقر کنید تا از رمز تازه استفاده کنند.",
             Links: links);
+    }
+
+    /// <summary>
+    /// What went wrong, in each language: redacted by value against <paramref name="secrets"/>, then by shape, and
+    /// cut. A <see cref="QuotaRefusedException"/> carries its own Persian; anything else has only the English it
+    /// was thrown with.
+    /// </summary>
+    private static (string En, string Fa) Reasons(Exception ex, IReadOnlyList<string> secrets)
+    {
+        static string Clean(string text, IReadOnlyList<string> known)
+        {
+            var redacted = AssistantRedaction.Redact(text, known).Text;
+            return redacted.Length > 400 ? redacted[..400] + "…" : redacted;
+        }
+
+        var en = Clean(ex.Message, secrets);
+        return (en, ex is QuotaRefusedException { ReasonFa: { Length: > 0 } fa } ? Clean(fa, secrets) : en);
     }
 
     private Task<string?> StoredPasswordAsync(Guid serviceId, CancellationToken ct) =>
