@@ -302,6 +302,39 @@ public class AgentChatClientStreamingTests
     }
 
     [Fact]
+    public async Task Fragments_with_no_id_go_to_the_newest_call_under_their_wire_index()
+    {
+        // Every call is numbered 0; only the first fragment of each carries its id. The argument
+        // fragments after "c2" must extend c2, not the older call that also lives at index 0.
+        var rig = Build(Serving(() => new SseScript().Send(Events(
+            ToolFragment(0, "c1", "restart_app", "{\"app\":"),
+            ToolFragment(0, null, null, "\"a\"}"),
+            ToolFragment(0, "c2", "deploy_app", "{\"app\":"),
+            ToolFragment(0, null, null, "\"b\"}"),
+            ToolFragment(null, finish: "tool_calls")) + Done)));
+
+        var response = await Stream(rig, new Pieces());
+
+        response.Message!.ToolCalls!.Select(c => (c.Id, c.Name, c.ArgumentsJson)).Should().Equal(
+            ("c1", "restart_app", """{"app":"a"}"""), ("c2", "deploy_app", """{"app":"b"}"""));
+    }
+
+    [Fact]
+    public async Task A_repeated_id_under_a_shared_wire_index_returns_to_the_call_it_names()
+    {
+        var rig = Build(Serving(() => new SseScript().Send(Events(
+            ToolFragment(0, "c1", "restart_app", "{\"app\":"),
+            ToolFragment(0, "c2", "deploy_app", "{\"app\":\"b\"}"),
+            ToolFragment(0, "c1", null, "\"a\"}"),
+            ToolFragment(null, finish: "tool_calls")) + Done)));
+
+        var response = await Stream(rig, new Pieces());
+
+        response.Message!.ToolCalls!.Select(c => (c.Id, c.ArgumentsJson)).Should().Equal(
+            ("c1", """{"app":"a"}"""), ("c2", """{"app":"b"}"""));
+    }
+
+    [Fact]
     public async Task Calls_with_no_index_follow_their_ids_and_a_fragment_with_neither_extends_the_last_call()
     {
         var rig = Build(Serving(() => new SseScript().Send(Events(
@@ -481,6 +514,44 @@ public class AgentChatClientStreamingTests
     }
 
     [Fact]
+    public async Task The_time_the_callback_takes_is_never_counted_as_the_providers_silence()
+    {
+        // The second read is ready the moment it is asked for; the pane is slow to show the first
+        // piece, for more than twice the silence limit. The provider said nothing wrong.
+        var rig = Build(Serving(() => new SseScript()
+                .Send(Events(Chunk("slow ")))
+                .Send(Events(Chunk("pane", "stop")) + Done)),
+            streamIdle: TimeSpan.FromMilliseconds(150));
+        var seen = new List<string>();
+
+        var response = await rig.Client.CompleteAsync(Ask(), async text =>
+        {
+            seen.Add(text);
+            if (seen.Count == 1) await Task.Delay(350);
+        }, CancellationToken.None);
+
+        response.Ok.Should().BeTrue(response.Error);
+        seen.Should().Equal("slow ", "pane");
+        response.Message!.Content.Should().Be("slow pane");
+    }
+
+    [Fact]
+    public async Task A_cancellation_that_is_neither_our_budget_nor_our_silence_timer_is_a_timeout_not_a_silence()
+    {
+        // Something inside the HTTP stack cancelling on its own: not the caller, not the 90 s, not the
+        // 45 s. "Stopped sending for 45 seconds" would be a claim nobody measured.
+        var rig = Build(Serving(() => new SseScript()
+                .Send(Events(Chunk("Hel")))
+                .Fail(new OperationCanceledException("the stack gave up"))),
+            streamIdle: TimeSpan.FromSeconds(30));
+
+        var response = await Stream(rig, new Pieces());
+
+        ShouldFailInBothLanguages(response);
+        response.Error.Should().Contain("did not answer within").And.NotContain("stopped sending");
+    }
+
+    [Fact]
     public async Task Keep_alive_comments_count_as_life_so_a_slow_start_is_not_a_silence()
     {
         var rig = Build(Serving(() => new SseScript()
@@ -620,6 +691,73 @@ public class AgentChatClientStreamingTests
     }
 
     [Fact]
+    public async Task The_fallback_gets_what_is_left_of_the_budget_not_a_second_one()
+    {
+        // Budget 1 s. The refusal takes 0.6 s to arrive; the plain retry then hangs. With a fresh
+        // budget the call would last about 1.6 s; with what is left, about 1 s.
+        var call = 0;
+        var handler = new RecordingChatHandler(async (_, ct) =>
+        {
+            if (Interlocked.Increment(ref call) == 1)
+            {
+                await Task.Delay(600, ct);
+                return RecordingChatHandler.Reply("""{"error":{"message":"Streaming is not supported"}}""", HttpStatusCode.BadRequest);
+            }
+
+            await Task.Delay(Timeout.Infinite, ct);
+            return RecordingChatHandler.Reply("never");
+        });
+        var rig = Build(handler, timeout: TimeSpan.FromSeconds(1));
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+
+        var response = await Stream(rig, new Pieces());
+        watch.Stop();
+
+        ShouldFailInBothLanguages(response);
+        response.Error.Should().Contain("did not answer within");
+        handler.Requests.Should().HaveCount(2);
+        watch.Elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(1400), "the retry shares the call's one budget");
+    }
+
+    [Theory]
+    // not about streaming: "upstream" is not "stream", and a body that merely quotes the request is not an error text
+    [InlineData("""{"error":{"message":"Upstream provider returned error","code":400}}""", false)]
+    [InlineData("""{"error":{"message":"Bad request to downstream service"}}""", false)]
+    [InlineData("""{"error":{"message":"Invalid request body"},"request":{"model":"x","stream":true}}""", false)]
+    [InlineData("""{"stream":true,"model":"x"}""", false)]
+    [InlineData("""{"error":{"message":"Provider returned error","metadata":{"raw":"upstream said no","provider_name":"X"}}}""", false)]
+    [InlineData("""<html><body>400 Bad Request: upstream rejected the body</body></html>""", false)]
+    // about streaming: in OpenAI's shape, in the bare shapes some servers use, in plain text, in metadata
+    [InlineData("""{"error":{"message":"Streaming is not supported for this model"}}""", true)]
+    [InlineData("""{"error":{"message":"Unrecognized request argument supplied: stream_options"}}""", true)]
+    [InlineData("""{"object":"error","message":"stream mode is not supported by this engine","code":400}""", true)]
+    [InlineData("""{"detail":"Streaming responses are disabled"}""", true)]
+    [InlineData("""{"error":{"message":"Provider returned error","metadata":{"raw":"stream=true is not allowed for this model"}}}""", true)]
+    [InlineData("""streaming is not supported""", true)]
+    public async Task Only_an_error_that_talks_about_streaming_as_a_word_makes_a_4xx_a_refusal_to_stream(string body, bool refusesStreaming)
+    {
+        var call = 0;
+        var handler = new RecordingChatHandler(_ => Interlocked.Increment(ref call) == 1
+            ? RecordingChatHandler.Reply(body, HttpStatusCode.BadRequest)
+            : RecordingChatHandler.Reply(RecordingChatHandler.TextReply("plain answer")));
+        var rig = Build(handler);
+
+        var response = await Stream(rig, new Pieces());
+
+        if (refusesStreaming)
+        {
+            response.Ok.Should().BeTrue(response.Error);
+            response.Message!.Content.Should().Be("plain answer");
+            handler.Requests.Should().HaveCount(2);
+        }
+        else
+        {
+            ShouldFailInBothLanguages(response);
+            handler.Requests.Should().HaveCount(1, "nothing here said the provider will not stream");
+        }
+    }
+
+    [Fact]
     public async Task A_rejected_stream_options_field_also_falls_back()
     {
         var call = 0;
@@ -754,6 +892,80 @@ public class AgentChatClientStreamingTests
         var act = () => Stream(rig, new Pieces(), ct: cts.Token);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    public static TheoryData<string> CallbackFaults => new()
+    {
+        "cancelled",        // what a callback writing to a gone browser throws first
+        "task-cancelled",
+        "io",               // Kestrel's ConnectionResetException is an IOException
+        "http",
+        "timeout",
+        "invalid"
+    };
+
+    private static Exception FaultOf(string kind) => kind switch
+    {
+        "cancelled" => new OperationCanceledException("the browser left"),
+        "task-cancelled" => new TaskCanceledException("the browser left"),
+        "io" => new IOException("The client reset the request stream."),
+        "http" => new HttpRequestException("pipe closed"),
+        "timeout" => new TimeoutException("write timed out"),
+        _ => new InvalidOperationException("the pane went away")
+    };
+
+    [Theory]
+    [MemberData(nameof(CallbackFaults))]
+    public async Task Whatever_the_callback_throws_reaches_the_caller_as_itself_and_never_as_a_provider_failure(string kind)
+    {
+        // These are exactly what a closed browser tab produces. Turned into "stopped sending for 45
+        // seconds" or "the AI provider's connection dropped", they would blame the provider for it.
+        var original = FaultOf(kind);
+        var pieces = 0;
+        var rig = Build(Serving(() => new SseScript().Send(Events(Chunk("one"), Chunk("two"), Chunk("three", "stop")) + Done)));
+
+        var thrown = await Record.ExceptionAsync(() => rig.Client.CompleteAsync(Ask(), text =>
+        {
+            pieces++;
+            throw original;
+        }, CancellationToken.None));
+
+        thrown.Should().BeSameAs(original);
+        pieces.Should().Be(1, "the stream is abandoned at the first fault");
+    }
+
+    [Theory]
+    [MemberData(nameof(CallbackFaults))]
+    public async Task A_callback_that_fails_asynchronously_is_the_same(string kind)
+    {
+        var original = FaultOf(kind);
+        var rig = Build(Serving(() => new SseScript().Send(Events(Chunk("one", "stop")) + Done)));
+
+        var thrown = await Record.ExceptionAsync(() => rig.Client.CompleteAsync(Ask(), async _ =>
+        {
+            await Task.Yield();
+            throw original;
+        }, CancellationToken.None));
+
+        thrown.Should().BeSameAs(original);
+    }
+
+    [Theory]
+    [MemberData(nameof(CallbackFaults))]
+    public async Task A_callback_fault_is_also_the_callers_when_the_provider_answered_with_plain_json_or_the_fallback_ran(string kind)
+    {
+        var original = FaultOf(kind);
+
+        var json = Build(RecordingChatHandler.Always(RecordingChatHandler.TextReply("All at once")));
+        (await Record.ExceptionAsync(() => json.Client.CompleteAsync(Ask(), _ => throw original, CancellationToken.None)))
+            .Should().BeSameAs(original);
+
+        var call = 0;
+        var refusing = Build(new RecordingChatHandler(_ => Interlocked.Increment(ref call) == 1
+            ? RecordingChatHandler.Reply("""{"error":{"message":"Streaming is not supported"}}""", HttpStatusCode.BadRequest)
+            : RecordingChatHandler.Reply(RecordingChatHandler.TextReply("The whole answer"))));
+        (await Record.ExceptionAsync(() => refusing.Client.CompleteAsync(Ask(), _ => throw original, CancellationToken.None)))
+            .Should().BeSameAs(original);
     }
 
     [Fact]

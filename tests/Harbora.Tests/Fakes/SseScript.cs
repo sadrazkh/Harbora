@@ -161,6 +161,10 @@ public sealed class SseScript
 
         public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
         {
+            // As a socket stream does: a read asked for with a token that is already cancelled fails,
+            // even when data is waiting.
+            ct.ThrowIfCancellationRequested();
+
             while (_offset >= _current.Length)
             {
                 if (_next >= steps.Count) return 0;

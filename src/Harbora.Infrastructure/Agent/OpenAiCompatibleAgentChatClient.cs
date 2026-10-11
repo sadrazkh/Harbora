@@ -91,13 +91,17 @@ public sealed partial class OpenAiCompatibleAgentChatClient(
             : await StreamAsync(url, target, body, onTextDelta, ct);
     }
 
-    /// <summary>The non-streaming round trip: one request, one JSON body.</summary>
-    private async Task<AgentChatResponse> SendWholeAsync(Uri url, Target target, JsonObject body, CancellationToken ct)
+    /// <summary>
+    /// The non-streaming round trip: one request, one JSON body. <paramref name="within"/> is what is
+    /// left of the call's overall <see cref="RequestTimeout"/> when this is the second attempt.
+    /// </summary>
+    private async Task<AgentChatResponse> SendWholeAsync(
+        Uri url, Target target, JsonObject body, CancellationToken ct, TimeSpan? within = null)
     {
         using var message = NewMessage(url, target, body);
 
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        budget.CancelAfter(RequestTimeout);
+        budget.CancelAfter(within ?? RequestTimeout);
 
         try
         {

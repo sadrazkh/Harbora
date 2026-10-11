@@ -1,7 +1,10 @@
+using System.Diagnostics;
 using System.Net;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 
 namespace Harbora.Infrastructure.Agent;
 
@@ -19,9 +22,18 @@ public sealed partial class OpenAiCompatibleAgentChatClient
     /// </summary>
     internal TimeSpan StreamIdleTimeout { get; init; } = TimeSpan.FromSeconds(45);
 
+    /// <summary>
+    /// "stream" as a word, not as the tail of "upstream" or "downstream" — gateway errors say
+    /// "Upstream provider returned error" all the time, and that is not a refusal to stream.
+    /// </summary>
+    private static readonly Regex StreamWord = new(
+        @"(?<![a-z_])stream", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+
     private async Task<AgentChatResponse> StreamAsync(
         Uri url, Target target, JsonObject body, Func<string, Task> onTextDelta, CancellationToken ct)
     {
+        var started = Stopwatch.GetTimestamp();
+
         // Added to a copy: the whole-reply body (the fallback below) must not carry them.
         var streamBody = (JsonObject)body.DeepClone();
         streamBody["stream"] = true;
@@ -32,8 +44,12 @@ public sealed partial class OpenAiCompatibleAgentChatClient
         if (streamed is not null) return streamed;
 
         // The provider said it will not stream. Once, without — the answer is the same either way,
-        // and the person still gets the text, in one piece.
-        var whole = await SendWholeAsync(url, target, body, ct);
+        // and the person still gets the text, in one piece. It gets what is left of the one overall
+        // budget the call has, not a second one: the refusal already spent some of it.
+        var left = RequestTimeout - Stopwatch.GetElapsedTime(started);
+        if (left <= TimeSpan.Zero) return TimedOut();
+
+        var whole = await SendWholeAsync(url, target, body, ct, left);
         if (whole.Ok && !string.IsNullOrEmpty(whole.Message?.Content))
             await onTextDelta(whole.Message.Content);
         return whole;
@@ -47,7 +63,6 @@ public sealed partial class OpenAiCompatibleAgentChatClient
 
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
         budget.CancelAfter(RequestTimeout);
-        using var idle = CancellationTokenSource.CreateLinkedTokenSource(budget.Token);
 
         var answer = new StreamedAnswer();
         var started = false;
@@ -71,22 +86,30 @@ public sealed partial class OpenAiCompatibleAgentChatClient
                 var text = await response.Content.ReadAsStringAsync(budget.Token);
                 var whole = Interpret(response.StatusCode, text);
                 if (whole.Ok && !string.IsNullOrEmpty(whole.Message?.Content))
-                    await onTextDelta(whole.Message.Content);
+                    await Deliver(onTextDelta, whole.Message.Content);
                 return whole;
             }
 
             started = true;
             await using var stream = await response.Content.ReadAsStreamAsync(budget.Token);
             using var reader = new StreamReader(stream, Encoding.UTF8);
-            return await ReadStreamAsync(reader, answer, onTextDelta, idle);
+            return await ReadStreamAsync(reader, answer, onTextDelta, budget.Token);
+        }
+        catch (CallbackFault fault)
+        {
+            // The caller's own callback failed — most often because the browser it was writing to
+            // left. That is not something the provider did, and none of the handlers below may turn
+            // it into a timeout or a dropped connection. It goes back as the exception it was.
+            ExceptionDispatchInfo.Capture(fault.InnerException!).Throw();
+            throw;
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            // Our own overall budget or the silence limit, never the caller leaving. Once the model
-            // has said it is finished the answer is whole; only the usage line can be missing, and
-            // a finished answer is not thrown away for that.
-            if (answer.IsFinished) return answer.Build();
-            return budget.IsCancellationRequested ? TimedOut() : WentSilent();
+            // Our overall budget (HttpClient's own timeout lands here too). The silence limit is
+            // judged where the read happens; anything else cancelled is a timeout too, not a silence.
+            // Once the model has said it is finished the answer is whole; only the usage line can be
+            // missing, and a finished answer is not thrown away for that.
+            return answer.IsFinished ? answer.Build() : TimedOut();
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException)
         {
@@ -101,16 +124,15 @@ public sealed partial class OpenAiCompatibleAgentChatClient
     /// keep-alives) and every other field name is not ours to read.
     /// </summary>
     private async Task<AgentChatResponse> ReadStreamAsync(
-        StreamReader reader, StreamedAnswer answer, Func<string, Task> onTextDelta, CancellationTokenSource idle)
+        StreamReader reader, StreamedAnswer answer, Func<string, Task> onTextDelta, CancellationToken budget)
     {
         var pending = new StringBuilder();
         var hasPending = false;
 
         while (true)
         {
-            // Armed again before every read, and by any line at all — a comment is a sign of life.
-            idle.CancelAfter(StreamIdleTimeout);
-            var line = await reader.ReadLineAsync(idle.Token);
+            var (line, silent) = await NextLineAsync(reader, budget);
+            if (silent) return answer.IsFinished ? answer.Build() : WentSilent();
 
             if (line is null || line.Length == 0)
             {
@@ -154,15 +176,56 @@ public sealed partial class OpenAiCompatibleAgentChatClient
     }
 
     /// <summary>
+    /// One line, or the news that the stream has been silent for <see cref="StreamIdleTimeout"/>. The
+    /// timer exists only around the read: it is armed here and gone when the line has arrived, so the
+    /// time the caller's callback takes to show it is never counted as the provider's silence. Any line
+    /// at all, a comment included, is a sign of life.
+    /// </summary>
+    private async Task<(string? Line, bool Silent)> NextLineAsync(StreamReader reader, CancellationToken budget)
+    {
+        using var idle = CancellationTokenSource.CreateLinkedTokenSource(budget);
+        idle.CancelAfter(StreamIdleTimeout);
+
+        try
+        {
+            return (await reader.ReadLineAsync(idle.Token), false);
+        }
+        catch (OperationCanceledException) when (idle.IsCancellationRequested && !budget.IsCancellationRequested)
+        {
+            // Our timer and nothing else: not the overall budget, not the caller.
+            return (null, true);
+        }
+    }
+
+    /// <summary>
     /// A 4xx that says it is about streaming: the model or the gateway does not do it. Not an
     /// authentication or rate-limit refusal — those are about the person, and the same request without
-    /// <c>stream</c> would be refused the same way.
+    /// <c>stream</c> would be refused the same way. Judged on what the provider's <em>error</em> says,
+    /// as a word: a body that merely quotes the request (<c>"stream":true</c>) or an "Upstream provider
+    /// returned error" is not a refusal to stream.
     /// </summary>
     private static bool RefusesStreaming(HttpStatusCode status, string body)
     {
         var code = (int)status;
         if (code is < 400 or >= 500 or 401 or 403 or 408 or 429) return false;
-        return body.Contains("stream", StringComparison.OrdinalIgnoreCase);
+
+        string? said;
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            // OpenAI's { error: { message } }, or the bare { message } / { detail } some servers send.
+            said = root.ValueKind == JsonValueKind.Object
+                ? ErrorDetail(root) ?? StringOf(root, "message") ?? StringOf(root, "detail")
+                : null;
+        }
+        catch (JsonException)
+        {
+            // A plain-text refusal is its own explanation.
+            said = body;
+        }
+
+        return said is not null && StreamWord.IsMatch(said);
     }
 
     private AgentChatResponse WentSilent()
@@ -179,14 +242,34 @@ public sealed partial class OpenAiCompatibleAgentChatClient
             $"اتصال ارائه‌دهندهٔ هوش مصنوعی پیش از پایان پاسخ قطع شد: {ex.Message}");
 
     /// <summary>
-    /// The answer as the chunks build it up: text, tool calls by index, and the last model, usage and
-    /// finish reason seen. <see cref="Build"/> hands it to the same <c>Answer(...)</c> the whole-reply
-    /// path uses.
+    /// A fault in the caller's <c>onTextDelta</c>, carried through this client's own handlers
+    /// untouched. Its type is private on purpose: nothing a handler filters on can match it.
+    /// </summary>
+    private sealed class CallbackFault(Exception inner) : Exception(inner.Message, inner);
+
+    /// <summary>Hands one piece of text to the caller's callback, marking anything it throws as the caller's.</summary>
+    private static async Task Deliver(Func<string, Task> onTextDelta, string text)
+    {
+        try
+        {
+            await onTextDelta(text);
+        }
+        catch (Exception ex)
+        {
+            throw new CallbackFault(ex);
+        }
+    }
+
+    /// <summary>
+    /// The answer as the chunks build it up: text, tool calls, and the last model, usage and finish
+    /// reason seen. <see cref="Build"/> hands it to the same <c>Answer(...)</c> the whole-reply path uses.
     /// </summary>
     private sealed class StreamedAnswer
     {
         private readonly StringBuilder _text = new();
-        private readonly SortedDictionary<int, PendingCall> _calls = new();
+        private readonly SortedDictionary<int, PendingCall> _calls = new();       // by creation order
+        private readonly Dictionary<int, int> _newestForWireIndex = new();        // wire index -> key in _calls
+        private int _created;
         private string? _model;
         private AgentChatUsage? _usage;
 
@@ -254,7 +337,7 @@ public sealed partial class OpenAiCompatibleAgentChatClient
                     if (!string.IsNullOrEmpty(piece))
                     {
                         _text.Append(piece);
-                        await onTextDelta(piece);
+                        await Deliver(onTextDelta, piece);
                     }
 
                     if (delta.TryGetProperty("tool_calls", out var toolCalls) && toolCalls.ValueKind == JsonValueKind.Array)
@@ -276,8 +359,9 @@ public sealed partial class OpenAiCompatibleAgentChatClient
 
         /// <summary>
         /// Tool-call fragments arrive keyed by <c>index</c>: the id and name once, the arguments in
-        /// pieces. A gateway that numbers every parallel call 0 is told apart by id; one that sends no
-        /// index at all, by id or by being the call that was last extended.
+        /// pieces. A gateway that numbers every parallel call 0 is told apart by id, and the fragments
+        /// that follow a new id (which carry none) belong to the newest call under that index. One that
+        /// sends no index at all is followed by id, or by being the call that was last extended.
         /// </summary>
         private void MergeToolCalls(JsonElement array)
         {
@@ -288,8 +372,7 @@ public sealed partial class OpenAiCompatibleAgentChatClient
                 var id = StringOf(item, "id");
                 var function = item.TryGetProperty("function", out var f) && f.ValueKind == JsonValueKind.Object ? f : default;
 
-                var index = IndexOf(item, id);
-                if (!_calls.TryGetValue(index, out var call)) _calls[index] = call = new PendingCall();
+                var call = _calls[KeyFor(item, id)];
 
                 if (!string.IsNullOrEmpty(id) && call.Id.Length == 0) call.Id = id;
 
@@ -315,26 +398,41 @@ public sealed partial class OpenAiCompatibleAgentChatClient
             }
         }
 
-        private int IndexOf(JsonElement item, string? id)
+        /// <summary>Which pending call this fragment belongs to, creating it when it is the first of its call.</summary>
+        private int KeyFor(JsonElement item, string? id)
         {
-            if (item.TryGetProperty("index", out var i) && i.ValueKind == JsonValueKind.Number && i.TryGetInt32(out var n))
+            if (item.TryGetProperty("index", out var i) && i.ValueKind == JsonValueKind.Number && i.TryGetInt32(out var wire))
             {
-                var differentCall = _calls.TryGetValue(n, out var existing)
-                    && !string.IsNullOrEmpty(id) && existing.Id.Length > 0 && existing.Id != id;
-                return differentCall ? NextIndex() : n;
+                if (!_newestForWireIndex.TryGetValue(wire, out var key)) return Create(wire);
+
+                // A different id under the same wire index is a different call — the one it names if
+                // that is already known, otherwise a new one.
+                var existing = _calls[key];
+                if (!string.IsNullOrEmpty(id) && existing.Id.Length > 0 && existing.Id != id)
+                    return KeyOfId(id) ?? Create(wire);
+
+                return key;
             }
 
-            if (!string.IsNullOrEmpty(id))
-            {
-                foreach (var (key, call) in _calls)
-                    if (call.Id == id) return key;
-                return NextIndex();
-            }
+            if (!string.IsNullOrEmpty(id)) return KeyOfId(id) ?? Create(null);
 
-            return _calls.Count == 0 ? 0 : _calls.Keys.Max();
+            return _calls.Count == 0 ? Create(null) : _calls.Keys.Max();
         }
 
-        private int NextIndex() => _calls.Count == 0 ? 0 : _calls.Keys.Max() + 1;
+        private int? KeyOfId(string id)
+        {
+            foreach (var (key, call) in _calls)
+                if (call.Id == id) return key;
+            return null;
+        }
+
+        private int Create(int? wireIndex)
+        {
+            var key = _created++;
+            _calls[key] = new PendingCall();
+            if (wireIndex is { } wire) _newestForWireIndex[wire] = key;
+            return key;
+        }
 
         public AgentChatResponse Build()
         {
