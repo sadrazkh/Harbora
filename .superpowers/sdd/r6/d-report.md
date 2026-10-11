@@ -512,3 +512,52 @@ All with `MSBUILDDISABLENODEREUSE=1`, `-p:UseSharedCompilation=false`, `LOG=/tmp
 - Detaching what a failed step left behind assumes tools save their own work. A tool that returns
   **success** without saving still has its changes written by the agent's next save — deliberately not
   detached, since dropping them would make "done" untrue. Wave-B tools should save before returning.
+
+### Re-review round (`ef820d4`)
+
+- **Important — get_deployment redacts multi-line secrets again.** The previous fix redacted each log row
+  alone, so neither the private-key pattern (it needs BEGIN…END in one input) nor a multi-line known secret
+  value could match. Dropping the oldest lines could also keep a key's body and END line without its BEGIN,
+  which the `ForModel` backstop then missed. The tail is now redacted once as one text (by known values, then
+  by shape), then split on `\n`, then each line clipped, then the oldest lines dropped to fit.
+- **The broken-run fallback cannot throw on a bad tracker.** It used to enumerate `ChangeTracker.Entries()`,
+  which runs `DetectChanges`; a tool that pointed a navigation at a second instance of an already-tracked key
+  made that throw, so the fallback failed too and the plan stayed `executing`. It now uses
+  `db.ChangeTracker.Clear()` in both places (`FinishAsync` re-queries the plan anyway), and
+  `AgentTracker.DetachAllChanges` is gone. The step that broke the run is also audited (`ok: false`) if it had
+  not been yet; that call is now the shared `AuditStepAsync`.
+- **A failing step drops only what it left.** `AgentTracker.ForeignChanges(db)` is captured just before
+  `tool.ExecuteAsync`, and only changes that appeared after it are detached. Anything already pending — such
+  as an audit row left `Added` by an earlier swallowed save — is not that step's to drop.
+- **Nit — a re-check refusal stays a 409.** The refusal is now decided (`RunLedger.Refusal`) before the first
+  save, so a broken save in that branch still answers `revalidation_refused` rather than 200 with a failed
+  result.
+- **Nit — `earlierLinesLeftOut`** now counts the log's rows older than the 40-row window as well as the lines
+  dropped to fit.
+
+Tests added (4), all passing; each of the first two failed against a mutant restoring the old code (row-by-row
+redaction, and an `Entries()`-based detach in the fallback), and both files were restored and rebuilt before
+the runs below:
+
+| File | New / changed tests |
+|---|---|
+| `tests/Harbora.Tests/Agent/AgentReadToolsTests.cs` | **new:** a private key (BEGIN, 32 body rows of 128 chars, END) and a three-line secret env value printed across rows, in a 40-row tail whose key body is far longer than the result may be, so the oldest-first drop would cut between BEGIN and body — through the real `AgentJson.ForModel`, no `KEYBODY`, `PRIVATE KEY`, `MULTISECRET` or value filler reaches the model, and the last line does. **Changed:** the last-line test now has 45 rows and checks `earlierLinesLeftOut == 45 - lines shown` |
+| `tests/Harbora.Tests/Agent/AgentPlanServiceTests.cs` | **new:** a step that leaves the tracker inconsistent (a navigation to a second instance of a tracked key, then throws) still ends in a failed, audited plan with its results and tool messages, and the tracker is usable afterwards; a failing step drops only what it left (an earlier step's pending row is still saved, its own is not); a re-check refusal whose first save breaks still answers `revalidation_refused` and leaves the plan `failed` |
+
+Commands (same environment and recipe):
+
+- `dotnet build Harbora.slnx --nologo -v q -p:UseSharedCompilation=false` → `BUILD_EXIT=0`, `28 Warning(s)`,
+  `0 Error(s)`.
+- Focused (agent tests, assistant HTTP tests, `MigrationConsistencyTests`) →
+  `Passed!  - Failed:     0, Passed:   126, Skipped:     0, Total:   126 - Harbora.Tests.dll`.
+- Full: `dotnet test Harbora.slnx --nologo -v q --no-build` → `EXIT=0`:
+  ```
+  Skipped! - Failed:     0, Passed:     0, Skipped:   108, Total:   108 - Harbora.Postgres.Tests.dll (net10.0)
+  Passed!  - Failed:     0, Passed:   500, Skipped:    17, Total:   517 - Harbora.NodeAgent.Tests.dll (net10.0)
+  Passed!  - Failed:     0, Passed:    15, Skipped:     0, Total:    15 - Harbora.NodeIngress.Tests.dll (net10.0)
+  Passed!  - Failed:     0, Passed:  6823, Skipped:     0, Total:  6823 - Harbora.Tests.dll (net10.0)
+  ```
+  `grep -c "Harbora.Tests.dll"` → 2. 6823 = 6819 + the 4 new tests.
+
+Unchanged concerns: the Postgres lane is unverified here; if the database itself is unreachable a plan can
+still stay `executing`, with the failure only in the log.
