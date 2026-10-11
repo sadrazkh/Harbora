@@ -2,9 +2,18 @@ using System.Net;
 using System.Text;
 using System.Text.Json.Nodes;
 using FluentAssertions;
+using Harbora.Data;
+using Harbora.Domain.Settings;
 using Harbora.Infrastructure.Agent;
 using Harbora.Infrastructure.Assistant;
 using Harbora.Tests.Fakes;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 using static Harbora.Tests.AgentChatClientTests;
 using static Harbora.Tests.Fakes.SseScript;
@@ -665,6 +674,73 @@ public class AgentChatClientStreamingTests
         response.Usage.Should().Be(new AgentChatUsage(12, 5));
         pieces.Seen.Should().Equal("All at once");
         rig.Handler.Requests.Should().HaveCount(1, "it answered; there is nothing to retry");
+    }
+
+    // ---- a real socket ---------------------------------------------------------------------
+
+    private sealed class RealHttpClients : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new();
+    }
+
+    /// <summary>
+    /// Every other test reads a scripted body; this one goes through a real HttpClient and a real
+    /// loopback socket (no provider is involved — the "provider" is a Kestrel endpoint in this test).
+    /// It proves the property the feature exists for: the first piece reaches the callback while the
+    /// server is still holding the rest back. A client that buffered the body would deadlock the
+    /// server's wait and fail here.
+    /// </summary>
+    [Fact]
+    public async Task Over_a_real_socket_the_first_piece_arrives_before_the_server_has_sent_the_rest()
+    {
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        builder.Logging.ClearProviders();
+        await using var server = builder.Build();
+        server.MapPost("/v1/chat/completions", async (HttpContext context) =>
+        {
+            context.Response.ContentType = "text/event-stream";
+            await context.Response.WriteAsync(Events(Chunk("first ", first: true)));
+            await context.Response.Body.FlushAsync();
+
+            // Held until the client has shown the first piece.
+            await release.Task.WaitAsync(TimeSpan.FromSeconds(15));
+
+            await context.Response.WriteAsync(Events(Chunk("second", "stop"), UsageChunk(4, 2)) + Done);
+        });
+        await server.StartAsync();
+
+        var db = new HarboraDbContext(new Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<HarboraDbContext>()
+            .UseInMemoryDatabase("agent-stream-socket-" + Guid.NewGuid()).Options);
+        foreach (var (key, value) in new Dictionary<string, string>
+        {
+            [AssistantSettingKeys.Enabled] = "true",
+            [AssistantSettingKeys.Provider] = "openai",
+            [AssistantSettingKeys.Model] = "local/model",
+            [AssistantSettingKeys.BaseUrl] = server.Urls.Single()   // loopback: no key needed
+        })
+            db.Settings.Add(new Setting { Key = key, Value = value });
+        db.SaveChanges();
+
+        var clients = new RealHttpClients();
+        var client = new OpenAiCompatibleAgentChatClient(
+            new AssistantService(db, new AssistantClient(clients), new AgentChatClientTests.PassthroughProtector(), NullLogger<AssistantService>.Instance),
+            new AgentSettingsService(db), clients);
+
+        var seen = new List<string>();
+        var response = await client.CompleteAsync(Ask(), text =>
+        {
+            seen.Add(text);
+            if (seen.Count == 1) release.TrySetResult();
+            return Task.CompletedTask;
+        }, CancellationToken.None);
+
+        response.Ok.Should().BeTrue(response.Error);
+        seen.Should().Equal("first ", "second");
+        response.Message!.Content.Should().Be("first second");
+        response.Usage.Should().Be(new AgentChatUsage(4, 2));
     }
 
     // ---- the caller ------------------------------------------------------------------------
