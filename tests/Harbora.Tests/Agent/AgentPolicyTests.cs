@@ -111,6 +111,7 @@ public class AgentPolicyTests
     [InlineData("0", 0)]
     [InlineData("-3", AgentSettingKeys.DefaultDailyRequestLimit)]
     [InlineData("lots", AgentSettingKeys.DefaultDailyRequestLimit)]
+    [InlineData("۲۵", 25)]
     public async Task The_limit_is_read_from_the_setting_and_anything_unreadable_means_the_default(string? stored, int expected)
     {
         using var h = new AgentHarness();

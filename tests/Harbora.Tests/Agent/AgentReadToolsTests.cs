@@ -105,6 +105,29 @@ public class AgentReadToolsTests
     }
 
     [Fact]
+    public async Task Another_workspaces_resources_are_invisible_to_every_read_tool_and_the_snapshot()
+    {
+        using var h = new AgentHarness();
+        using var other = h.Another(sameWorkspace: false);
+        var foreignApp = AddApp(other, "foreign-app");
+        AddDatabase(other, "foreign-db");
+        other.Db.Deployments.Add(new Deployment { AppId = foreignApp.Id, WorkspaceId = other.WorkspaceId, Number = 1 });
+        other.Db.SaveChanges();
+
+        (await new GetAppTool(h.Db, h.Resolver, h.Protector).ExecuteAsync(Args("""{"app":"foreign-app"}"""), Context(h), default))
+            .Error.Should().Be("No app named 'foreign-app' that you can see.");
+        (await new GetDatabaseTool(h.Db, h.Resolver, h.Access).ExecuteAsync(Args("""{"database":"foreign-db"}"""), Context(h), default))
+            .Ok.Should().BeFalse();
+        (await new GetDeploymentTool(h.Db, h.Resolver, h.Protector).ExecuteAsync(Args("""{"app":"foreign-app"}"""), Context(h), default))
+            .Ok.Should().BeFalse();
+
+        var listed = (await new ListResourcesTool(h.Resolver).ExecuteAsync(Args("{}"), Context(h), default)).ResultJson;
+        var snapshot = await new AgentWorkspaceSnapshot(h.Db, h.Resolver, h.Access).DescribeAsync(Context(h), default);
+        listed.Should().NotContain("foreign");
+        snapshot.Should().NotContain("foreign");
+    }
+
+    [Fact]
     public async Task List_resources_shows_a_granted_project_and_hides_the_rest()
     {
         using var h = new AgentHarness(role: SystemRole.Member, scopedToProjects: true);

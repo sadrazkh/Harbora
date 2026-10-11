@@ -1,4 +1,3 @@
-using System.Globalization;
 using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Agent;
@@ -34,11 +33,10 @@ public sealed class AgentUsageMeter(HarboraDbContext db, ISystemClock clock)
             .Select(s => s.Value)
             .FirstOrDefaultAsync(ct);
 
-        // An unreadable value falls back to the default rather than to unlimited: a typo in a setting
-        // must not quietly remove the only thing standing between a runaway loop and the owner's bill.
-        return int.TryParse(raw?.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var limit) && limit >= 0
-            ? limit
-            : AgentSettingKeys.DefaultDailyRequestLimit;
+        // The settings page's own reading of the value, not a second parser that could disagree with
+        // what the owner was shown. An unreadable value means the default rather than unlimited: a typo
+        // must not quietly remove the only thing between a runaway loop and the owner's bill.
+        return AgentSettingsService.EffectiveLimit(raw);
     }
 
     /// <summary>Model calls this workspace has made today (UTC).</summary>

@@ -417,8 +417,8 @@ public static class DependencyInjection
         // Round six, phase 2 (2026-10-11 assistant-agent design): the in-panel agent's core — the tool
         // registry, the daily cap, the snapshot, the plan engine and the conversation loop, plus the
         // read tools. All scoped: they run inside the person's own request, under its workspace filter.
-        // Not registered here, on purpose: IAgentChatClient (phase 1's client, registered with the
-        // agent settings) and IAgentCapabilityCheck (the web host's, over IAuthorizationService).
+        // The chat client is phase 1's, registered above with the agent settings. IAgentCapabilityCheck
+        // is deliberately not registered here: the web host provides it, over IAuthorizationService.
         services.AddScoped<Agent.AgentToolRegistry>();
         services.AddScoped<Agent.AgentUsageMeter>();
         services.AddScoped<Agent.AgentResourceResolver>();
