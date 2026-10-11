@@ -85,8 +85,8 @@ Details and warnings, per tool:
   refused when the step runs.
 - **delete_database** — phrase = the database's exact `Name`; detail and warning say plainly whether the volume
   is deleted or kept (and its volume name).
-- **delete_project** — phrase = the project's `Name` exactly as `ProjectRemovalPlan.IsConfirmed` compares it (the
-  tool asserts `plan.IsConfirmed(phrase)`); detail lists every app (with environment and volume count), every
+- **delete_project** — phrase = the project's `Name` exactly as `ProjectRemovalPlan.IsConfirmed` compares it
+  (trimmed, ordinal; an always-true assertion of that was removed after review); detail lists every app (with environment and volume count), every
   database, scheduled functions; warnings: everything with its data, domains that stop serving. On success it
   writes the controller's own `project.deleted` audit entry (same metadata); a partial delete is `Ok = false`
   naming what is left, with no `project.deleted` entry.
@@ -242,3 +242,65 @@ Every build/test with `export MSBUILDDISABLENODEREUSE=1` and `-p:UseSharedCompil
 6. For agent F: `create_project`'s planned environment rides on `Creates.Environment`; my `attach_database` reads a
    planned app's place from `Creates.Project`/`Creates.Environment` when F fills them and skips the place check when
    they are null.
+
+## 10. Fixes after review
+
+The review approved the branch with no Critical or Important findings and asked for one small pass. All five
+points are done in `c8601dc`:
+
+1. **Rotation failures of any kind.** `rotate_database_password` used to catch only `InvalidOperationException`, so
+   a Docker/HTTP exception thrown after the new password was stored (during the Redis/Meilisearch recreate) went to
+   the plan engine's generic failure, and nobody was told the password had changed. It now catches every exception
+   except the caller's own cancellation (`when (!ct.IsCancellationRequested)` — the plan engine passes `None`, so an
+   internal timeout is handled too), logs it with its stack (new `ILogger<RotateDatabasePasswordTool>`), and always
+   re-reads the stored ciphertext: changed → `Ok = false`, "The password of {db} was changed, but the rest of the
+   rotation failed: … the apps that use it need a redeploy", with the database's link; unchanged → "The password
+   was not changed."
+2. **The new password is redacted too.** In the "changed, then failed" branch the database's secrets are read again
+   from the freshly re-read row (`AgentSecrets.ForDatabaseAsync`) and added to the old ones before the engine's
+   message is redacted, so a one-off command line naming the new password (`--requirepass x`, which no shape rule
+   matches) does not reach the person or the model.
+3. **delete_database names the apps using the database.** The card's first warning is now the panel's
+   `ConfirmRemove` list (`ServiceUsageService.AppsUsingAsync`, visible apps only, via `VisibleUsersAsync`), which also
+   finds apps wired by a copied connection string, which the structural refusal does not see: "1 app: legacy —
+   still configured to use it, and will fail to connect once it is gone." / Persian; "No app you can see uses it."
+   when there are none (as stop/rotate say). The tool now also takes `ServiceUsageService` and `ProjectAccessService`.
+4. **Timeout wording.** Start and stop now say the operation "may still finish on the server" / «ممکن است روی سرور
+   همچنان انجام شود».
+5. **Polish.** The always-true `plan.IsConfirmed(plan.ProjectName.Trim())` check in `delete_project` is gone. The
+   Persian error from a failed rotation uses `QuotaRefusedException.ReasonFa` when the exception is one (redacted
+   the same way), and the English text otherwise.
+
+Tests (4 new, 4 changed; `DatabaseToolsTests` now 70 cases):
+
+- new: `A_docker_failure_after_the_new_password_is_stored_is_told_as_changed_with_the_new_password_redacted`
+  (an `HttpRequestException` after storing whose message carries the new password: told as changed, password in
+  neither language nor the result JSON); `A_non_engine_failure_before_anything_is_stored_says_the_password_did_not_change`;
+  `A_billing_refusal_during_the_rotation_reaches_a_persian_reader_in_persian`;
+  `Delete_database_names_the_apps_still_wired_to_it_by_a_copied_connection_string` (an app with an encrypted
+  `DATABASE_URL` naming the container and no join row).
+- changed: `A_rotation_that_fails_after_storing_the_new_password_says_the_password_changed` (the fake engine now
+  takes the exception to throw); `A_node_that_never_answers_is_a_failure_after_the_tools_own_deadline` asserts the
+  new wording in both languages; `Delete_database_says_plainly_whether_the_data_goes_and_asks_for_the_exact_name`
+  and scenario 3's `Deleting_a_database_with_its_data_needs_its_exact_name_typed` allow for the new usage line.
+- Mutation check: narrowing the catch back to `InvalidOperationException` (together with dropping `ReasonFa`)
+  failed the docker-failure, non-engine and billing tests; dropping only the secret re-read failed the
+  docker-failure test (`Failed: 1, Passed: 69, Total: 70`). The file was restored from its copy and compared, and
+  everything was rebuilt before the runs below.
+
+Commands (same environment and recipe):
+
+- Focused: `dotnet test tests/Harbora.Tests --no-build --filter "FullyQualifiedName~Harbora.Tests.Agent.|FullyQualifiedName~ProjectDatabaseToolsHttpTests|FullyQualifiedName~QuotaRefusalBilingualismTests"`
+  → `Passed!  - Failed:     0, Passed:   243, Skipped:     0, Total:   243`.
+- `dotnet build Harbora.slnx --nologo -v q -p:UseSharedCompilation=false` → `BUILD_EXIT=0`, `28 Warning(s)`,
+  `0 Error(s)` (NU1900/NU1903 only).
+- `dotnet test Harbora.slnx --nologo -v q --no-build` → `EXIT=0`:
+  ```
+  Skipped! - Failed:     0, Passed:     0, Skipped:   108, Total:   108, Duration: 82 ms - Harbora.Postgres.Tests.dll (net10.0)
+  Passed!  - Failed:     0, Passed:   500, Skipped:    17, Total:   517, Duration: 31 s - Harbora.NodeAgent.Tests.dll (net10.0)
+  Passed!  - Failed:     0, Passed:    15, Skipped:     0, Total:    15, Duration: 57 s - Harbora.NodeIngress.Tests.dll (net10.0)
+  Passed!  - Failed:     0, Passed:  6951, Skipped:     0, Total:  6951, Duration: 3 m 6 s - Harbora.Tests.dll (net10.0)
+  ```
+  `grep -c "Harbora.Tests.dll"` → 2. 6951 = 6947 + the 4 new tests.
+
+Still unverified, as before: the real engine (Docker, the Redis recreate, node HTTP) and the Postgres lane.
