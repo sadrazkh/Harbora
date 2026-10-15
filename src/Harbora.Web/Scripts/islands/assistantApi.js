@@ -1,7 +1,9 @@
 // The pane's HTTP layer: the endpoints of AssistantController, shapes from AgentViews.cs.
 //
 //   GET  /assistant/status                      → AgentStatusView
-//   GET  /assistant/conversations               → AgentConversationSummaryView[]
+//   GET  /assistant/conversations?q=&skip=      → AgentConversationSummaryView[]  (30 a page; a shorter one is the last)
+//   DELETE /assistant/conversations/{id}        → 204 (404 not_found; 409 busy: a turn or plan is still running in it)
+//   DELETE /assistant/conversations             → AgentDeleteAllView { deleted, skipped }
 //   GET  /assistant/conversations/{id}          → AgentConversationView
 //   POST /assistant/conversations/{id|new}/messages  AgentSendMessageRequest → text/event-stream
 //   POST /assistant/plans/{id}/approve          AgentApproveRequest → AgentPlanResultView
@@ -268,7 +270,22 @@ export function createAssistantApi({ fetch: fetchImpl = globalThis.fetch?.bind(g
 
   return {
     status: () => json('GET', '/status'),
-    conversations: () => json('GET', '/conversations'),
+    /**
+     * One page of the person's conversations, most recently active first. `q` matches inside the title
+     * (nothing is sent for an empty one); `skip` is how many rows to pass — the rows already shown.
+     */
+    conversations: ({ q = '', skip = 0 } = {}) => {
+      const params = new URLSearchParams();
+      const query = String(q ?? '').trim();
+      if (query) params.set('q', query);
+      if (Number.isFinite(skip) && skip > 0) params.set('skip', String(Math.trunc(skip)));
+      const qs = params.toString();
+      return json('GET', qs ? `/conversations?${qs}` : '/conversations');
+    },
+    /** `DELETE /assistant/conversations/{id}` → null (204). A refusal arrives as the usual error: 404 `not_found`, 409 `busy`. */
+    deleteConversation: (id) => json('DELETE', `/conversations/${encodeURIComponent(id)}`),
+    /** `DELETE /assistant/conversations` → { deleted, skipped }: the skipped were kept because a turn or plan was still running in them. */
+    deleteAllConversations: () => json('DELETE', '/conversations'),
     /**
      * `POST /assistant/conversations` → AgentConversationSummaryView of a new, empty conversation —
      * created before the first message so the pane knows (and remembers) its id before anything is

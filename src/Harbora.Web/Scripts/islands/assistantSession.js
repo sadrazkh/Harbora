@@ -292,6 +292,21 @@ export function createAssistantSession({
     },
 
     /**
+     * A conversation was deleted. The pane forgets it: its waiting words are dropped, and if it is the
+     * one on screen (or the one a failed read is holding on to) a new empty conversation takes its place
+     * — so a reload never tries to open it again. Another conversation's remembered id and waiting words
+     * are not touched. Returns whether the conversation on screen was replaced.
+     */
+    forget(id) {
+      if (!id) return false;
+      prefs.clearOutbox(id);
+      const onScreen = timeline.conversationId === id || timeline.loadError?.conversationId === id;
+      if (onScreen) session.startNew();
+      else if (prefs.conversationId() === id) prefs.setConversationId(null);
+      return onScreen;
+    },
+
+    /**
      * Sends one message. Returns `{ sent, restoreDraft? }`: `restoreDraft` is the text to put back in
      * the composer when the message was not taken (still answering, or it never reached the server).
      */
