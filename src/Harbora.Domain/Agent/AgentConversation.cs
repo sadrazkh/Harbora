@@ -95,6 +95,12 @@ public class AgentMessage : BaseEntity
     /// no measurement, which is not the same as zero.</summary>
     public int? DurationMs { get; set; }
 
+    /// <summary>For a tool message of something that ran: whether it worked — a read that ran, or a step
+    /// of a plan that did or failed. Null where nothing ran or the outcome is not a success or a failure
+    /// (a proposal, a refused call, a step that was skipped, rejected or expired), and for rows from before
+    /// this was kept: unknown is not "failed".</summary>
+    public bool? ToolSucceeded { get; set; }
+
     /// <summary>For an assistant message: the model that actually answered (fallbacks can differ).</summary>
     public string? Model { get; set; }
 

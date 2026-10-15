@@ -12,7 +12,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Harbora.Data.Migrations
 {
     [DbContext(typeof(HarboraDbContext))]
-    [Migration("20261015031807_AgentToolDuration")]
+    [Migration("20261015035200_AgentToolDuration")]
     partial class AgentToolDuration
     {
         /// <inheritdoc />
@@ -111,6 +111,9 @@ namespace Harbora.Data.Migrations
                     b.Property<string>("ToolName")
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
+
+                    b.Property<bool?>("ToolSucceeded")
+                        .HasColumnType("boolean");
 
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");

@@ -73,8 +73,10 @@ public class AssistantProcessHttpTests(AssistantPanelFixture fixture) : IClassFi
         lines[0].GetProperty("toolCategory").GetString().Should().Be("usage");
         lines[0].GetProperty("durationMs").GetInt32().Should().Be(usage[1].GetProperty("durationMs").GetInt32());
         lines[0].GetProperty("planId").ValueKind.Should().Be(JsonValueKind.Null);
+        lines[0].GetProperty("toolState").GetString().Should().Be("done");
         lines[1].GetProperty("durationMs").ValueKind.Should().Be(JsonValueKind.Null, "a proposal ran nothing");
         lines[1].GetProperty("planId").GetGuid().Should().Be(planId);
+        lines[1].GetProperty("toolState").ValueKind.Should().Be(JsonValueKind.Null, "a proposal has no outcome yet");
         pending.GetProperty("pendingPlan").GetProperty("id").GetGuid().Should().Be(planId);
         pending.GetProperty("plans").GetArrayLength().Should().Be(0, "the pending plan is only in pendingPlan");
 
@@ -95,5 +97,10 @@ public class AssistantProcessHttpTests(AssistantPanelFixture fixture) : IClassFi
         decided.GetProperty("messages").EnumerateArray()
             .Where(m => m.GetProperty("planId").ValueKind != JsonValueKind.Null).Should().HaveCount(2,
                 "the proposal line and the line the execution wrote");
+
+        // The outcome of each tool line: the read worked, the proposal has none, the step the approval ran worked.
+        decided.GetProperty("messages").EnumerateArray().Where(m => m.GetProperty("role").GetString() == "tool")
+            .Select(m => m.GetProperty("toolState").ValueKind == JsonValueKind.Null ? null : m.GetProperty("toolState").GetString())
+            .Should().Equal("done", null, "done");
     }
 }

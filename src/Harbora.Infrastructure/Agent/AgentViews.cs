@@ -36,6 +36,9 @@ public sealed record AgentStopView(bool Stopped);
 /// <param name="DurationMs">For "tool" messages of a read that ran: how long it took. Null otherwise.</param>
 /// <param name="PlanId">For messages written by a plan's execution: the plan they report on. The pane
 /// hides those lines when it draws that plan's result card, which says the same thing.</param>
+/// <param name="ToolState">For "tool" messages: "done" or "failed" when the outcome was recorded — a read
+/// that ran, or a step a plan's execution ran or could not run — otherwise null (a proposal, a refused
+/// call, a skipped, rejected or expired step, and lines stored before outcomes were kept).</param>
 public sealed record AgentMessageView(
     Guid Id,
     string Role,
@@ -45,7 +48,8 @@ public sealed record AgentMessageView(
     string? ToolLabel = null,
     string? ToolCategory = null,
     int? DurationMs = null,
-    Guid? PlanId = null);
+    Guid? PlanId = null,
+    string? ToolState = null);
 
 /// <summary>One step of a plan card.</summary>
 /// <param name="Kind">"safe", "dangerous" or "destructive".</param>

@@ -109,6 +109,9 @@ namespace Harbora.Data.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
 
+                    b.Property<bool?>("ToolSucceeded")
+                        .HasColumnType("boolean");
+
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 

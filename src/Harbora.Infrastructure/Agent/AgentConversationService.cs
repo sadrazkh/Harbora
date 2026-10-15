@@ -189,6 +189,7 @@ public sealed class AgentConversationService(
                         ToolLabel: persian ? label?.Fa : label?.En,
                         ToolCategory: label?.Category,
                         DurationMs: row.DurationMs,
+                        ToolState: row.ToolSucceeded switch { true => "done", false => "failed", null => null },
                         PlanId: row.PlanId ?? (proposals.PlanOfLine.TryGetValue(row.Id, out var proposed) ? proposed.Id : null));
                     break;
             }
@@ -680,7 +681,8 @@ public sealed class AgentConversationService(
                     ToolName = Truncate(toolCall.Name, AgentMessage.MaxToolNameLength),
                     SummaryEn = AgentConversationLog.Bound(answer.SummaryEn),
                     SummaryFa = AgentConversationLog.Bound(answer.SummaryFa),
-                    DurationMs = answer.DurationMs
+                    DurationMs = answer.DurationMs,
+                    ToolSucceeded = answer.Succeeded
                 }, ct);
                 messages.Add(new AgentChatMessage(AgentRole.Tool, answer.Content, ToolCallId: toolCall.Id));
             }
@@ -780,7 +782,9 @@ public sealed class AgentConversationService(
 
     /// <summary>What goes back to the model for one call, and what the person may be shown instead.</summary>
     /// <param name="DurationMs">How long the tool took, for a read that ran; null for a proposal or a refused call.</param>
-    private sealed record ToolAnswer(string Content, string? SummaryEn = null, string? SummaryFa = null, int? DurationMs = null);
+    /// <param name="Succeeded">Whether a read that ran worked; null for a proposal or a refused call.</param>
+    private sealed record ToolAnswer(
+        string Content, string? SummaryEn = null, string? SummaryFa = null, int? DurationMs = null, bool? Succeeded = null);
 
     /// <summary>A tool answer for the model: redacted by the person's held values and by shape, then cut
     /// to size — <see cref="AgentJson.ForModel"/> with the turn's <see cref="Turn.Known"/>.</summary>
@@ -851,7 +855,7 @@ public sealed class AgentConversationService(
             tool.Name, kind, result.Ok ? "done" : "failed", summaryEn, summaryFa,
             label.En, label.Fa, label.Category, durationMs)), ct);
 
-        return new(ForModel(turn, result.ResultJson), summaryEn, summaryFa, durationMs);
+        return new(ForModel(turn, result.ResultJson), summaryEn, summaryFa, durationMs, result.Ok);
     }
 
     private async Task<ToolAnswer> ProposeWriteAsync(

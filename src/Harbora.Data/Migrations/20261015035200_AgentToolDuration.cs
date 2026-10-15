@@ -15,6 +15,12 @@ namespace Harbora.Data.Migrations
                 table: "AgentMessages",
                 type: "integer",
                 nullable: true);
+
+            migrationBuilder.AddColumn<bool>(
+                name: "ToolSucceeded",
+                table: "AgentMessages",
+                type: "boolean",
+                nullable: true);
         }
 
         /// <inheritdoc />
@@ -22,6 +28,10 @@ namespace Harbora.Data.Migrations
         {
             migrationBuilder.DropColumn(
                 name: "DurationMs",
+                table: "AgentMessages");
+
+            migrationBuilder.DropColumn(
+                name: "ToolSucceeded",
                 table: "AgentMessages");
         }
     }

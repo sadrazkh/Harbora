@@ -156,17 +156,18 @@ public class AgentProcessDisplayTests
         tools[0].DurationMs.Should().BeGreaterThanOrEqualTo(0);
         tools[1].DurationMs.Should().BeGreaterThanOrEqualTo(0);
         tools[2].DurationMs.Should().BeNull("a proposal ran nothing");
+        tools.Select(m => m.ToolState).Should().Equal(["done", "done", null], "the reads worked, and a proposal has no outcome");
 
         persian!.Messages.Where(m => m.Role == "tool").Select(m => m.ToolLabel).Should().Equal(
             "خواندن جزئیات اپ", "بررسی مصرف و سقف‌های پلن", "ساخت دیتابیس");
 
         // Nothing but tool lines has any of this.
         english.Messages.Where(m => m.Role != "tool").Should().OnlyContain(m =>
-            m.ToolLabel == null && m.ToolCategory == null && m.DurationMs == null && m.PlanId == null);
+            m.ToolLabel == null && m.ToolCategory == null && m.DurationMs == null && m.PlanId == null && m.ToolState == null);
     }
 
     [Fact]
-    public async Task A_line_stored_before_durations_were_kept_has_none_and_a_tool_nobody_labelled_keeps_its_identifier()
+    public async Task A_line_stored_before_durations_and_outcomes_were_kept_has_neither_and_a_tool_nobody_labelled_keeps_its_identifier()
     {
         using var h = Harness(out _);
         h.Chat.ThenText("hi");
@@ -190,10 +191,89 @@ public class AgentProcessDisplayTests
 
         var old = view!.Messages.Single(m => m.ToolName == "get_app");
         old.DurationMs.Should().BeNull("unknown is not zero");
+        old.ToolState.Should().BeNull("a row from before outcomes were kept does not know, which is not \"failed\"");
         old.ToolLabel.Should().Be("Reading an app's details");
         var gone = view.Messages.Single(m => m.ToolName == "retired_tool");
         gone.ToolLabel.Should().Be("retired_tool");
         gone.ToolCategory.Should().Be("other");
+    }
+
+    // ---- the stored conversation: what each line came to ---------------------------------------
+
+    [Fact]
+    public async Task A_read_that_failed_reopens_as_failed_and_one_that_worked_as_done()
+    {
+        var refusing = new FakeTool("get_app", AgentToolKind.Read) { OnExecute = (_, _) => AgentToolResult.Failed("No such app.", "چنین اپی نیست.") };
+        var broken = new FakeTool("get_usage", AgentToolKind.Read) { OnExecute = (_, _) => throw new InvalidOperationException("boom") };
+        var fine = Reader("get_catalog");
+        using var h = new AgentHarness([refusing, broken, fine]);
+        h.Chat.ThenCalls(h.Chat.Call("get_app"), h.Chat.Call("get_usage"), h.Chat.Call("get_catalog"), h.Chat.Call("make_coffee"))
+            .ThenText("One of three worked.");
+        var (_, events) = await h.SendAsync("look at all of it");
+        var id = events.Single<AgentStartedData>("started").ConversationId;
+
+        var view = await h.Service.GetAsync(h.Actor, id, persian: false, default);
+
+        view!.Messages.Where(m => m.Role == "tool").Select(m => (m.ToolName, m.ToolState)).Should().Equal(
+            [("get_app", "failed"), ("get_usage", "failed"), ("get_catalog", "done")],
+            "a reported failure and a tool that threw are both failures; the call to a tool that does not exist ran nothing and shows no line");
+        (await h.Db.AgentMessages.AsNoTracking().Where(m => m.Role == AgentMessageRole.Tool).OrderBy(m => m.Sequence)
+            .Select(m => m.ToolSucceeded).ToListAsync()).Should().Equal([false, false, true, null],
+            "the refused call to an unknown tool keeps no outcome in the row either");
+    }
+
+    [Fact]
+    public async Task The_lines_a_plans_execution_wrote_carry_each_steps_own_outcome()
+    {
+        var create = new FakeTool("create_database", AgentToolKind.SafeWrite);
+        var volume = new FakeTool("add_volume", AgentToolKind.SafeWrite) { OnExecute = (_, _) => AgentToolResult.Failed("Out of quota.", "سهمیه تمام شد.") };
+        var domain = new FakeTool("add_domain", AgentToolKind.SafeWrite);
+        using var h = new AgentHarness([create, volume, domain]);
+        h.Chat.ThenCalls(h.Chat.Call("create_database"), h.Chat.Call("add_volume"), h.Chat.Call("add_domain")).ThenText("Approve three steps.");
+        var (_, events) = await h.SendAsync("set it all up");
+        var id = events.Single<AgentStartedData>("started").ConversationId;
+        var planId = events.Single<AgentPlanView>("plan").Id;
+
+        var proposed = await h.Service.GetAsync(h.Actor, id, persian: false, default);
+        proposed!.Messages.Where(m => m.Role == "tool").Should().OnlyContain(m => m.ToolState == null, "nothing has run yet");
+
+        (await h.Plans.ApproveAsync(h.Actor, planId, new AgentApproveRequest(null, null), default)).Result!.Status.Should().Be("failed");
+        var view = await h.Service.GetAsync(h.Actor, id, persian: false, default);
+
+        var proposals = view!.Messages.Where(m => m.Role == "tool" && m.Text!.StartsWith("Proposed as step")).ToList();
+        proposals.Should().HaveCount(3).And.OnlyContain(m => m.ToolState == null, "a proposal stays without an outcome after the plan ran");
+        view.Messages.Where(m => m.Role == "tool" && !m.Text!.StartsWith("Proposed as step")).Select(m => (m.ToolName, m.ToolState)).Should().Equal(
+            [("create_database", "done"), ("add_volume", "failed"), ("add_domain", null)],
+            "the step that failed is failed, and the one that never ran because of it is neither");
+    }
+
+    [Fact]
+    public async Task A_rejected_plans_lines_have_no_outcome_and_a_step_refused_at_approval_is_failed()
+    {
+        var create = new FakeTool("create_database", AgentToolKind.SafeWrite);
+        var volume = new FakeTool("add_volume", AgentToolKind.SafeWrite);
+        using var h = new AgentHarness([create, volume]);
+        h.Chat.ThenCalls(h.Chat.Call("create_database"), h.Chat.Call("add_volume")).ThenText("Approve two steps.");
+        var (_, first) = await h.SendAsync("two steps");
+        var id = first.Single<AgentStartedData>("started").ConversationId;
+        (await h.Plans.RejectAsync(h.Actor, first.Single<AgentPlanView>("plan").Id, default)).Should().BeNull();
+
+        h.Chat.ThenCalls(h.Chat.Call("create_database"), h.Chat.Call("add_volume")).ThenText("Approve again.");
+        var (_, second) = await h.SendAsync("again", id);
+        var secondPlan = second.Single<AgentPlanView>("plan").Id;
+        volume.OnValidate = (_, _, _) => new AgentValidation(false, Error: "The mount path is taken now.", ErrorFa: "مسیر اکنون گرفته شده است.");
+        (await h.Plans.ApproveAsync(h.Actor, secondPlan, new AgentApproveRequest(null, null), default)).Refusal!.Code
+            .Should().Be(AgentPlanRefusal.RevalidationRefusedCode);
+
+        var view = await h.Service.GetAsync(h.Actor, id, persian: false, default);
+
+        var written = view!.Messages.Where(m => m.Role == "tool" && !m.Text!.StartsWith("Proposed as step"))
+            .Select(m => (m.PlanId, m.ToolName, m.ToolState)).ToList();
+        written.Should().Equal(
+            [(first.Single<AgentPlanView>("plan").Id, "create_database", null), (first.Single<AgentPlanView>("plan").Id, "add_volume", null),
+             (secondPlan, "create_database", null), (secondPlan, "add_volume", "failed")],
+            "rejected: nothing ran; refused at approval: the refused step failed, the other did not run");
+        create.Executions.Should().Be(0);
     }
 
     // ---- the stored conversation: plans --------------------------------------------------------

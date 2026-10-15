@@ -816,7 +816,13 @@ public sealed class AgentPlanService(
     // ---- what the conversation is told -----------------------------------------------------------
 
     private sealed record StepOutcome(
-        AgentPlanStep Step, string State, string SummaryEn, string SummaryFa, string? Error, string? ResultJson);
+        AgentPlanStep Step, string State, string SummaryEn, string SummaryFa, string? Error, string? ResultJson)
+    {
+        /// <summary>What the stored line says about the step: it worked, it did not (a step refused when checked
+        /// again counts — the plan's result calls it failed too), or nothing ran for it — skipped, rejected or
+        /// expired — which is neither.</summary>
+        public bool? Succeeded => State switch { "done" => true, "failed" or "refused" => false, _ => null };
+    }
 
     private static StepOutcome Outcome(
         AgentPlanStep step, string state, string summaryEn, string summaryFa, string? error = null, string? resultJson = null) =>
@@ -884,6 +890,7 @@ public sealed class AgentPlanService(
                 Text = AgentJson.ForModel(content.ToJsonString(AgentJson.Options), known),
                 SummaryEn = AgentConversationLog.Bound(Scrub(outcome.SummaryEn, known)),
                 SummaryFa = AgentConversationLog.Bound(Scrub(outcome.SummaryFa, known)),
+                ToolSucceeded = outcome.Succeeded,
                 PlanId = plan.Id,
                 CreatedAt = now,
                 UpdatedAt = now

@@ -243,3 +243,52 @@ Only these classes were run for the fix pass, not the full solution suite (the l
 pass, is above: 7327 in `Harbora.Tests.dll`). A first run of the new first test failed on my own use of FluentAssertions'
 `BeInAscendingOrder` with a lambda over a closure (a test bug, fixed), not on the code.
 Still unverified: the bound against a real Postgres (`since` is a `timestamptz` comparison; EF InMemory was used).
+
+## Follow-up: tool outcome (P2 found a contract gap: a stored tool line had no outcome)
+
+A reopened activity block could not honestly say "3 actions done", and a failed read looked the same as a good
+one after a reload. Now each stored tool line keeps whether it worked.
+
+- **Column.** `AgentMessage.ToolSucceeded` (`bool?`). Set to `result.Ok` for a read that ran (a reported failure and
+  a tool that threw are both `false`). Set for a plan's execution lines from the step's outcome: `done` -> true;
+  `failed` and `refused` (a step refused when checked again at approval, which the plan's result also calls
+  failed) -> false; `skipped`, `rejected`, `expired` -> null, because nothing ran for them. Null too for
+  proposals, refused calls (unknown tool, bad arguments, a role that does not allow it) and old rows.
+- **Migration.** Because it had not been pushed or applied anywhere, I removed `20261015031807_AgentToolDuration`
+  (both files, and the snapshot restored to master's `44d38d0` copy), rebuilt the web project with the new property,
+  and ran `dotnet ef migrations add AgentToolDuration --project src/Harbora.Data --startup-project src/Harbora.Web --no-build`
+  again. Result: still exactly one migration this round, `20261015035200_AgentToolDuration`, with two
+  `AddColumn`s (`DurationMs` integer null, `ToolSucceeded` boolean null) and the matching `Down`; the snapshot
+  diff against master is those two properties and nothing else. (The migration timestamp quoted earlier in this
+  report, `20261015031807`, no longer exists.)
+- **Wire.** `AgentMessageView` gains a trailing optional `string? ToolState = null` (edited in `AgentViews.cs`, doc
+  line: "done" or "failed" when the outcome was recorded - a read that ran, or a step a plan's execution ran or could
+  not run - otherwise null). The serialized name is `toolState`. No other contract shape changed.
+- **Tests (6 new assertions or tests, 3 new tests; 29 for this task).** In `AgentProcessDisplayTests.cs`:
+  `A_read_that_failed_reopens_as_failed_and_one_that_worked_as_done` (a reported failure and a throw reopen
+  "failed", a good read "done", the stored row of a call to an unknown tool keeps null);
+  `The_lines_a_plans_execution_wrote_carry_each_steps_own_outcome` (create done, add_volume failed, add_domain
+  skipped = null; proposals null before and after the plan ran);
+  `A_rejected_plans_lines_have_no_outcome_and_a_step_refused_at_approval_is_failed`. Existing tests now also assert
+  reads "done" and the proposal line null, the pre-migration row null, and non-tool messages null. In
+  `AssistantProcessHttpTests.cs` the wire test asserts `toolState` is `"done"` for the read, `null` for the proposal,
+  and `"done"` for the step the approval ran.
+  Mutation check (reverted): counting a refused step as null and reporting every read as done made 2 of the 23
+  display tests fail.
+
+**What I ran** (`export MSBUILDDISABLENODEREUSE=1`, from the worktree):
+
+```
+dotnet build Harbora.slnx --nologo -v q --no-restore -p:UseSharedCompilation=false
+  -> BUILD_EXIT=0, no CS warnings (only NU1900/NU1903)
+dotnet test tests/Harbora.Tests --no-build --nologo -v q --filter "FullyQualifiedName~AgentProcessDisplayTests|FullyQualifiedName~AgentToolLabelsTests|FullyQualifiedName~AssistantProcessHttpTests|FullyQualifiedName~MigrationConsistency"
+  -> Passed!  - Failed: 0, Passed: 31, Skipped: 0, Total: 31 - Harbora.Tests.dll (net10.0)
+dotnet test Harbora.slnx --nologo -v q --no-build > /tmp/test-r7-s2.log 2>&1   (EXIT=0)
+  -> Passed!  - Failed: 0, Passed:  500, Skipped: 17, Total:  517 - Harbora.NodeAgent.Tests.dll
+     Passed!  - Failed: 0, Passed:   15, Skipped:  0, Total:   15 - Harbora.NodeIngress.Tests.dll
+     Passed!  - Failed: 0, Passed: 7333, Skipped:  0, Total: 7333 - Harbora.Tests.dll
+     grep -c "Harbora.Tests.dll" -> 2 (present)
+```
+
+7333 = 7304 baseline + 29 tests of this task. Still unverified: the migration against a real Postgres (no Postgres
+here); `MigrationConsistencyTests` passes against the model.
