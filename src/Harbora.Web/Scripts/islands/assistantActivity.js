@@ -7,6 +7,11 @@
 // Honesty first, as everywhere in this pane: a check is drawn only where the server said "done". A
 // stored tool line (tool-history) does not carry its outcome — AgentMessageView has no state — so a
 // block of stored lines says they ran, in a neutral colour, never that they succeeded.
+//
+// A label names an activity ("Deleting a database"), which is true of a read that ran and false of a
+// stored line that only proposed a write, was refused, or reports a plan's execution. Only reads that
+// ran carry a duration (S2), so a stored line is drawn by its label only when it has one; any other
+// stored line is drawn in its own words ("Proposed as step 1: delete old-db"), which say what happened.
 
 import { isThinking } from './assistantTimeline.js';
 import { summarizeResult } from './assistantPlan.js';
@@ -63,14 +68,20 @@ export function toolLabel(item, fa) {
   return pickLang(fa, item?.labelEn, item?.labelFa);
 }
 
+/** A stored line of a read that ran: the only kind with a duration, and the only kind its label fits. */
+const isStoredRead = (item) => item?.kind === 'tool-history' && isDuration(item.durationMs);
+
 /**
  * The words of one tool line. The running line reads "<label>…" and a finished one "<label>"; a failed
  * one gives the server's summary, which says what failed. The tool's identifier is the last resort,
- * for a server that sent no label. A stored line reads its label, else the stored summary.
+ * for a server that sent no label. A stored line reads its label when it is a read that ran, else its
+ * stored words (see the top of this file).
  */
 export function toolLineText(item, fa) {
   const t = (en, persian) => (fa ? persian : en);
-  if (item?.kind === 'tool-history') return item.label || item.text || item.toolName || '';
+  if (item?.kind === 'tool-history') {
+    return (isStoredRead(item) && item.label) || item.text || item.label || item.toolName || '';
+  }
   const label = toolLabel(item, fa);
   const summary = pickLang(fa, item.summaryEn, item.summaryFa);
   const name = label || item.name;
@@ -89,7 +100,10 @@ export function toolLineText(item, fa) {
  */
 export function toolLineTitle(item, fa) {
   const shown = toolLineText(item, fa);
-  const detail = item?.kind === 'tool-history' ? item.text : pickLang(fa, item?.summaryEn, item?.summaryFa);
+  // A stored line shows one of its label and its words; the tooltip gives the other.
+  const detail = item?.kind === 'tool-history'
+    ? (shown === item.text ? item.label : item.text)
+    : pickLang(fa, item?.summaryEn, item?.summaryFa);
   if (detail && detail !== shown) return detail;
   return (item?.kind === 'tool-history' ? item.toolName : item?.name) || '';
 }
@@ -111,16 +125,18 @@ export function toolLineMark(item, { thinkingKey = null } = {}) {
 const isToolItem = (item) => item?.kind === 'tool' || item?.kind === 'tool-history';
 
 /**
- * The counts a block's heading is made of. `ran`: stored lines, whose outcome is not known; `unsettled`:
- * live lines that never got one (interrupted, or a state the contract does not name). `totalMs` only
- * when every line has a duration — a sum with a gap in it would be a smaller number than the truth.
+ * The counts a block's heading is made of. `ran`: stored reads that ran, whose outcome is not known;
+ * `noted`: other stored lines (a proposal, a refused call, a plan's execution, a row from before
+ * durations were kept); `unsettled`: live lines that never got an outcome (interrupted, or a state the
+ * contract does not name). `totalMs` only when every line has a duration — a sum with a gap in it would
+ * be a smaller number than the truth.
  */
 function summarizeBlock(key, items) {
-  const block = { key, items, running: 0, done: 0, failed: 0, unsettled: 0, ran: 0, totalMs: null };
+  const block = { key, items, running: 0, done: 0, failed: 0, unsettled: 0, ran: 0, noted: 0, totalMs: null };
   let total = 0;
   let timed = true;
   for (const item of items) {
-    if (item.kind === 'tool-history') block.ran++;
+    if (item.kind === 'tool-history') block[isStoredRead(item) ? 'ran' : 'noted']++;
     else if (item.state === 'running') block.running++;
     else if (item.state === 'done') block.done++;
     else if (item.state === 'failed') block.failed++;
@@ -197,7 +213,9 @@ export function activityRows(items) {
  *              tools may follow): open, "Working…" with a spinner;
  *   failed   — open, in the danger colour: "1 action failed, 2 done";
  *   unsettled — collapsed: lines that never got an outcome ("2 done, 1 with no result");
- *   ran      — collapsed, neutral: stored lines, whose outcome was not stored ("3 actions ran · 2.4 s");
+ *   noted    — collapsed, neutral: stored lines that are not all reads that ran — a proposal did not do
+ *              what it proposed — so only how many ("2 actions");
+ *   ran      — collapsed, neutral: stored reads, whose outcome was not stored ("3 actions ran · 2.4 s");
  *   done     — collapsed, a success check: "3 actions done · 2.4 s".
  * @returns {{ tone: string, working: boolean, heading: string, open: boolean }}
  */
@@ -216,17 +234,21 @@ export function blockView(block, { answering = false, last = false, choice, fa =
     open = true;
   } else if (block.failed > 0) {
     tone = 'failed';
-    const done = block.done + block.ran;
+    const done = block.done;
     heading = done > 0
       ? t(`${n(block.failed)} ${actions(block.failed)} failed, ${n(done)} done`, `${n(block.failed)} کار ناموفق، ${n(done)} انجام شد`)
       : t(`${n(block.failed)} ${actions(block.failed)} failed`, `${n(block.failed)} کار ناموفق`);
     open = true;
   } else if (block.unsettled > 0) {
     tone = 'unsettled';
-    const done = block.done + block.ran;
+    const done = block.done;
     heading = done > 0
       ? t(`${n(done)} done, ${n(block.unsettled)} with no result`, `${n(done)} کار انجام شد، ${n(block.unsettled)} بی‌نتیجه`)
       : t(`${n(block.unsettled)} ${actions(block.unsettled)} with no result`, `${n(block.unsettled)} کار بی‌نتیجه`);
+    open = false;
+  } else if (block.noted > 0) {
+    tone = 'noted';
+    heading = t(`${n(total)} ${actions(total)}`, `${n(total)} کار`) + duration;
     open = false;
   } else if (block.ran > 0) {
     tone = 'ran';

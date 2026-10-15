@@ -77,15 +77,21 @@ test('an unlabelled line, from an older server, falls back to the summary and on
   assert.equal(toolLineText(live('a', 'done', { labelEn: 'Reading the app' }), true), 'Reading the app');
 });
 
-test('a saved line reads its label, else the stored summary, else the identifier', () => {
-  assert.equal(toolLineText(saved('s', { label: 'خواندن اپ' }), true), 'خواندن اپ');
-  assert.equal(toolLineText(saved('s'), true), 'Read shop');
-  assert.equal(toolLineText(saved('s', { text: '' }), true), 'get_app');
+test('a saved read that ran reads its label; any other saved line reads its own words', () => {
+  assert.equal(toolLineText(saved('s', { label: 'خواندن اپ', durationMs: 410 }), true), 'خواندن اپ');
   assert.equal(toolLabel(saved('s', { label: 'خواندن اپ' }), false), 'خواندن اپ', 'the server already chose the language');
+  // A proposal, a refused call or a plan's execution line has no duration: "Deleting a database" would
+  // say it happened. Its own words say what did.
+  const proposal = saved('p', { toolName: 'delete_database', text: 'Proposed as step 1: delete old-db', label: 'Deleting a database', planId: 'x' });
+  assert.equal(toolLineText(proposal, false), 'Proposed as step 1: delete old-db');
+  assert.equal(toolLineText(saved('s', { label: 'خواندن اپ' }), true), 'Read shop', 'a row from before durations were kept');
+  assert.equal(toolLineText(saved('s', { text: '', label: 'Deleting a database' }), false), 'Deleting a database', 'no words: the label');
+  assert.equal(toolLineText(saved('s', { text: '' }), true), 'get_app', 'nothing else: the identifier');
 });
 
 test('the tooltip carries what the line does not show: the summary behind a label, else the identifier', () => {
-  assert.equal(toolLineTitle(saved('s', { label: 'Reading the app' }), false), 'Read shop');
+  assert.equal(toolLineTitle(saved('s', { label: 'Reading the app', durationMs: 410 }), false), 'Read shop');
+  assert.equal(toolLineTitle(saved('s', { label: 'Deleting a database' }), false), 'Deleting a database', 'the label behind the words');
   assert.equal(toolLineTitle(saved('s'), false), 'get_app', 'the summary is already the line');
   assert.equal(toolLineTitle(live('a', 'done', { labelEn: 'Reading the app', summaryEn: 'Read shop: running' }), false), 'Read shop: running');
   assert.equal(toolLineTitle(live('a', 'running', { labelEn: 'Reading the app' }), false), 'get_app');
@@ -193,6 +199,14 @@ test('saved lines say they ran, never that they succeeded: a stored tool message
   assert.equal(view.open, false);
   assert.equal(view.heading, '2 actions ran · 2.4 s');
   assert.equal(blockView(row.block, { fa: true }).heading, '۲ کار اجرا شد · ۲٫۴ ثانیه');
+});
+
+test('saved lines that are not all reads that ran are only counted: a proposal did not do what it proposed', () => {
+  const [row] = activityRows([saved('a', { durationMs: 640 }), saved('b', { toolName: 'delete_database', text: 'Proposed as step 1: delete old-db', planId: 'x' })]);
+  assert.deepEqual([row.block.ran, row.block.noted, row.block.totalMs], [1, 1, null], 'no total: the proposal has no duration');
+  const view = blockView(row.block);
+  assert.deepEqual([view.tone, view.heading, view.open], ['noted', '2 actions', false]);
+  assert.equal(blockView(row.block, { fa: true }).heading, '۲ کار');
 });
 
 test('lines that never got an outcome are said to have none, not counted as done', () => {

@@ -308,7 +308,7 @@ const rows = computed(() => {
 });
 const toggleBlock = (row: any) => { blockChoices[row.key] = !row.view.open; };
 const activityId = (row: any) => `assistant-activity-${row.key}`;
-const blockIcon = (tone: string) => ({ working: LoaderCircle, failed: TriangleAlert, done: CheckCheck, ran: ListChecks } as Record<string, any>)[tone] ?? CircleHelp;
+const blockIcon = (tone: string) => ({ working: LoaderCircle, failed: TriangleAlert, done: CheckCheck, ran: ListChecks, noted: ListChecks } as Record<string, any>)[tone] ?? CircleHelp;
 const blockIconClass = (tone: string) => ({ working: 'text-accent-text', failed: 'text-danger', done: 'text-ok' } as Record<string, string>)[tone] ?? 'text-ink-faint';
 
 const stoppedText = (item: any) => say(item) || t('You stopped this answer.', 'این پاسخ را متوقف کردید.');
@@ -495,9 +495,10 @@ const Back = fa ? ChevronRight : ChevronLeft;
             <span class="min-w-0 flex-1" :class="row.view.tone === 'failed' ? 'font-medium text-danger' : 'text-ink-muted'" data-activity-heading>{{ row.view.heading }}</span>
             <AssistantIcon :icon="ChevronDown" :size="14" class="text-ink-faint motion-safe:transition-transform" :class="row.view.open ? 'rotate-180' : ''" />
           </button>
-          <!-- Each line: its category's icon, the tool's name for people (a failed one: what failed),
-               its own duration, and a small mark for its state. A saved line has no mark — a stored tool
-               message does not say whether the tool succeeded — so it is never drawn as a check. -->
+          <!-- Each line: its category's icon, the tool's name for people (a failed one: what failed; a saved
+               line that is not a read: its own words), its own duration, and a small mark for its state. A
+               saved line has no mark — a stored tool message does not say whether the tool succeeded — so it
+               is never drawn as a check. -->
           <ul v-show="row.view.open" :id="activityId(row)" class="space-y-1.5 border-t border-line px-3 py-2">
             <li v-for="item in row.block.items" :key="item.key" class="flex items-start gap-2 text-sm text-ink-muted" data-tool-line
                 :data-tool-state="item.kind === 'tool' ? item.state : undefined" :data-tool-history="item.kind === 'tool-history' ? 'true' : undefined"

@@ -1,0 +1,183 @@
+<!doctype html>
+<!--
+  A browser harness for how the assistant pane shows its work (round seven, P2): activity blocks, tool
+  lines in people's words with their category icons and durations, decided plans and results in a
+  reopened conversation, compact finished cards, the thinking line and the `stopped` event.
+  `npx vite --port 5187` in src/Harbora.Web, then open /Scripts/tests/assistant-activity.preview.html.
+
+  fetch is faked with the shapes of AgentViews.cs / AgentCoreModels.cs at 44d38d0 (labelEn/labelFa,
+  category, durationMs on tool events; toolLabel, toolCategory, durationMs, planId on stored tool
+  messages; `plans` on the conversation view; the `stopped` event) — what this shows is the island's
+  real code against the contract, not the server. Send any message to see a live turn. Query string:
+    ?lang=en          English / LTR instead of Persian / RTL
+    ?scenario=stop    the live turn is stopped while a tool runs: `stopped` then `done`
+    ?scenario=ok      the live turn's tools all succeed: the block folds to "2 actions done · 1.3 s"
+    ?scenario=old     an older server: no labels, categories or durations anywhere
+    ?dark             dark theme
+-->
+<html lang="fa" dir="rtl" class="h-full">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Assistant activity preview</title></head>
+<body class="h-full bg-canvas text-ink antialiased">
+<div class="flex h-full">
+  <div class="flex-1 flex flex-col min-w-0">
+    <header class="relative z-20 flex h-16 shrink-0 items-center gap-2 border-b border-line bg-surface/95 px-3">
+      <div class="flex-1"></div>
+      <button type="button" data-assistant-toggle data-assistant-state="enabled" aria-controls="assistant-panel" aria-expanded="false"
+              class="rounded-lg p-2 text-ink-muted hover:bg-surface-2 hover:text-accent-text aria-expanded:bg-accent-soft aria-expanded:text-accent-text" aria-label="assistant">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 3l1.9 5.8L20 10.7l-6.1 1.9L12 18.4l-1.9-5.8L4 10.7l6.1-1.9z"/></svg>
+      </button>
+    </header>
+    <div class="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+      <main class="min-w-0 flex-1 p-4"><p class="text-sm text-ink-muted">Page content.</p></main>
+      <aside id="assistant-panel" class="assistant-drawer" aria-hidden="true" data-csrf="preview-token" data-lang="fa" data-assistant-context='{"path":null}'>
+        <div data-assistant-host class="flex h-full min-h-0 flex-col">
+          <div class="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-sm text-ink-faint">
+            <p data-assistant-loading>Loading…</p>
+            <p data-assistant-load-failed hidden class="text-danger">Failed.</p>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+</div>
+<script type="module">
+import '../app.css';
+import { createApp } from 'vue';
+import { initAssistantDrawer } from '../assistantDrawer.js';
+
+const params = new URLSearchParams(location.search);
+const lang = params.get('lang') === 'en' ? 'en' : 'fa';
+const scenario = params.get('scenario') ?? '';
+const old = scenario === 'old';
+document.documentElement.lang = lang;
+document.documentElement.dir = lang === 'fa' ? 'rtl' : 'ltr';
+document.documentElement.classList.toggle('dark', params.has('dark'));
+document.getElementById('assistant-panel').dataset.lang = lang;
+
+const fa = lang === 'fa';
+const CONVO = '0199d0c4-6a1e-7000-8000-0000000000c1';
+const [RAN, CANCELLED, EXPIRED, FAILED, REFUSED] = ['f1', 'f2', 'f3', 'f4', 'f5'].map((n) => `0199d0c4-6a1e-7000-8000-0000000000${n}`);
+const at = (m) => new Date(Date.now() + m * 60000).toISOString();
+
+// The labels AgentToolLabels gives (S2's table), in the two languages: the activity, without "…".
+// A stored line has a duration only when it is a read that ran; proposals, refused calls and a plan's
+// execution lines carry the write tool's label and no duration, and are drawn in their own words.
+const LABELS = {
+  list_resources: ['Looking through your projects and resources', 'مرور پروژه‌ها و منابع', 'resources'],
+  get_app: ["Reading an app's details", 'خواندن جزئیات اپ', 'app'],
+  get_deployment: ["Reading the deployment's logs", 'خواندن لاگ‌های استقرار', 'deployment'],
+  get_usage: ["Checking your plan's usage and limits", 'بررسی مصرف و سقف‌های پلن', 'usage'],
+  create_database: ['Creating a database', 'ساخت دیتابیس', 'database'],
+  delete_database: ['Deleting a database', 'حذف دیتابیس', 'database'],
+};
+const stored = (id, tool, text, durationMs, planId = null) => ({
+  id, role: 'tool', text, toolName: tool, createdAt: at(-30),
+  ...(old ? {} : { toolLabel: LABELS[tool][fa ? 1 : 0], toolCategory: LABELS[tool][2], durationMs, planId }),
+});
+const event = (tool, state, extra = {}) => ({
+  name: tool, kind: 'read', state, summaryEn: null, summaryFa: null,
+  ...(old ? {} : { labelEn: LABELS[tool][0], labelFa: LABELS[tool][1], category: LABELS[tool][2], durationMs: null }),
+  ...extra,
+  ...(old ? { durationMs: undefined } : {}),
+});
+
+const step = (index, tool, kind, en, persian) => ({ index, tool, kind, titleEn: en, titleFa: persian, detailEn: null, detailFa: null, warningsEn: [], warningsFa: [], confirmationPhrase: kind === 'destructive' ? 'old-db' : null, autoApproved: false, rememberable: kind === 'safe' });
+const planOf = (id, status, steps) => ({ id, status, expiresAt: at(15), steps });
+const done = (index, en, persian, links = []) => ({ index, state: 'done', summaryEn: en, summaryFa: persian, errorEn: null, errorFa: null, links });
+
+const say = (en, persian) => (fa ? persian : en);
+const conversation = {
+  id: CONVO, title: say('A database for shop', 'دیتابیس برای shop'), inProgress: false,
+  messages: [
+    { id: 'm1', role: 'user', text: say('Make a Postgres database for shop and attach it', 'برای shop یک دیتابیس Postgres بساز و وصلش کن'), toolName: null, createdAt: at(-31) },
+    stored('m2', 'list_resources', say('Read the resources: 1 app (shop)', 'منابع خوانده شد: ۱ اپ (shop)'), 640),
+    stored('m3', 'get_app', say('Read shop: running, 2 replicas', 'shop خوانده شد: در حال اجرا، ۲ نسخه'), 410),
+    stored('m4', 'create_database', say('Proposed as step 1: create shop-db', 'به‌عنوان گام ۱ پیشنهاد شد: ساخت shop-db'), null, RAN),
+    { id: 'm5', role: 'assistant', text: say('Here is the plan: create `shop-db` and attach it to `shop`.', 'این برنامه را آماده کردم: ساخت `shop-db` و وصل کردنش به `shop`.'), toolName: null, createdAt: at(-30) },
+    stored('m6', 'create_database', say('Created shop-db', 'shop-db ساخته شد'), null, RAN),
+    { id: 'm7', role: 'user', text: say('Also delete old-db', 'old-db را هم پاک کن'), toolName: null, createdAt: at(-20) },
+    { id: 'm8', role: 'assistant', text: say('Here is the plan to delete old-db.', 'این برنامهٔ حذف old-db است.'), toolName: null, createdAt: at(-20) },
+    { id: 'm9', role: 'user', text: say('Restart shop', 'shop را دوباره راه بینداز'), toolName: null, createdAt: at(-10) },
+    { id: 'm10', role: 'assistant', text: say('Here is the plan to redeploy shop.', 'این برنامهٔ استقرار دوبارهٔ shop است.'), toolName: null, createdAt: at(-10) },
+    { id: 'm11', role: 'user', text: say('And attach shop-db to api', 'shop-db را به api هم وصل کن'), toolName: null, createdAt: at(-5) },
+    stored('m12', 'get_usage', say('Read the usage: 2 of 5 databases', 'مصرف خوانده شد: ۲ از ۵ دیتابیس'), 90),
+    { id: 'm13', role: 'assistant', text: say('Here is the plan.', 'این برنامه است.'), toolName: null, createdAt: at(-5) },
+    // A plan refused when it was checked again at approval: no result, and its reason only in the line its
+    // execution wrote, which goes on its card. Its card is anchored on its own proposal line (the turn
+    // ended right after proposing), which stays as a line, drawn in its own words.
+    { id: 'm14', role: 'user', text: say('Delete old-db after all', 'old-db را بالاخره پاک کن'), toolName: null, createdAt: at(-3) },
+    stored('m15', 'delete_database', say('Proposed as step 1: delete old-db', 'به‌عنوان گام ۱ پیشنهاد شد: حذف old-db'), null, REFUSED),
+    stored('m16', 'delete_database', say('Not run: old-db is still attached to two apps.', 'اجرا نشد: old-db هنوز به دو اپ وصل است.'), null, REFUSED),
+  ],
+  plans: old ? null : [
+    { plan: planOf(RAN, 'executed', [step(0, 'create_database', 'safe', 'Create PostgreSQL 16 database shop-db', 'ساخت دیتابیس PostgreSQL 16 به نام shop-db'), step(1, 'attach_database', 'safe', 'Attach shop-db to shop', 'وصل کردن shop-db به shop')]),
+      result: { planId: RAN, status: 'executed', steps: [
+        done(0, 'Created shop-db.', 'shop-db ساخته شد.', [{ kind: 'database', id: 'd1', label: 'shop-db', url: '/databases/d1' }]),
+        done(1, 'Attached shop-db to shop.', 'shop-db به shop وصل شد.', [{ kind: 'app', id: 'a1', label: 'shop', url: '/apps/a1' }]),
+      ] }, afterMessageId: 'm5' },
+    { plan: planOf(CANCELLED, 'rejected', [step(0, 'delete_database', 'destructive', 'Delete database old-db', 'حذف دیتابیس old-db')]), result: null, afterMessageId: 'm8' },
+    { plan: planOf(FAILED, 'failed', [step(0, 'restart_app', 'dangerous', 'Redeploy shop', 'استقرار دوبارهٔ shop')]),
+      result: { planId: FAILED, status: 'failed', steps: [{ index: 0, state: 'failed', summaryEn: null, summaryFa: null, errorEn: 'shop is already deploying; try again when it finishes.', errorFa: 'shop در حال استقرار است؛ پس از پایانش دوباره تلاش کنید.', links: [] }] },
+      afterMessageId: 'm10' },
+    { plan: planOf(EXPIRED, 'expired', [step(0, 'attach_database', 'safe', 'Attach shop-db to api', 'وصل کردن shop-db به api')]), result: null, afterMessageId: 'unknown-older' },
+    { plan: planOf(REFUSED, 'failed', [step(0, 'delete_database', 'destructive', 'Delete database old-db', 'حذف دیتابیس old-db')]), result: null, afterMessageId: 'm15' },
+  ],
+  pendingPlan: null,
+};
+
+const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function stream(frames) {
+  const encoder = new TextEncoder();
+  return new Response(new ReadableStream({
+    async start(controller) {
+      for (const [delay, name, data] of frames) {
+        await sleep(delay);
+        controller.enqueue(encoder.encode(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`));
+      }
+      controller.close();
+    },
+  }), { headers: { 'content-type': 'text/event-stream' } });
+}
+
+window.fetch = async (url, init = {}) => {
+  const path = String(url);
+  const method = init.method ?? 'GET';
+  await sleep(200);
+  if (path === '/assistant/status') return json({ available: true, reasonEn: null, reasonFa: null, model: 'preview-model', remainingToday: 41 });
+  if (path === '/assistant/conversations' && method === 'GET') return json([{ id: CONVO, title: conversation.title, updatedAt: at(-5) }]);
+  if (path === `/assistant/conversations/${CONVO}` && method === 'GET') return json(conversation);
+  if (path.endsWith('/messages')) {
+    const answer = say('shop is running with `2` replicas; the last deployment has not been recorded.', 'shop با `2` نسخه در حال اجراست؛ آخرین استقرار ثبت نشده است.');
+    // The first piece waits a little: "Thinking…" between the last tool and the text.
+    const deltas = answer.match(/\S+\s*/g).map((piece, i) => [i === 0 ? 900 : 90, 'delta', { text: piece }]);
+    const head = [
+      [500, 'started', { conversationId: CONVO }],
+      [200, 'tool', event('get_app', 'running')],
+      [900, 'tool', event('get_app', 'done', { summaryEn: 'Read shop: running, 2 replicas', summaryFa: 'shop خوانده شد: در حال اجرا، ۲ نسخه', durationMs: 880 })],
+      [200, 'tool', event('get_deployment', 'running')],
+    ];
+    if (scenario === 'stop') {
+      return stream([...head,
+        [2500, 'stopped', { messageEn: 'Stopped. What was written so far is kept.', messageFa: 'متوقف شد. آنچه تا این‌جا نوشته شد نگه داشته شد.' }],
+        [50, 'done', { conversationId: CONVO, remainingToday: 40 }]]);
+    }
+    const outcome = scenario === 'ok'
+      ? [7000, 'tool', event('get_deployment', 'done', { summaryEn: 'Read 40 lines', summaryFa: '۴۰ خط خوانده شد', durationMs: 450 })]
+      : [7000, 'tool', event('get_deployment', 'failed', { summaryEn: 'No deployments of shop yet', summaryFa: 'هنوز استقراری برای shop نیست', durationMs: 6900 })];
+    return stream([...head, outcome, ...deltas,
+      [150, 'message', { id: 'm99', role: 'assistant', text: answer, toolName: null, createdAt: new Date().toISOString() }],
+      [150, 'done', { conversationId: CONVO, remainingToday: 40 }]]);
+  }
+  return json({}, 404);
+};
+
+localStorage.setItem('harbora-assistant-conversation', CONVO);
+const panel = document.getElementById('assistant-panel');
+initAssistantDrawer(panel, (host, { close, focus }) =>
+  import('../islands/AssistantPanel.vue').then(({ default: AssistantPanel }) => {
+    createApp(AssistantPanel, { csrf: panel.dataset.csrf, lang, context: panel.dataset.assistantContext, autofocus: focus, onClose: close }).mount(host);
+  }));
+</script>
+</body>
+</html>

@@ -30,6 +30,8 @@ interface PlanItem {
   superseded: boolean;
   resulted: boolean;
   notRun?: boolean;
+  // A stored plan refused when it was checked again: what its execution lines said — its reason.
+  notes?: string[];
 }
 
 // `locked`: a turn is streaming. The server expires a waiting plan when it receives a new message,
@@ -155,6 +157,12 @@ const refused = (s: any) => props.item.errorStep !== null && props.item.errorSte
           </div>
         </li>
       </ol>
+
+      <!-- A plan refused when it was checked again, reopened later: the reason its execution wrote, in
+           view — there is no result card to say it (assistantTimeline.js, loadConversation). -->
+      <ul v-if="item.notes?.length" class="mx-3 my-2.5 space-y-1 rounded-lg border border-danger/20 bg-danger-soft px-3 py-2 text-sm leading-5 text-danger" data-plan-notes>
+        <li v-for="(note, ni) in item.notes" :key="ni" :dir="textDirection(note)">{{ note }}</li>
+      </ul>
 
       <!-- The server's refusal, whatever the card's state now: "expired" is shown in its own words. -->
       <p v-if="item.error && !line" :id="errorId" class="alert-danger mx-3 mb-0 mt-2.5 py-2 text-sm" role="alert" :dir="textDirection(errorText)" data-plan-error>{{ errorText }}</p>

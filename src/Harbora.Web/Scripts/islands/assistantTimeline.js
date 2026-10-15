@@ -74,10 +74,20 @@ function describeTool(item, data) {
  * A decided plan from the conversation view (AgentPlanHistoryView): its card, with the server's status
  * — so it is not actionable unless that says pending — and its result card directly under it when it
  * ran. Keys are the plan's id, so a re-read of the conversation keeps the same cards.
+ *
+ * "failed" with no result is a plan refused when it was checked again at approval: nothing ran
+ * (AgentPlanHistoryView.Result), and its card must not say "already ran and stopped". Its reason is in
+ * the lines its execution wrote, which loadConversation puts on the card as `notes`.
  */
 function decidedPlanItems(entry) {
   const card = planItem(entry.plan);
-  if (!entry.result) return [card];
+  if (!entry.result) {
+    if (entry.plan.status === 'failed') {
+      card.notRun = true;
+      card.notes = [];
+    }
+    return [card];
+  }
   card.resulted = true;
   return [card, { key: `result-${entry.plan.id}`, kind: 'result', result: entry.result, plan: entry.plan }];
 }
@@ -93,9 +103,15 @@ function currentTurnStart(state) {
  *
  * Decided plans (`view.plans`, oldest first) stay where they were proposed: each card goes right after
  * the message its `afterMessageId` names — at the start when that is null, at the end when the id is not
- * among the messages (older than the ones the view returns) — followed by its result. The tool lines a
- * drawn plan wrote (its proposal, its execution) go: the cards say the same thing. The pending plan is
- * last, as before.
+ * among the messages (older than the ones the view returns) — followed by its result. The anchor may be
+ * a line that is not drawn (a text-less message, or the plan's own proposal line, hidden below): the
+ * card still goes where it would have been.
+ *
+ * The tool lines a plan wrote (its proposal, its execution) go only when its result card is drawn,
+ * which says the same thing. A plan without a result keeps them — and one refused when it was checked
+ * again gets the lines written after its card (its execution's, the only place its reason is written)
+ * on the card itself as `notes`, so the reason is in view rather than inside a folded block. The pending
+ * plan is last, as before.
  */
 export function loadConversation(state, view) {
   state.conversationId = view?.id ?? null;
@@ -104,7 +120,7 @@ export function loadConversation(state, view) {
   const pendingId = view?.pendingPlan?.id ?? null;
   // The pending plan is never in `plans` as well (AgentConversationView); if it were, it is drawn once.
   const decided = (view?.plans ?? []).filter((p) => p?.plan?.id && p.plan.id !== pendingId);
-  const drawn = new Set(decided.map((p) => p.plan.id));
+  const reported = new Set(decided.filter((p) => p.result).map((p) => p.plan.id));
   const ids = new Set(messages.map((m) => m.id));
   const leading = [];
   const trailing = [];
@@ -117,13 +133,24 @@ export function loadConversation(state, view) {
   }
 
   const items = [];
-  const place = (entries) => { for (const entry of entries) items.push(...decidedPlanItems(entry)); };
+  const placed = new Map(); // plan id → its card, once drawn
+  const place = (entries) => {
+    for (const entry of entries) {
+      const drawn = decidedPlanItems(entry);
+      placed.set(entry.plan.id, drawn[0]);
+      items.push(...drawn);
+    }
+  };
   place(leading);
   for (const m of messages) {
     if (m.role === 'tool') {
       // A stored tool message carries what the tool returned to the model, not whether it worked;
-      // it is drawn neutral, never as a check.
-      if (!(m.planId && drawn.has(m.planId))) {
+      // it is drawn neutral, never as a check. A refused plan's line after its card goes on the card; a
+      // line of a plan whose result card is drawn goes, since that card says the same.
+      const card = m.planId ? placed.get(m.planId) : null;
+      if (card?.notRun && m.text) {
+        card.notes.push(m.text);
+      } else if (!(m.planId && reported.has(m.planId))) {
         items.push({
           key: `msg-${m.id}`, kind: 'tool-history', toolName: m.toolName ?? '', text: m.text ?? '',
           label: m.toolLabel ?? null, category: m.toolCategory ?? null, durationMs: duration(m.durationMs), planId: m.planId ?? null,
@@ -133,8 +160,8 @@ export function loadConversation(state, view) {
       // An assistant message without text only carried tool calls — there is nothing to show.
       items.push({ key: `msg-${m.id}`, kind: m.role === 'user' ? 'user' : 'assistant', text: m.text });
     }
-    // After the message whether or not it was drawn: a card placed after a text-less message goes
-    // where that message would have been.
+    // After the message whether or not it was drawn: a card placed after a text-less message, or after
+    // its own hidden proposal line, goes where that message would have been.
     place(after.get(m.id) ?? []);
   }
   place(trailing);

@@ -4,6 +4,7 @@ import {
   createTimeline, loadConversation, addUserMessage, applyStreamEvent, applyPlanResult,
   markPlanRejected, settleTurn, applyApproveRefusal, isThinking, withdrawUserMessage, restoreSuperseded,
 } from '../islands/assistantTimeline.js';
+import { planHeading } from '../islands/assistantPlan.js';
 
 // The conversation as the pane draws it: one list of items fed by GET /assistant/conversations/{id}
 // and by the stream's events. The rules worth pinning are the honest ones — a tool line is a check
@@ -612,7 +613,7 @@ test('decided plans keep their order, and one placed after a text-less message g
   assert.deepEqual(state.items.map((i) => i.key), ['msg-m1', `plan-${HISTORY}`, `plan-${OTHER}`, 'msg-m3']);
 });
 
-test("the tool lines a drawn plan wrote are hidden; other lines, and the pending plan's, stay", () => {
+test("the tool lines of a plan whose result card is drawn are hidden; other lines, and the pending plan's, stay", () => {
   const PENDING = '0199d0c4-6a1e-7000-8000-0000000000b3';
   const state = createTimeline();
   loadConversation(state, {
@@ -706,4 +707,64 @@ test("stopping leaves an earlier turn's lines alone", () => {
   addUserMessage(state, 'two');
   applyStreamEvent(state, 'stopped', { messageEn: 'Stopped.', messageFa: 'x' });
   assert.equal(state.items[1].state, 'running', 'not this turn');
+});
+
+test('a plan without a result keeps the lines it wrote, and a refused one has its reason on its card', () => {
+  const state = createTimeline();
+  loadConversation(state, {
+    id: 'c1', title: 't', pendingPlan: null,
+    messages: [
+      msg('m1', 'user', 'delete old-db'),
+      msg('m2', 'tool', 'Proposed as step 1: delete old-db', { toolName: 'delete_database', planId: HISTORY }),
+      msg('m3', 'assistant', 'Here is the plan.'),
+      msg('m4', 'tool', 'Not run: old-db is still attached to two apps.', { toolName: 'delete_database', planId: HISTORY }),
+      msg('m5', 'tool', 'Not run: another step was refused.', { toolName: 'delete_app', planId: HISTORY }),
+      msg('m6', 'user', 'then drop new-db'),
+      msg('m7', 'tool', 'Proposed as step 1: delete new-db', { toolName: 'delete_database', planId: OTHER }),
+    ],
+    plans: [decided(HISTORY, 'failed', { after: 'm3' }), decided(OTHER, 'rejected', { after: 'm7' })],
+  });
+  // The proposal lines stay; the refused plan's execution lines, written after its card, are on it.
+  assert.deepEqual(state.items.map((i) => i.key), ['msg-m1', 'msg-m2', 'msg-m3', `plan-${HISTORY}`, 'msg-m6', 'msg-m7', `plan-${OTHER}`]);
+  const refused = state.items[3];
+  assert.equal(refused.resulted, false);
+  assert.equal(refused.notRun, true, 'failed with no result: refused when checked again, nothing ran');
+  assert.equal(planHeading(refused, false), 'Not run — a step was refused when it was checked again');
+  assert.deepEqual(refused.notes, ['Not run: old-db is still attached to two apps.', 'Not run: another step was refused.']);
+  const rejected = state.items[6];
+  assert.deepEqual([rejected.notRun, rejected.notes], [undefined, undefined], 'only a failed plan is marked so');
+});
+
+test('a refused plan whose card goes last (its anchor is not in the view) keeps its lines as lines', () => {
+  const state = createTimeline();
+  loadConversation(state, {
+    id: 'c1', title: 't', pendingPlan: null,
+    messages: [msg('m1', 'tool', 'Not run: old-db is still attached to two apps.', { toolName: 'delete_database', planId: HISTORY })],
+    plans: [decided(HISTORY, 'failed', { after: 'older' })],
+  });
+  assert.deepEqual(state.items.map((i) => i.key), ['msg-m1', `plan-${HISTORY}`]);
+  assert.deepEqual(state.items[1].notes, []);
+});
+
+test('a card anchored on its own proposal line, hidden because its result is drawn, goes where that line was', () => {
+  const state = createTimeline();
+  loadConversation(state, {
+    id: 'c1', title: 't', pendingPlan: null,
+    messages: [
+      msg('m1', 'user', 'create shop-db'),
+      msg('m2', 'tool', 'Read the usage', { toolName: 'get_usage', durationMs: 90 }),
+      msg('m3', 'tool', 'Proposed a plan', { toolName: 'propose_plan', planId: HISTORY }),
+      msg('m4', 'user', 'thanks'),
+    ],
+    plans: [decided(HISTORY, 'executed', { result: ran(HISTORY), after: 'm3' })],
+  });
+  assert.deepEqual(state.items.map((i) => i.key), ['msg-m1', 'msg-m2', `plan-${HISTORY}`, `result-${HISTORY}`, 'msg-m4']);
+});
+
+test('an empty or missing list of plans draws the messages as before', () => {
+  for (const plans of [[], null, undefined]) {
+    const state = createTimeline();
+    loadConversation(state, { id: 'c1', title: 't', pendingPlan: null, plans, messages: [msg('m1', 'user', 'x'), msg('m2', 'tool', 'Read shop', { toolName: 'get_app', planId: HISTORY })] });
+    assert.deepEqual(state.items.map((i) => i.key), ['msg-m1', 'msg-m2'], String(plans));
+  }
 });
