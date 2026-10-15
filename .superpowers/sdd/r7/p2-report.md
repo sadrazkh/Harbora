@@ -237,3 +237,102 @@ Details open, `document.scrollWidth` = 360 and no element in the log past the ed
    name once.
 3. `useId()` ids (`assistant-result-steps-v-0`, …) are unique per Vue app; the pane is one app per page, so they are
    unique on the page.
+
+## Fix pass (after the coordinator's review)
+
+Commit `e918790`, on top of `9b432ea`. Where it disagrees with the sections above, this section is current. The
+earlier "Decisions": stored blocks never saying "done", stored words in the tooltip, and concern 1 (the contract
+gap) are replaced by what follows.
+
+**toolState (new field, coded against fakes).** `loadConversation` gives every `tool-history` item a `state`:
+"done" or "failed" from the stored message's `toolState`; null for null, for a missing field and for any other
+value (a typo or a new word never reads as "done"). In `assistantActivity.js`, `lineOutcome(item)` classifies
+every line. A stored line with an outcome counts, colours and marks exactly like a live one: a check, a cross, a
+heading of "3 actions done", and a failure opens its block in danger colour. The inference from earlier is now
+only a fallback, for a stored line with no outcome:
+- with a duration, it was a read that ran on a server from before toolState ("ran", neutral, no check);
+- otherwise it is "noted".
+
+**The server's words are always visible (the Important finding).**
+- Each line shows the label as its main text, live or stored, with "<label>…" while running.
+- The new `toolLineDetail` adds a visible second line in 11px, muted or danger for a failed line. It shows the
+  live summary or the stored text whenever there is one and it differs from the main text.
+- A failed line always has words: its summary, or "It failed." / «ناموفق بود.».
+- An interrupted line says "No result arrived." / «نتیجه‌ای نرسید.».
+- An unnamed state shows its summary, or "The outcome is not known.".
+- Lines with no label, and stored lines with no outcome (proposals, refused calls, old rows), show their own words
+  as the main text, with no second line.
+- The tooltip is now only the tool's identifier.
+- In `AssistantPanel.vue` the line is a two-span column with a `data-tool-detail` hook. The main text is in danger
+  colour only when a failed line has no second line. `data-tool-state` is now on stored lines too.
+
+**Minors.**
+1. A choice is now `{ open, tone }`, made by `toggledChoice(view)`. `blockView` ignores a choice made under a tone
+   other than "failed" once the block has failed, so a failure arriving after a fold opens the block again. A fold
+   made after the failure holds. Tested in "a failure arriving after the person folded the block opens it again".
+   The browser check matched: folded while «در حال کار…» (`aria-expanded` false), then reopened when the failure
+   came («۱ کار ناموفق، ۱ انجام شد», true).
+2. Notes are execution lines only. A line becomes a note when its card was placed after an anchor and the line
+   comes after that anchor, or, for a card drawn first (`afterMessageId` null), when the line has a stored outcome
+   (a proposal never has one). Tested in "a refused plan drawn first (no anchor) keeps its proposal lines as lines:
+   only execution lines are notes".
+3. `runningTool` stops its scan at the first non-tool item. Tested in "a running tool with text after it is not
+   what the thinking line names".
+4. `stopped` and `settleTurn` now share `interruptRunning(state)`.
+5. Headings are built by `countsHeading`, which counts every kind of line in the order failed, done, no result,
+   ran, other. The first count carries the noun:
+   - "1 action failed, 1 done, 1 other" / «۱ کار ناموفق، ۱ انجام شد، ۱ مورد دیگر»;
+   - "1 action ran, 1 other";
+   - "1 action done, 1 with no result" / «۱ کار انجام شد، ۱ بی‌نتیجه» (the English was "1 done, …" before).
+
+   A time is added only to "done" and "ran" headings with every duration known, so a "noted" heading never has an
+   empty time. Unchanged from the brief: «۳ کار انجام شد · ۲٫۴ ثانیه» and «۱ کار ناموفق، ۲ انجام شد».
+
+The superseded-plan wording («اجرا نشد — پیام تازه‌ای فرستادید») is kept as asked.
+
+**Tests changed in this pass** (all in files this task added or owns):
+- Rewritten for the new rules:
+  - "a labelled line reads … whatever its outcome";
+  - "a saved read that ran reads its label…", now "a saved line with an outcome reads its label, with the stored
+    text visible under it", plus a new test for lines without an outcome;
+  - the tooltip test;
+  - "the person's choice wins…" and "the choice survives…" (choices are objects now);
+  - the mixed "noted" and "unsettled" heading tests;
+  - the stored-conversation test at the end of assistant-activity.test.mjs, now with toolState (a failure open
+    and in danger colour, labels with visible words, a check and a cross) and a second half for a server without
+    toolState;
+  - the stored tool message shape in assistant-timeline.test.mjs (it now has `state`).
+- New:
+  - the visible second line, live and stored;
+  - the older-server fallback;
+  - stored outcomes counting like live ones;
+  - toolState mapping, including unknown values;
+  - failure reopening a fold;
+  - proposal lines kept out of notes;
+  - runningTool stopping at text.
+
+**Commands and output (fix pass).**
+```
+node --test src/Harbora.Web/Scripts/tests/*.test.mjs    -> NODE_EXIT=0; tests 288, pass 288, fail 0
+                                                           (assistant-activity 38, assistant-timeline 66)
+cd src/Harbora.Web && npm run build                     -> BUILD_EXIT=0, "✓ built in 5.76s", no warnings or errors
+```
+
+Mutation checks, run with a scratch script that applies each mutation, runs the activity and timeline tests and
+restores the file (`git status` showed only my intended changes afterwards):
+- 10 of 10 new-rule mutations failed tests: failure reopens a fold, runningTool stops at a non-tool item, a failed
+  line always has words, stored words visible, no label without an outcome, stored outcomes count, mixed headings
+  count noted lines, stored marks, notes are execution lines only, toolState is only done or failed.
+- 7 of 7 earlier rules re-checked against the rewritten code also failed tests: failed open, working open, the
+  choice wins, done only when all lines are done, total only when every line is timed, the 5 s threshold, stop
+  interrupts running lines.
+
+In the browser (harness with toolState fixtures, Vite started from this worktree and stopped afterwards):
+- A reopened conversation reads «۲ کار انجام شد · ۱٫۱ ثانیه» with checks and each stored text under its label.
+- «۱ کار ناموفق، ۱ انجام شد» is open, with the failed read's words in danger colour.
+- The proposal block reads «۱ کار».
+- At 360 px with everything opened: `scrollWidth` 360, and no element in the log past either edge.
+
+The full dotnet suite was not run again in this pass. The pass changed only front-end files, and the last full
+run is the one above at 7304. The browser check of the toolState path used fakes only: S2's `toolState` was not on
+any branch I ran.
