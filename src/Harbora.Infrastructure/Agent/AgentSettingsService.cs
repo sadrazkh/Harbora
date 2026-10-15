@@ -12,14 +12,19 @@ namespace Harbora.Infrastructure.Agent;
 /// <param name="FallbackModels">Normalised: trimmed, blanks and repeats gone, comma-joined.</param>
 /// <param name="DailyRequestLimitText">What the box shows: empty when the default applies.</param>
 /// <param name="DailyRequestLimit">The number that applies: the default when blank or unreadable, 0 for unlimited.</param>
+/// <param name="ConversationRetentionDaysText">What the box shows: empty when conversations are kept for ever.</param>
+/// <param name="ConversationRetentionDays">The number that applies: 0 — keep for ever — when blank, 0 or unreadable.</param>
 public sealed record AgentSettings(
     string Model,
     string FallbackModels,
     string DailyRequestLimitText,
-    int DailyRequestLimit);
+    int DailyRequestLimit,
+    string ConversationRetentionDaysText = "",
+    int ConversationRetentionDays = 0);
 
-/// <summary>The three settings after validation, ready to store.</summary>
-public sealed record AgentSettingsInput(string Model, string FallbackModels, string DailyRequestLimit);
+/// <summary>The settings after validation, ready to store.</summary>
+public sealed record AgentSettingsInput(
+    string Model, string FallbackModels, string DailyRequestLimit, string ConversationRetentionDays = "");
 
 /// <summary>Either the cleaned-up values, or why they were refused — in both languages.</summary>
 public sealed record AgentSettingsValidation(AgentSettingsInput? Input, string? Error, string? ErrorFa)
@@ -38,7 +43,13 @@ public sealed record AgentModelPlan(string? Primary, IReadOnlyList<string> Fallb
 public sealed class AgentSettingsService(HarboraDbContext db)
 {
     private static readonly string[] Keys =
-        [AgentSettingKeys.Model, AgentSettingKeys.FallbackModels, AgentSettingKeys.DailyRequestLimit];
+    [
+        AgentSettingKeys.Model, AgentSettingKeys.FallbackModels, AgentSettingKeys.DailyRequestLimit,
+        AgentSettingKeys.ConversationRetentionDays
+    ];
+
+    /// <summary>The longest retention the box accepts: ten years.</summary>
+    public const int MaxConversationRetentionDays = 3650;
 
     public async Task<AgentSettings> GetAsync(CancellationToken ct)
     {
@@ -48,11 +59,14 @@ public sealed class AgentSettingsService(HarboraDbContext db)
             .ToDictionaryAsync(s => s.Key, s => s.Value, ct);
 
         var limitText = stored.GetValueOrDefault(AgentSettingKeys.DailyRequestLimit)?.Trim() ?? "";
+        var retentionText = stored.GetValueOrDefault(AgentSettingKeys.ConversationRetentionDays)?.Trim() ?? "";
         return new AgentSettings(
             Model: stored.GetValueOrDefault(AgentSettingKeys.Model)?.Trim() ?? "",
             FallbackModels: stored.GetValueOrDefault(AgentSettingKeys.FallbackModels)?.Trim() ?? "",
             DailyRequestLimitText: limitText,
-            DailyRequestLimit: EffectiveLimit(limitText));
+            DailyRequestLimit: EffectiveLimit(limitText),
+            ConversationRetentionDaysText: retentionText,
+            ConversationRetentionDays: EffectiveRetentionDays(retentionText));
     }
 
     /// <summary>
@@ -64,6 +78,7 @@ public sealed class AgentSettingsService(HarboraDbContext db)
         await SetAsync(AgentSettingKeys.Model, input.Model, ct);
         await SetAsync(AgentSettingKeys.FallbackModels, input.FallbackModels, ct);
         await SetAsync(AgentSettingKeys.DailyRequestLimit, input.DailyRequestLimit, ct);
+        await SetAsync(AgentSettingKeys.ConversationRetentionDays, input.ConversationRetentionDays, ct);
         await db.SaveChangesAsync(ct);
     }
 
@@ -71,9 +86,12 @@ public sealed class AgentSettingsService(HarboraDbContext db)
     /// Checks what the owner typed. A model id never contains whitespace, and a pasted
     /// "vendor/model, other/model" with a stray space inside one id would otherwise be stored and fail
     /// at the provider with its own, less helpful, wording. The limit must be a whole number of at
-    /// least zero; blank means the default, and Persian digits are read as the digits they are.
+    /// least zero; blank means the default, and Persian digits are read as the digits they are. The
+    /// retention is checked the same way: blank or 0 keeps conversations for ever, otherwise 1 to
+    /// <see cref="MaxConversationRetentionDays"/> days.
     /// </summary>
-    public static AgentSettingsValidation Validate(string? model, string? fallbackModels, string? dailyRequestLimit)
+    public static AgentSettingsValidation Validate(
+        string? model, string? fallbackModels, string? dailyRequestLimit, string? conversationRetentionDays = null)
     {
         var primary = (model ?? "").Trim();
         if (!IsModelId(primary, allowBlank: true))
@@ -106,8 +124,21 @@ public sealed class AgentSettingsService(HarboraDbContext db)
             storedLimit = limit.ToString(CultureInfo.InvariantCulture);
         }
 
+        var retentionText = AsciiDigits((conversationRetentionDays ?? "").Trim());
+        var storedRetention = "";
+        if (retentionText.Length > 0)
+        {
+            if (!int.TryParse(retentionText, NumberStyles.None, CultureInfo.InvariantCulture, out var days)
+                || days > MaxConversationRetentionDays)
+                return Refuse(
+                    $"Keep conversations must be a whole number of days from 1 to {MaxConversationRetentionDays} — or blank or 0 to keep them for ever.",
+                    "نگه‌داری گفت‌وگوها باید عددی صحیح از ۱ تا ۳۶۵۰ روز باشد — یا خالی یا ۰ برای نگه‌داشتن برای همیشه.");
+
+            storedRetention = days.ToString(CultureInfo.InvariantCulture);
+        }
+
         return new AgentSettingsValidation(
-            new AgentSettingsInput(primary, string.Join(',', fallbacks), storedLimit), null, null);
+            new AgentSettingsInput(primary, string.Join(',', fallbacks), storedLimit, storedRetention), null, null);
     }
 
     /// <summary>
@@ -139,6 +170,17 @@ public sealed class AgentSettingsService(HarboraDbContext db)
         int.TryParse(AsciiDigits((stored ?? "").Trim()), NumberStyles.None, CultureInfo.InvariantCulture, out var limit)
             ? limit
             : AgentSettingKeys.DefaultDailyRequestLimit;
+
+    /// <summary>
+    /// The retention a stored value means, in days; 0 keeps every conversation. Anything the page would
+    /// not have accepted (a hand-edited row) is 0 too — the opposite default to the limit's, because the
+    /// wrong guess here deletes what the owner meant to keep, and that cannot be undone.
+    /// </summary>
+    public static int EffectiveRetentionDays(string? stored) =>
+        int.TryParse(AsciiDigits((stored ?? "").Trim()), NumberStyles.None, CultureInfo.InvariantCulture, out var days)
+        && days <= MaxConversationRetentionDays
+            ? days
+            : 0;
 
     private static bool IsModelId(string value, bool allowBlank) =>
         value.Length == 0 ? allowBlank : value.Length <= 200 && !value.Any(c => char.IsWhiteSpace(c) || char.IsControl(c));

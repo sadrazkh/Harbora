@@ -136,6 +136,55 @@ public sealed class AgentSettingsPageHttpTests(HarboraHttpFixture fixture)
     }
 
     [Fact]
+    public async Task The_conversation_retention_is_saved_from_the_form_and_shown_back()
+    {
+        var owner = await SignedInOwner("192.0.2.231", "agent-settings-retention");
+        try
+        {
+            var token = await owner.AntiforgeryTokenFrom("/settings");
+            var before = await (await owner.GetAsync("/settings")).Content.ReadAsStringAsync();
+            before.Should().Contain("name=\"agentConversationRetentionDays\"", "the box is on the page");
+
+            await owner.PostFormAsync("/settings/assistant", token,
+                ("enabled", "true"), ("provider", "openai"), ("model", "m/x"), ("agentConversationRetentionDays", "۹۰"));
+
+            Panel.Read(db => db.Settings.Single(s => s.Key == AgentSettingKeys.ConversationRetentionDays).Value).Should().Be("90");
+            var html = await (await owner.GetAsync("/settings")).Content.ReadAsStringAsync();
+            FormValue(html, "agentConversationRetentionDays").Should().Be("90");
+        }
+        finally
+        {
+            ForgetAssistantSettings();
+        }
+    }
+
+    [Theory]
+    [InlineData("3651")]
+    [InlineData("-1")]
+    [InlineData("a year")]
+    public async Task A_retention_outside_1_to_3650_days_is_refused_visibly_and_nothing_is_saved(string days)
+    {
+        Panel.Seed(db => db.Settings.Add(new Setting { Key = "assistant.model", Value = "before/model" }));
+        var owner = await SignedInOwner("192.0.2.232", "agent-settings-retention-refuse-" + Guid.NewGuid().ToString("N")[..8]);
+        try
+        {
+            var token = await owner.AntiforgeryTokenFrom("/settings");
+            await owner.PostFormAsync("/settings/assistant", token,
+                ("enabled", "true"), ("provider", "openai"), ("model", "after/model"), ("agentConversationRetentionDays", days));
+
+            var html = await (await owner.GetAsync("/settings")).Content.ReadAsStringAsync();
+            html.Should().Contain("data-settings-error");
+            var stored = Panel.Read(db => db.Settings.Where(s => s.Key.StartsWith("assistant.")).ToDictionary(s => s.Key, s => s.Value));
+            stored["assistant.model"].Should().Be("before/model");
+            stored.Should().NotContainKey(AgentSettingKeys.ConversationRetentionDays);
+        }
+        finally
+        {
+            ForgetAssistantSettings();
+        }
+    }
+
+    [Fact]
     public async Task Zero_is_a_valid_limit_and_is_kept_as_zero()
     {
         var owner = await SignedInOwner("192.0.2.173", "agent-settings-zero");

@@ -24,8 +24,8 @@ namespace Harbora.Web.Controllers;
 /// </para>
 ///
 /// <para>
-/// POSTs carry the antiforgery token in the <c>X-CSRF-TOKEN</c> header (Program.cs), the way the
-/// route designer's island sends it.
+/// POSTs and DELETEs carry the antiforgery token in the <c>X-CSRF-TOKEN</c> header (Program.cs), the
+/// way the route designer's island sends it.
 /// </para>
 /// </summary>
 [Authorize]
@@ -52,9 +52,59 @@ public sealed class AssistantController(
     public async Task<IActionResult> Status(CancellationToken ct) =>
         Json(await conversations.StatusAsync(Actor, ct));
 
+    /// <summary>
+    /// One page of the list: <c>q</c> searches the titles, <c>skip</c> pages, 30 rows a page — a shorter
+    /// page is the last. 400 for a search over 100 characters or a skip that is not a whole number of at
+    /// least zero.
+    /// </summary>
     [HttpGet("conversations")]
-    public async Task<IActionResult> Conversations(CancellationToken ct) =>
-        Json(await conversations.ListAsync(Actor, ct));
+    public async Task<IActionResult> Conversations([FromQuery] string? q, [FromQuery] int skip, CancellationToken ct)
+    {
+        // "?skip=abc" binds as 0 with an error in the model state; it is refused rather than read as page one.
+        if (ModelState.TryGetValue(nameof(skip), out var entry) && entry.Errors.Count > 0)
+            return BadRequest(new
+            {
+                error = "invalid", messageEn = "skip must be a whole number, 0 or more.", messageFa = "skip باید عددی صحیح، ۰ یا بیشتر باشد."
+            });
+
+        var page = await conversations.ListAsync(Actor, q, skip, ct);
+        return page.Ok
+            ? Json(page.Value)
+            : BadRequest(new { error = "invalid", messageEn = page.Refusals[0].Message, messageFa = page.Refusals[0].MessageFa });
+    }
+
+    /// <summary>
+    /// Deletes one conversation with its messages and plans: 204; 404 when it is not this person's here;
+    /// 409 <c>busy</c> while a turn is being answered in it or one of its plans is executing.
+    /// </summary>
+    [HttpDelete("conversations/{id:guid}")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> DeleteConversation(Guid id, CancellationToken ct)
+    {
+        var outcome = await conversations.DeleteAsync(Actor, id, ct);
+        return outcome.Status switch
+        {
+            AgentDeleteStatus.Deleted => NoContent(),
+            AgentDeleteStatus.NotFound => NoSuchConversation(),
+            _ => Conflict(new { error = "busy", messageEn = outcome.MessageEn, messageFa = outcome.MessageFa })
+        };
+    }
+
+    /// <summary>Deletes every conversation of this person here except the busy ones, which are counted.</summary>
+    [HttpDelete("conversations")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> DeleteAllConversations(CancellationToken ct) =>
+        Json(await conversations.DeleteAllAsync(Actor, ct));
+
+    /// <summary>
+    /// Stop: the turn being answered in this conversation ends at its next step, and its stream carries
+    /// <c>stopped</c> before <c>done</c>. <c>{ stopped: false }</c> when nothing was running; 404 when the
+    /// conversation is not this person's here.
+    /// </summary>
+    [HttpPost("conversations/{id:guid}/stop")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Stop(Guid id, CancellationToken ct) =>
+        await conversations.StopAsync(Actor, id, ct) is { } view ? Json(view) : NoSuchConversation();
 
     [HttpGet("conversations/{id:guid}")]
     public async Task<IActionResult> Conversation(Guid id, CancellationToken ct) =>

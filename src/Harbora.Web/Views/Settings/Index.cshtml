@@ -118,8 +118,8 @@
             </div>
 
             @* ---- the in-panel agent ----
-               Shares the provider, base URL and key above; only the model, its fallbacks and the
-               daily cap are its own. *@
+               Shares the provider, base URL and key above; only the model, its fallbacks, the
+               daily cap and how long conversations are kept are its own. *@
             <div class="border-t border-line pt-3 space-y-3" data-agent-settings>
                 <h3 class="text-sm font-semibold text-ink">@(isFa ? "عامل هوش مصنوعی پنل" : "In-panel AI agent")</h3>
                 <p class="text-xs text-ink-muted">
@@ -164,6 +164,19 @@
                         @(isFa
                             ? $"تعداد درخواست به مدل برای هر فضای کار در هر روز (UTC). خالی یعنی {Harbora.Infrastructure.Agent.AgentSettingKeys.DefaultDailyRequestLimit}؛ ۰ یعنی نامحدود."
                             : $"Model calls per workspace per day (UTC). Blank means {Harbora.Infrastructure.Agent.AgentSettingKeys.DefaultDailyRequestLimit}; 0 means unlimited.")
+                    </p>
+                </div>
+
+                <div>
+                    <label class="block text-sm text-ink-muted mb-1">@(isFa ? "نگه‌داری گفت‌وگوها (روز)" : "Keep conversations (days)")</label>
+                    @* Text for the same reason as the limit above: Persian digits. The server checks 1–3650. *@
+                    <input name="agentConversationRetentionDays" value="@agent?.ConversationRetentionDaysText" inputmode="numeric" dir="ltr"
+                           @(isProvider ? "" : "disabled")
+                           class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm disabled:opacity-60" />
+                    <p class="mt-1 text-[11px] text-ink-faint">
+                        @(isFa
+                            ? "خالی یا ۰ یعنی برای همیشه نگه داشته می‌شوند. گفت‌وگوهایی که این تعداد روز استفاده نشده‌اند روزی یک بار حذف می‌شوند؛ گزارش ممیزی نگه داشته می‌شود."
+                            : "Blank or 0 keeps them for ever. Conversations not used for this many days are deleted once a day; the audit log is kept.")
                     </p>
                 </div>
             </div>

@@ -622,12 +622,13 @@ public sealed class SettingsController(
     [Authorize(Policy = Capabilities.PlatformManage)]
     public async Task<IActionResult> UpdateAssistant(
         bool enabled, string? provider, string? model, string? apiKey, string? baseUrl,
-        string? agentModel, string? agentFallbackModels, string? agentDailyRequestLimit, CancellationToken ct)
+        string? agentModel, string? agentFallbackModels, string? agentDailyRequestLimit,
+        string? agentConversationRetentionDays, CancellationToken ct)
     {
         // The agent's values are checked before anything is stored: a refused limit must not leave
         // the provider and key half-saved behind an error message.
         var agent = Harbora.Infrastructure.Agent.AgentSettingsService.Validate(
-            agentModel, agentFallbackModels, agentDailyRequestLimit);
+            agentModel, agentFallbackModels, agentDailyRequestLimit, agentConversationRetentionDays);
         if (!agent.Ok)
         {
             TempData["Error"] = IsFa ? agent.ErrorFa : agent.Error;

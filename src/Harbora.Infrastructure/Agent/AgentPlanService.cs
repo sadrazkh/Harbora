@@ -669,7 +669,21 @@ public sealed class AgentPlanService(
         var results = ledger.Results.Select(r => Scrub(r!, known)).ToList();
 
         // Plain tracked write: this call owns the plan since it won the claim, so there is no race left.
-        var tracked = await db.AgentPlans.IgnoreQueryFilters().FirstAsync(p => p.Id == plan.Id, ct);
+        var tracked = await db.AgentPlans.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.Id == plan.Id, ct);
+        if (tracked is null)
+        {
+            // Gone with its conversation while it ran. Deleting a conversation is refused while one of its
+            // plans is executing (AgentConversationDeletion), so this is the residue of a race that lock
+            // closes on Postgres — or InMemory, where nothing is atomic. There is nowhere left to write the
+            // outcome, and nothing is thrown at a person who only approved: every step that ran has its
+            // audit entry already.
+            logger.LogWarning("Plan {Plan} finished as {Status}, but it and its conversation were deleted while it ran; " +
+                              "its outcome is in the audit log only.", plan.Id, StatusName(status));
+            plan.Status = status;
+            plan.ExecutedAt = executedAt;
+            return results;
+        }
+
         tracked.Status = status;
         tracked.ResultsJson = AgentJson.Serialize(results);
         tracked.ExecutedAt = executedAt;

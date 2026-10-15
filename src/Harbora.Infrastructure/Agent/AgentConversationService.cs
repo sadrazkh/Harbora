@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Linq.Expressions;
 using System.Text;
 using System.Text.Json;
 using Harbora.Application.Abstractions;
@@ -51,8 +52,19 @@ public sealed class AgentConversationService(
     ISystemClock clock,
     ILogger<AgentConversationService> logger,
     IAgentSecretValues secretValues,
-    IHostApplicationLifetime? lifetime = null)
+    IHostApplicationLifetime? lifetime = null,
+    IAuditLogger? audit = null,
+    AgentTurnRegistry? turns = null)
 {
+    /// <summary>
+    /// Where Stop finds the turns being answered. The container hands every request the one singleton; a
+    /// service built without one (older tests) gets a registry of its own, which only that instance can stop.
+    /// </summary>
+    private readonly AgentTurnRegistry _turns = turns ?? new AgentTurnRegistry();
+
+    public const string ConversationDeletedAction = "assistant.conversation_deleted";
+    public const string ConversationsDeletedAction = "assistant.conversations_deleted";
+
     /// <summary>The most model calls one message may cause — reads included.</summary>
     public const int MaxModelCallsPerMessage = 8;
 
@@ -62,8 +74,11 @@ public sealed class AgentConversationService(
     /// <summary>The longest message a person may send.</summary>
     public const int MaxMessageLength = 4000;
 
-    /// <summary>How many conversations the pane's list shows.</summary>
+    /// <summary>How many conversations one page of the pane's list holds.</summary>
     public const int ConversationListSize = 30;
+
+    /// <summary>The longest search the list accepts — a title is at most 60 characters anyway.</summary>
+    public const int MaxSearchLength = 100;
 
     /// <summary>How many messages the conversation view returns (the newest).</summary>
     public const int ConversationViewMessages = 200;
@@ -120,18 +135,60 @@ public sealed class AgentConversationService(
         return new(true, null, null, model, remaining);
     }
 
-    /// <summary>
-    /// This person's latest conversations in this workspace, most recently active first. A conversation
-    /// created ahead of its first message (<see cref="CreateAsync"/>) and never used has no title yet and
-    /// is left out — it is a place the pane reserved, not something the person said.
-    /// </summary>
+    /// <summary>The first page of <see cref="ListAsync(AgentActor, string?, int, CancellationToken)"/>, unsearched.</summary>
     public async Task<IReadOnlyList<AgentConversationSummaryView>> ListAsync(AgentActor actor, CancellationToken ct) =>
-        await db.AgentConversations.IgnoreQueryFilters().AsNoTracking()
-            .Where(c => c.WorkspaceId == actor.WorkspaceId && c.UserId == actor.UserId && c.Title != "")
-            .OrderByDescending(c => c.UpdatedAt)
-            .Take(ConversationListSize)
+        (await ListAsync(actor, q: null, skip: 0, ct)).Value!;
+
+    /// <summary>
+    /// One page of this person's conversations in this workspace, most recently active first, at most
+    /// <see cref="ConversationListSize"/> rows — a shorter page is the last. A conversation created ahead of
+    /// its first message (<see cref="CreateAsync"/>) and never used has no title yet and is left out — it is a
+    /// place the pane reserved, not something the person said.
+    ///
+    /// <para>
+    /// <paramref name="q"/>, trimmed, is looked for inside the title, ignoring case: the title is lowered in
+    /// the query (<c>ToLower</c>, which Npgsql sends as <c>lower()</c>) and the search before it, the way
+    /// <c>AgentResourceResolver</c> matches names. Persian has no case, so for it this is a plain substring
+    /// match. Refused — nothing read — when <paramref name="q"/> is
+    /// longer than <see cref="MaxSearchLength"/> or <paramref name="skip"/> is negative.
+    /// </para>
+    /// </summary>
+    public async Task<ServiceOutcome<IReadOnlyList<AgentConversationSummaryView>>> ListAsync(
+        AgentActor actor, string? q, int skip, CancellationToken ct)
+    {
+        var term = (q ?? "").Trim();
+        if (term.Length > MaxSearchLength)
+            return ServiceOutcome<IReadOnlyList<AgentConversationSummaryView>>.Refused(new ServiceRefusal(
+                $"A search can be at most {MaxSearchLength} characters.",
+                $"جست‌وجو حداکثر می‌تواند {MaxSearchLength} نویسه باشد.", nameof(q)));
+        if (skip < 0)
+            return ServiceOutcome<IReadOnlyList<AgentConversationSummaryView>>.Refused(new ServiceRefusal(
+                "skip must be 0 or more.", "skip باید ۰ یا بیشتر باشد.", nameof(skip)));
+
+        var page = await Page(db.AgentConversations.IgnoreQueryFilters().AsNoTracking(), actor.WorkspaceId, actor.UserId, term, skip)
             .Select(c => new AgentConversationSummaryView(c.Id, c.Title, c.UpdatedAt))
             .ToListAsync(ct);
+        return ServiceOutcome<IReadOnlyList<AgentConversationSummaryView>>.Success(page);
+    }
+
+    /// <summary>The list's query, on its own so the SQL Npgsql makes of it can be checked without a database.</summary>
+    internal static IQueryable<AgentConversation> Page(
+        IQueryable<AgentConversation> conversations, Guid workspaceId, Guid userId, string term, int skip)
+    {
+        var mine = conversations.Where(c => c.WorkspaceId == workspaceId && c.UserId == userId && c.Title != "");
+        if (term.Length > 0)
+        {
+            var lowered = term.ToLowerInvariant();
+            mine = mine.Where(c => c.Title.ToLower().Contains(lowered));
+        }
+
+        // The id breaks ties, so a page boundary between two conversations touched in the same instant
+        // neither repeats one nor drops the other.
+        return mine
+            .OrderByDescending(c => c.UpdatedAt).ThenByDescending(c => c.Id)
+            .Skip(skip)
+            .Take(ConversationListSize);
+    }
 
     /// <summary>
     /// One conversation as the pane renders it, with the plan still waiting for a decision. Null when it
@@ -307,6 +364,97 @@ public sealed class AgentConversationService(
         return new AgentConversationSummaryView(conversation.Id, conversation.Title, conversation.UpdatedAt);
     }
 
+    // ---- deleting and stopping -----------------------------------------------------------------
+
+    /// <summary>
+    /// Deletes one of this person's conversations, with its messages and plans. Refused while it is busy — a
+    /// turn being answered in it, or one of its plans executing — with the check and the delete made one
+    /// operation (<see cref="AgentConversationDeletion"/>), so a plan claimed for execution never loses its
+    /// conversation underneath it. What the assistant did stays in the audit log, and the day's usage stays
+    /// spent; the delete itself is audited by the conversation's id alone — never its title or its text,
+    /// which are exactly what the person asked to be rid of.
+    /// </summary>
+    public async Task<AgentDeleteOutcome> DeleteAsync(AgentActor actor, Guid conversationId, CancellationToken ct)
+    {
+        if (!await db.AgentConversations.IgnoreQueryFilters().AsNoTracking()
+                .AnyAsync(c => c.Id == conversationId && c.WorkspaceId == actor.WorkspaceId && c.UserId == actor.UserId, ct))
+            return NoSuchConversation;
+
+        var deleted = await AgentConversationDeletion.DeleteIdleAsync(db, [conversationId],
+            c => c.WorkspaceId == actor.WorkspaceId && c.UserId == actor.UserId, clock.UtcNow - TurnMarkLifetime, ct);
+        if (deleted == 0) return await WhyNotDeletedAsync(actor, conversationId);
+
+        await AuditAsync(actor, ConversationDeletedAction, conversationId.ToString(), metadataJson: null);
+        return AgentDeleteOutcome.Deleted;
+    }
+
+    /// <summary>
+    /// Deletes every conversation of this person in this workspace that is not busy; the busy ones are kept
+    /// and counted. "Every" is every one the list shows: a conversation the pane reserved and never used has
+    /// nothing in it to delete, and it may be the one the pane has open right now. One audit row, with the
+    /// counts.
+    /// </summary>
+    public async Task<AgentDeleteAllView> DeleteAllAsync(AgentActor actor, CancellationToken ct)
+    {
+        Expression<Func<AgentConversation, bool>> listed =
+            c => c.WorkspaceId == actor.WorkspaceId && c.UserId == actor.UserId && c.Title != "";
+
+        var ids = await db.AgentConversations.IgnoreQueryFilters().AsNoTracking().Where(listed).Select(c => c.Id).ToListAsync(ct);
+        var deleted = ids.Count == 0 ? 0
+            : await AgentConversationDeletion.DeleteIdleAsync(db, ids, listed, clock.UtcNow - TurnMarkLifetime, ct);
+
+        // Those of them still here are the ones that were busy. (One a concurrent delete took is neither.)
+        var skipped = deleted == ids.Count ? 0
+            : await db.AgentConversations.IgnoreQueryFilters().CountAsync(c => ids.Contains(c.Id), CancellationToken.None);
+
+        await AuditAsync(actor, ConversationsDeletedAction, targetId: null,
+            JsonSerializer.Serialize(new { deleted, skipped }));
+        return new AgentDeleteAllView(deleted, skipped);
+    }
+
+    /// <summary>
+    /// Asks the turn running in this conversation to stop (<see cref="AgentTurnRegistry"/>). Null when the
+    /// conversation is not this person's in this workspace; <c>Stopped</c> false when nothing is running —
+    /// the answer had already ended. What the turn does on being stopped is <see cref="SendAsync"/>'s.
+    /// </summary>
+    public async Task<AgentStopView?> StopAsync(AgentActor actor, Guid conversationId, CancellationToken ct)
+    {
+        if (!await db.AgentConversations.IgnoreQueryFilters().AsNoTracking()
+                .AnyAsync(c => c.Id == conversationId && c.WorkspaceId == actor.WorkspaceId && c.UserId == actor.UserId, ct))
+            return null;
+
+        return new AgentStopView(_turns.Stop(conversationId, actor.WorkspaceId, actor.UserId));
+    }
+
+    /// <summary>
+    /// Why a delete of a conversation that was there a moment ago deleted nothing, read after it: gone (a
+    /// concurrent delete took it), a live turn, or — what is left — a plan executing.
+    /// </summary>
+    private async Task<AgentDeleteOutcome> WhyNotDeletedAsync(AgentActor actor, Guid conversationId)
+    {
+        var current = await db.AgentConversations.IgnoreQueryFilters().AsNoTracking()
+            .FirstOrDefaultAsync(c => c.Id == conversationId && c.WorkspaceId == actor.WorkspaceId && c.UserId == actor.UserId);
+        if (current is null) return NoSuchConversation;
+
+        return IsTurnLive(current.TurnStartedAt)
+            ? new(AgentDeleteStatus.Busy,
+                "This conversation is still answering a message — stop it or wait for it to finish, then delete it.",
+                "این گفت‌وگو هنوز در حال پاسخ به پیامی است — آن را متوقف کنید یا صبر کنید تمام شود، بعد حذفش کنید.")
+            : new(AgentDeleteStatus.Busy,
+                "A plan in this conversation is still running — wait for it to finish, then delete the conversation.",
+                "برنامه‌ای در این گفت‌وگو هنوز در حال اجراست — صبر کنید تمام شود، بعد گفت‌وگو را حذف کنید.");
+    }
+
+    private static readonly AgentDeleteOutcome NoSuchConversation =
+        new(AgentDeleteStatus.NotFound, "There is no such conversation.", "چنین گفت‌وگویی وجود ندارد.");
+
+    /// <summary>On no token: what it records has already happened.</summary>
+    private Task AuditAsync(AgentActor actor, string action, string? targetId, string? metadataJson) =>
+        audit is null
+            ? Task.CompletedTask
+            : audit.LogAsync(action, targetType: "agent_conversation", targetId: targetId, ipAddress: actor.IpAddress,
+                metadataJson: metadataJson, workspaceId: actor.WorkspaceId, ct: CancellationToken.None);
+
     // ---- one message ---------------------------------------------------------------------------
 
 
@@ -325,6 +473,12 @@ public sealed class AgentConversationService(
     /// as it goes, so the person who comes back finds it. While it runs, the conversation carries
     /// <see cref="AgentConversation.TurnStartedAt"/>, which is what <c>InProgress</c> reports and what
     /// refuses a second message over the first.
+    /// </para>
+    ///
+    /// <para>
+    /// The person can end it early with <see cref="StopAsync"/>. That is its own ending, not the deadline's
+    /// and not a shutdown's: what the interrupted model call had written so far is saved and sent as the
+    /// <c>message</c>, then <c>stopped</c>, then <c>done</c> as always, and the mark is cleared.
     /// </para>
     /// </summary>
     /// <param name="conversationId">Null starts a new conversation.</param>
@@ -359,9 +513,16 @@ public sealed class AgentConversationService(
             // On no token: a claim that committed and was then reported cancelled would leave a mark that
             // no finally clears, and the conversation would refuse every message until it lapsed.
             if (!await TryClaimTurnAsync(conversation, stamp, CancellationToken.None))
+            {
+                // A delete that got there first leaves no row to claim, and that is not a turn in progress.
+                if (!await db.AgentConversations.IgnoreQueryFilters().AsNoTracking()
+                        .AnyAsync(c => c.Id == id, CancellationToken.None))
+                    return new(AgentSendStatus.NotFound, "There is no such conversation.", "چنین گفت‌وگویی وجود ندارد.");
+
                 return new(AgentSendStatus.Busy,
                     "Still answering your previous message — wait for it to finish, then send this one.",
                     "هنوز در حال پاسخ به پیام قبلی شماست — صبر کنید تمام شود، بعد این یکی را بفرستید.");
+            }
         }
         else
         {
@@ -384,6 +545,16 @@ public sealed class AgentConversationService(
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(stopping);
         deadline.CancelAfter(TurnDeadline);
         var turn = deadline.Token;
+
+        // And by the person: Stop (StopAsync, from a request of its own) reaches the turn through this
+        // registration — in this process's memory, which is enough because the panel is one process (see
+        // AgentTurnRegistry). The answer itself listens on `answering`; the few steps before `started`
+        // stay on `turn`, so a Stop pressed in that instant still leaves the person's message stored and a
+        // stream that opens and closes, with the stop taking effect at the answer's first step.
+        var stop = _turns.Register(conversation.Id, actor.WorkspaceId, actor.UserId);
+        using var stoppable = CancellationTokenSource.CreateLinkedTokenSource(turn, stop.Token);
+        var answering = stoppable.Token;
+
         var listener = new Listener(emit, logger);
         emit = listener.EmitAsync;
 
@@ -420,7 +591,15 @@ public sealed class AgentConversationService(
                 if (refusal is not null)
                     await emit(new AgentStreamEvent(AgentStreamEvents.Error, refusal), turn);
                 else
-                    await RunTurnAsync(actor, conversation, request!.Page, persianInterface, emit, turn);
+                    await RunTurnAsync(actor, conversation, request!.Page, persianInterface, emit, answering);
+            }
+            catch (OperationCanceledException) when (answering.IsCancellationRequested && stop.StopRequested)
+            {
+                // The person's own Stop — not a failure, so no error. What the interrupted call had written
+                // was saved and sent as its message on the way out (RunTurnAsync); a read cut off leaves no
+                // answer row, and the history builder drops a call without one. The `stopped` event follows
+                // below, once the turn is released.
+                logger.LogInformation("The assistant turn in conversation {Conversation} was stopped by the person.", conversation.Id);
             }
             catch (OperationCanceledException) when (turn.IsCancellationRequested && stopping.IsCancellationRequested)
             {
@@ -447,12 +626,23 @@ public sealed class AgentConversationService(
                     "هنگام پاسخ‌دادن خطایی در سرور رخ داد؛ کار دیگری انجام نشد."), CancellationToken.None);
             }
 
+            // The turn's work is over: a Stop from here on finds nothing and answers false. One that came
+            // before is read now, after the release, so a Stop that answered true is always followed by
+            // `stopped` — including one that arrived while an auto-approved plan ran, which it does not
+            // interrupt (AgentPlanService.RunClaimedAsync takes no token), or after the last step that
+            // listens. The model calls already made stay counted: each was reserved before it was made.
+            _turns.Release(stop);
+            if (stop.StopRequested)
+                await emit(new AgentStreamEvent(AgentStreamEvents.Stopped, new AgentErrorData(StoppedEn, StoppedFa)),
+                    CancellationToken.None);
+
             var remaining = await meter.RemainingAsync(actor.WorkspaceId, CancellationToken.None);
             await emit(new AgentStreamEvent(AgentStreamEvents.Done, new AgentDoneData(conversation.Id, remaining)),
                 CancellationToken.None);
         }
         finally
         {
+            _turns.Release(stop);
             await EndTurnAsync(conversation.Id, stamp);
         }
 
@@ -509,7 +699,16 @@ public sealed class AgentConversationService(
 
         if (conversation.TurnStartedAt is { } started && started > staleBefore) return false;
         conversation.TurnStartedAt = stamp;
-        await db.SaveChangesAsync(ct);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // The row was deleted since it was read — a delete won the race. Nothing was claimed.
+            db.Entry(conversation).State = EntityState.Detached;
+            return false;
+        }
         return true;
     }
 
@@ -695,29 +894,38 @@ public sealed class AgentConversationService(
 
         if (turn.Draft.Count == 0) return;
 
-        var plan = await plans.CreatePendingAsync(actor, conversation.Id, turn.Draft, ct);
+        // The turn's token guards this line and nothing after it: a Stop, the deadline or a shutdown that
+        // came before ends the turn here, with nothing stored. Past it the plan is stored, and claimed, on
+        // no token — a store or a claim that committed and was then reported cancelled would leave a plan
+        // nobody was shown, or one executing with nothing running it, whose conversation could then never
+        // be deleted.
+        ct.ThrowIfCancellationRequested();
+        var plan = await plans.CreatePendingAsync(actor, conversation.Id, turn.Draft, CancellationToken.None);
 
         // Only a finished turn whose every step is a remembered safe tool runs without a card. A turn the
         // model never finished — the cap, the ceiling, a provider error — may have meant more steps
         // than it got to propose, so its steps always wait for the person.
         if (finished && turn.Draft.All(s => s.AutoApproved))
         {
-            // The turn's token only guards the claim here. Once claimed, the plan runs to its end on no
-            // token (AgentPlanService.RunClaimedAsync) — it is not bound by the turn's deadline or a
-            // shutdown, because a plan abandoned half-way would be worse than one that overruns.
-            var result = await plans.ExecuteAutoApprovedAsync(actor, plan, ct);
-            await emit(new AgentStreamEvent(AgentStreamEvents.Executed, result), ct);
+            // Once claimed, the plan runs to its end on no token (AgentPlanService.RunClaimedAsync) — it is
+            // not bound by the turn's deadline, a shutdown or the person's Stop, because a plan abandoned
+            // half-way would be worse than one that overruns.
+            var result = await plans.ExecuteAutoApprovedAsync(actor, plan, CancellationToken.None);
+            await emit(new AgentStreamEvent(AgentStreamEvents.Executed, result), CancellationToken.None);
         }
         else
         {
-            await emit(new AgentStreamEvent(AgentStreamEvents.Plan, plans.ViewOf(plan)), ct);
+            await emit(new AgentStreamEvent(AgentStreamEvents.Plan, plans.ViewOf(plan)), CancellationToken.None);
         }
     }
 
     /// <summary>
-    /// What a person already watched being written, when the call that was writing it never finished:
-    /// saved as the model's message, so a reload shows what was shown, and sent as the message event
-    /// that finalizes the bubble. Runs on no token — the turn's own may be the one that just ran out.
+    /// What a person already watched being written, when the call that was writing it never finished —
+    /// it failed, ran out of time, or the person pressed Stop: saved as the model's message, through the
+    /// same <see cref="AppendAsync"/> as every other, so a reload shows what was shown, and sent as the
+    /// message event that finalizes the bubble. Runs on no token — the turn's own may be the one that just
+    /// ran out. Text that is only whitespace was never anything to read: the bubble is still closed, but
+    /// no row is written for it.
     ///
     /// <para>
     /// Never throws. It runs while another failure is on its way out — the provider's, the deadline's, a
@@ -731,7 +939,7 @@ public sealed class AgentConversationService(
         var partial = new AgentMessage { Role = AgentMessageRole.Assistant, Text = string.IsNullOrWhiteSpace(text) ? null : text };
         try
         {
-            await AppendAsync(conversation, partial, CancellationToken.None);
+            if (partial.Text is not null) await AppendAsync(conversation, partial, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -1096,6 +1304,10 @@ public sealed class AgentConversationService(
     private const string ProviderFailedFa = "ارائه‌دهندهٔ هوش مصنوعی الان نتوانست پاسخ دهد. کمی بعد دوباره امتحان کنید.";
     private const string UnavailableEn = "The assistant is not available right now. The platform's owner can check its settings.";
     private const string UnavailableFa = "دستیار الان در دسترس نیست. مالک پلتفرم می‌تواند تنظیمات آن را بررسی کند.";
+
+    // The `stopped` event's data: { messageEn, messageFa }, the same shape as an error's.
+    private const string StoppedEn = "You stopped this answer.";
+    private const string StoppedFa = "این پاسخ را متوقف کردید.";
 
     private const string NotEntitledEn = "The assistant is not enabled for this workspace.";
     private const string NotEntitledFa = "دستیار برای این فضای کاری فعال نیست.";

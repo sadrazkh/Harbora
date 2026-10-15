@@ -438,6 +438,11 @@ public static class DependencyInjection
         services.AddScoped<Agent.AgentWorkspaceSnapshot>();
         services.AddScoped<Agent.AgentPlanService>();
         services.AddScoped<Agent.AgentConversationService>();
+        // Round seven: the turns being answered right now, which Stop reaches from a request of its own —
+        // a singleton because it is the one place both requests meet (the panel is one process), and the
+        // owner's conversation retention, a once-a-day timer like the sweepers above it.
+        services.AddSingleton<Agent.AgentTurnRegistry>();
+        services.AddHostedService<Maintenance.AgentConversationRetentionSweeper>();
         // The lock-button vault (2026-10-12 owner decision, "secrets as black boxes"): one in-memory store
         // for the whole process — a singleton because it is the store, and a restart forgetting every
         // handle is the safe failure. The same instance answers both the contract and the redaction view.
