@@ -4,7 +4,8 @@ import {
   createTimeline, loadConversation, addUserMessage, applyStreamEvent, applyPlanResult,
   markPlanRejected, settleTurn, applyApproveRefusal, isThinking, withdrawUserMessage, restoreSuperseded,
 } from '../islands/assistantTimeline.js';
-import { planHeading } from '../islands/assistantPlan.js';
+import { planHeading, planIsActionable } from '../islands/assistantPlan.js';
+import { activityRows, planCardLine } from '../islands/assistantActivity.js';
 
 // The conversation as the pane draws it: one list of items fed by GET /assistant/conversations/{id}
 // and by the stream's events. The rules worth pinning are the honest ones — a tool line is a check
@@ -793,4 +794,50 @@ test('an empty or missing list of plans draws the messages as before', () => {
     loadConversation(state, { id: 'c1', title: 't', pendingPlan: null, plans, messages: [msg('m1', 'user', 'x'), msg('m2', 'tool', 'Read shop', { toolName: 'get_app', planId: HISTORY })] });
     assert.deepEqual(state.items.map((i) => i.key), ['msg-m1', 'msg-m2'], String(plans));
   }
+});
+
+// ---- round seven, final review: a turn cut short after proposing steps ----------------------------------------
+
+test('an expired plan event — the steps of a turn cut short — is the compact card a reopened conversation shows', () => {
+  // Live: the server sends the steps as a plan already expired, before the `stopped` that ends the turn. A
+  // proposal never has a `tool` event of its own, so no line for it is drawn here either.
+  const live = createTimeline();
+  addUserMessage(live, 'delete old-db');
+  applyStreamEvent(live, 'started', { conversationId: 'c1' });
+  applyStreamEvent(live, 'delta', { text: 'I will prepare' });
+  applyStreamEvent(live, 'message', { id: 'm2', role: 'assistant', text: 'I will prepare' });
+  applyStreamEvent(live, 'plan', plan('expired'));
+  applyStreamEvent(live, 'stopped', { messageEn: 'You stopped this answer.', messageFa: 'این پاسخ را متوقف کردید.' });
+  applyStreamEvent(live, 'done', { conversationId: 'c1', remainingToday: 3 });
+  assert.deepEqual(kinds(live), ['user', 'assistant', 'plan', 'stopped']);
+  const card = live.items[2];
+
+  // Reopened: the same plan among the decided ones, with no result (nothing ran).
+  const reopened = createTimeline();
+  loadConversation(reopened, {
+    id: 'c1', title: 't', pendingPlan: null,
+    messages: [msg('m1', 'user', 'delete old-db'), msg('m2', 'assistant', 'I will prepare')],
+    plans: [{ plan: plan('expired'), result: null, afterMessageId: 'm2' }],
+  });
+  const again = reopened.items.find((i) => i.kind === 'plan');
+
+  for (const item of [card, again]) {
+    assert.equal(item.superseded, false, 'not "you sent a new message": this turn ended');
+    assert.equal(planCardLine(item, true), 'منقضی شد — هیچ کاری اجرا نشد', 'one muted line, its steps behind "Details"');
+    assert.equal(planCardLine(item, false), 'Expired — nothing ran');
+    assert.equal(planIsActionable(item.plan), false, 'nothing to run');
+    assert.equal(item.resulted, false);
+  }
+  assert.deepEqual(activityRows(live.items).map((r) => r.type), ['item', 'item', 'item', 'item'], 'a card of its own, never a "ran" card');
+});
+
+test('a waiting card from before is still the one superseded when the turn that expired its own draft began', () => {
+  const state = createTimeline();
+  loadConversation(state, { id: 'c1', title: 't', messages: [msg('m1', 'user', 'first')], pendingPlan: { ...plan(), id: HISTORY } });
+  addUserMessage(state, 'second');
+  applyStreamEvent(state, 'started', { conversationId: 'c1' });
+  applyStreamEvent(state, 'plan', plan('expired'));
+  const [older, own] = state.items.filter((i) => i.kind === 'plan');
+  assert.deepEqual([older.plan.id, older.superseded, planCardLine(older, false)], [HISTORY, true, 'Not run — you sent a new message']);
+  assert.deepEqual([own.plan.id, own.superseded, planCardLine(own, false)], [PLAN_ID, false, 'Expired — nothing ran']);
 });
