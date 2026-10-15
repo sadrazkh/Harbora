@@ -437,17 +437,21 @@ export function createConversationList({
     /**
      * "Delete all". Resolves to `{ deleted, skipped, openGone }` when the server answered, null when it
      * did not (the strip then says why and offers "try again"). `openId`, the conversation open in the
-     * pane, is reported through `onDeleted` when it is among those deleted: when nothing was skipped it
-     * certainly is; when some were kept it is asked of the server, since a conversation still answering
-     * — usually the one open — is exactly what is kept. `openId` may be a function, called when the answer
-     * arrives: the person can open another conversation while the request is out, and that one — not the
-     * one open when they pressed the button — is what has to be forgotten.
+     * pane, is reported through `onDeleted` when it is among those deleted. `openId` may be a function,
+     * called when the answer arrives: the person can open another conversation while the request is out,
+     * and the one open then is what has to be forgotten — if it was deleted.
+     *
+     * Nothing skipped means "certainly deleted" only for the conversation that was open at the press: the
+     * server read its list after that. Any other — opened, or started, while the request was out — may be
+     * one the server never saw, and is asked about (GET) like every open conversation when some were kept,
+     * since a conversation still answering — usually the one open — is exactly what is kept.
      */
     async confirmDeleteAll({ openId = null } = {}) {
       const question = state.confirm;
       if (!question || question.target !== 'all' || question.phase === 'working' || question.phase === 'refused') return null;
       question.phase = 'working';
       question.error = null;
+      const openAtPress = typeof openId === 'function' ? openId() : openId;
       let result;
       try {
         result = await api.deleteAllConversations();
@@ -471,7 +475,7 @@ export function createConversationList({
       const open = typeof openId === 'function' ? openId() : openId;
       let openGone = false;
       if (open) {
-        if (skipped === 0) {
+        if (skipped === 0 && open === openAtPress) {
           openGone = true;
         } else {
           try {

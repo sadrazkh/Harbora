@@ -687,17 +687,35 @@ test('a 409 that has the server’s words keeps them, and other statuses never g
 
 // ---- fix pass: delete all forgets the conversation open when the answer comes ---------------------------
 
-test('delete all forgets the conversation open when the answer arrives, not the one open when it was pressed', async () => {
-  const request = deferred();
-  let open = 'a';
-  const s = await withRows({ deleteAllConversations: () => request.promise, conversations: () => [] });
+test('delete all asks about the conversation opened while it was out, and forgets it only when the server says it is gone', async () => {
+  // Nothing was kept, but "c" was opened after the press: it may be one the server never saw (a new
+  // conversation started meanwhile), so "certainly deleted" is not assumed for it.
+  for (const [exists, gone] of [[false, true], [true, false]]) {
+    const request = deferred();
+    let open = 'a';
+    const s = await withRows({
+      deleteAllConversations: () => request.promise,
+      conversations: () => [],
+      conversation: (id) => { if (!exists) throw refusal(404, 'not_found', 'There is no such conversation.', 'چنین گفت‌وگویی وجود ندارد.'); return { id }; },
+    });
+    s.list.askAll();
+    const deleting = s.list.confirmDeleteAll({ openId: () => open });
+    open = 'c'; // the person opened another conversation while the request was out
+    request.resolve({ deleted: 3, skipped: 0 });
+    const result = await deleting;
+    assert.deepEqual(s.calls.filter((c) => c.op === 'get'), [{ op: 'get', id: 'c' }], `asked about "c" (exists: ${exists})`);
+    assert.equal(result.openGone, gone);
+    assert.deepEqual(s.deleted, gone ? ['c'] : [], '"a", open at the press, is not the one on screen any more and is not mentioned');
+  }
+});
+
+test('with nothing kept, the conversation open at the press is forgotten without asking', async () => {
+  const s = await withRows({ deleteAllConversations: () => ({ deleted: 3, skipped: 0 }), conversations: () => [] });
   s.list.askAll();
-  const deleting = s.list.confirmDeleteAll({ openId: () => open });
-  open = 'c'; // the person opened another conversation while the request was out
-  request.resolve({ deleted: 3, skipped: 0 });
-  const result = await deleting;
+  const result = await s.list.confirmDeleteAll({ openId: () => 'a' });
   assert.equal(result.openGone, true);
-  assert.deepEqual(s.deleted, ['c'], '"c" is the one that is gone, and "a" is not mentioned');
+  assert.deepEqual(s.deleted, ['a']);
+  assert.deepEqual(s.calls.filter((c) => c.op === 'get'), [], 'the server read its list after the press: "a" was in it');
 });
 
 test('with some kept, the server is asked about the conversation open when the answer arrives', async () => {
