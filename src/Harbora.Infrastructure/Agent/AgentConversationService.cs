@@ -419,8 +419,17 @@ public sealed class AgentConversationService(
             // The batches before the one that failed are deleted and stay deleted: they are recorded as such,
             // and the failure goes on to the request.
             logger.LogError(ex, "Deleting every assistant conversation stopped part-way; {Deleted} had been deleted.", tally.Deleted);
-            await AuditAsync(actor, ConversationsDeletedAction, targetId: null,
-                JsonSerializer.Serialize(new { deleted = tally.Deleted, interrupted = true }));
+            try
+            {
+                await AuditAsync(actor, ConversationsDeletedAction, targetId: null,
+                    JsonSerializer.Serialize(new { deleted = tally.Deleted, interrupted = true }));
+            }
+            catch (Exception auditFailure)
+            {
+                // The failure that stopped the delete is the one the request must see; this one is only logged
+                // (the line above already says how many were deleted).
+                logger.LogError(auditFailure, "The audit row for a part-way delete of every assistant conversation could not be written.");
+            }
             throw;
         }
 
@@ -605,6 +614,11 @@ public sealed class AgentConversationService(
             // does not withdraw a card that could still have been approved.
             var refusal = await GateAsync(actor, turn);
 
+            // A message that cannot be answered ends the turn here, whatever happens on the way out: it is
+            // released at once, so a Stop from now on answers false and cannot relabel that ending. (A Stop
+            // that came before it is the ending instead — see below.)
+            var stoppedBeforeRefusal = refusal is not null && _turns.Release(stop);
+
             // A card left open while the person moved on is withdrawn, and the turn is told so — only for
             // a message that will actually be answered, and before it, so the record reads in order.
             if (refusal is null && conversationId is not null)
@@ -618,52 +632,63 @@ public sealed class AgentConversationService(
 
             try
             {
-                if (refusal is not null)
+                if (refusal is not null && !stoppedBeforeRefusal)
                     await emit(new AgentStreamEvent(AgentStreamEvents.Error, refusal), turn);
-                else
+                else if (refusal is null)
                     await RunTurnAsync(actor, conversation, request!.Page, persianInterface, emit, stop, answering);
-            }
-            catch (Exception ex) when (stop.StopRequested)
-            {
-                // The person's own Stop — not a failure, so no error, whatever form the interruption took on
-                // its way out: a cancellation, or the client's "dropped" when the stream it was reading was
-                // cut. What the interrupted call had written was saved and sent as its message
-                // (RunTurnAsync); a read cut off leaves no answer row, and the history builder drops a call
-                // without one; steps already proposed were recorded as not run. `stopped` follows below.
-                if (ex is OperationCanceledException)
-                    logger.LogInformation("The assistant turn in conversation {Conversation} was stopped by the person.", conversation.Id);
-                else
-                    logger.LogInformation(ex, "The assistant turn in conversation {Conversation} was stopped by the person ({Error} on the way out).",
-                        conversation.Id, ex.GetType().Name);
-            }
-            catch (OperationCanceledException) when (turn.IsCancellationRequested && stopping.IsCancellationRequested)
-            {
-                logger.LogWarning("The assistant turn in conversation {Conversation} was stopped by the server shutting down.",
-                    conversation.Id);
-                await emit(Error(
-                    "The server is restarting, so this answer was stopped. What was done so far is saved — ask again in a moment.",
-                    "سرور در حال راه‌اندازی دوباره است و این پاسخ متوقف شد. آنچه تا اینجا انجام شده ذخیره شده است — کمی بعد دوباره بپرسید."),
-                    CancellationToken.None);
-            }
-            catch (OperationCanceledException) when (turn.IsCancellationRequested)
-            {
-                logger.LogWarning("The assistant turn in conversation {Conversation} reached its {Deadline} deadline.",
-                    conversation.Id, TurnDeadline);
-                await emit(Error(
-                    $"This answer took longer than {TurnDeadline.TotalMinutes:0} minutes and was stopped. What was done so far is saved.",
-                    $"این پاسخ بیش از {TurnDeadline.TotalMinutes:0} دقیقه طول کشید و متوقف شد. آنچه تا اینجا انجام شده ذخیره شده است."),
-                    CancellationToken.None);
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "The assistant turn failed in conversation {Conversation}.", conversation.Id);
-                await emit(Error("Something went wrong on the server while answering; nothing further was done.",
-                    "هنگام پاسخ‌دادن خطایی در سرور رخ داد؛ کار دیگری انجام نشد."), CancellationToken.None);
+                // First thing on the way out: the turn is released, and what the release reports decides how
+                // it ended. Only a Stop that reached the turn before this moment is a stop; one pressed while
+                // a deadline, a shutdown or a failure is already ending it finds nothing and answers false,
+                // and cannot relabel that ending. (RunTurnAsync released already, before any clean-up of its
+                // own; a release is idempotent and keeps reporting what it first found.)
+                if (_turns.Release(stop))
+                {
+                    // The person's own Stop — not a failure, so no error, whatever form the interruption took on
+                    // its way out: a cancellation, or the client's "dropped" when the stream it was reading was
+                    // cut. What the interrupted call had written was saved and sent as its message; a read cut
+                    // off leaves no answer row, and the history builder drops a call without one; steps already
+                    // proposed were recorded as not run. `stopped` follows below.
+                    if (ex is OperationCanceledException)
+                        logger.LogInformation("The assistant turn in conversation {Conversation} was stopped by the person.", conversation.Id);
+                    else
+                        // Not the stop's own doing, most likely — a real failure that happened to coincide with
+                        // it. The person is told they stopped the answer; the failure must still be seen here.
+                        logger.LogWarning(ex, "The assistant turn in conversation {Conversation} was stopped by the person, and failed " +
+                                              "on the way out ({Error}).", conversation.Id, ex.GetType().Name);
+                }
+                else if (ex is OperationCanceledException && turn.IsCancellationRequested && stopping.IsCancellationRequested)
+                {
+                    logger.LogWarning("The assistant turn in conversation {Conversation} was stopped by the server shutting down.",
+                        conversation.Id);
+                    await emit(Error(
+                        "The server is restarting, so this answer was stopped. What was done so far is saved — ask again in a moment.",
+                        "سرور در حال راه‌اندازی دوباره است و این پاسخ متوقف شد. آنچه تا اینجا انجام شده ذخیره شده است — کمی بعد دوباره بپرسید."),
+                        CancellationToken.None);
+                }
+                else if (ex is OperationCanceledException && turn.IsCancellationRequested)
+                {
+                    logger.LogWarning("The assistant turn in conversation {Conversation} reached its {Deadline} deadline.",
+                        conversation.Id, TurnDeadline);
+                    await emit(Error(
+                        $"This answer took longer than {TurnDeadline.TotalMinutes:0} minutes and was stopped. What was done so far is saved.",
+                        $"این پاسخ بیش از {TurnDeadline.TotalMinutes:0} دقیقه طول کشید و متوقف شد. آنچه تا اینجا انجام شده ذخیره شده است."),
+                        CancellationToken.None);
+                }
+                else
+                {
+                    logger.LogError(ex, "The assistant turn failed in conversation {Conversation}.", conversation.Id);
+                    await emit(Error("Something went wrong on the server while answering; nothing further was done.",
+                        "هنگام پاسخ‌دادن خطایی در سرور رخ داد؛ کار دیگری انجام نشد."), CancellationToken.None);
+                }
             }
 
             // The turn released itself as soon as nothing it had left could be stopped — at the model's last
-            // word, or before storing its plan (RunTurnAsync) — so a Stop after that answered false, and
-            // nothing here says "stopped" under an answer or a plan that ran to its end. A Stop that came
+            // word, before storing its plan (RunTurnAsync), or the moment it began to end any other way — so a
+            // Stop after that answered false, and nothing here says "stopped" under an answer, a plan that ran
+            // to its end, or a deadline, a shutdown, a refusal or a failure. A Stop that came
             // before is the one reported, exactly when the Stop request answered true. The model calls already
             // made stay counted: each was reserved before it was made.
             if (_turns.Release(stop))
@@ -820,6 +845,10 @@ public sealed class AgentConversationService(
         }
         catch (Exception) when (turn.Draft.Count > 0 && !turn.DraftStored)
         {
+            // Released first: the turn is ending, and a Stop pressed while its steps are being recorded must
+            // not turn a deadline or a failure into a stop (SendAsync reads what this release found).
+            _turns.Release(stop);
+
             // A turn that ended before its steps became a plan — stopped, out of time, shut down, or broken —
             // had already told the model "added as step N … the user will approve it". Left like that, the
             // next turn would speak of a card that does not exist, so the steps are recorded as not run.
@@ -832,7 +861,8 @@ public sealed class AgentConversationService(
     /// The model loop, then the plan the turn proposed. A Stop can interrupt the loop and nothing after it:
     /// the turn is released (<see cref="AgentTurnRegistry.Release"/>) at the model's last word, before that
     /// answer is saved or shown, and again as the loop ends, before the closing error, storing the plan and
-    /// running it. A Stop that reached the turn before either point is honoured there, by ending the turn as
+    /// running it — and on every other way out (a failed call, the cap, an exception) before anything is
+    /// cleaned up. A Stop that reached the turn before such a point is honoured there, by ending the turn as
     /// a stop; one after it finds nothing and answers false.
     /// </summary>
     private async Task AnswerAsync(
@@ -848,6 +878,9 @@ public sealed class AgentConversationService(
             // Reserved before the call, so the cap holds under concurrent turns — see AgentUsageMeter.
             if (!await meter.TryReserveAsync(actor.WorkspaceId, ct))
             {
+                // The cap ends the turn: settled before its error is written, so a Stop pressed over it answers
+                // false. One that came first is the ending instead.
+                if (_turns.Release(stop)) throw new OperationCanceledException(StoppedEn);
                 await emit(Error(CapReachedEn, CapReachedFa), ct);
                 stoppedEarly = true;
                 break;
@@ -879,18 +912,22 @@ public sealed class AgentConversationService(
             }
             catch (Exception) when (streamed.Length > 0)
             {
+                // Released before the partial is saved — the turn is ending, and how is already decided.
+                _turns.Release(stop);
                 await FinalizePartialAsync(conversation, streamed.ToString(), emit);
                 throw;
             }
 
             if (!response.Ok || response.Message is null)
             {
+                // The call failed, so the turn is ending: settled first, before the partial is saved.
+                var stoppedFirst = _turns.Release(stop);
                 if (streamed.Length > 0) await FinalizePartialAsync(conversation, streamed.ToString(), emit);
 
                 // A call cut off by the turn's own ending — Stop, the deadline, a shutdown — can come back as
                 // the client's "dropped" or "unreachable" rather than as a cancellation. Then the ending is
                 // what the person is told about, never a provider failure under it.
-                ThrowIfCutShort(stop, ct);
+                ThrowIfCutShort(stoppedFirst, ct);
                 await emit(new AgentStreamEvent(AgentStreamEvents.Error, await ProviderFailureAsync(actor, response, ct)), ct);
                 stoppedEarly = true;
                 break;
@@ -928,6 +965,8 @@ public sealed class AgentConversationService(
             }
             catch (Exception) when (streamed.Length > 0)
             {
+                // The save failed, so the turn is ending in that failure: released before the bubble is closed.
+                _turns.Release(stop);
                 Forget(assistant);
                 await emit(new AgentStreamEvent(AgentStreamEvents.Message, new AgentMessageView(
                     assistant.Id, "assistant", assistant.Text, null, assistant.CreatedAt)), CancellationToken.None);
@@ -1040,11 +1079,11 @@ public sealed class AgentConversationService(
         if (entry.State != EntityState.Detached) entry.State = EntityState.Detached;
     }
 
-    /// <summary>Ends the turn as the cancellation it is, when it is one: the person's Stop, or the turn's
-    /// deadline or a shutdown (<paramref name="ct"/>).</summary>
-    private static void ThrowIfCutShort(AgentTurnHandle stop, CancellationToken ct)
+    /// <summary>Ends the turn as the cancellation it is, when it is one: the person's Stop (one that reached the
+    /// turn before it was released), or the turn's deadline or a shutdown (<paramref name="ct"/>).</summary>
+    private static void ThrowIfCutShort(bool stoppedFirst, CancellationToken ct)
     {
-        if (stop.StopRequested) throw new OperationCanceledException(StoppedEn);
+        if (stoppedFirst) throw new OperationCanceledException(StoppedEn);
         ct.ThrowIfCancellationRequested();
     }
 

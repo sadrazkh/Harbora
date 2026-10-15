@@ -357,7 +357,7 @@ public sealed class AgentHarness : IDisposable
     public AgentConversationService ServiceOver(
         HarboraDbContext? db = null, IAgentChatClient? chat = null, TimeSpan? turnDeadline = null,
         Microsoft.Extensions.Hosting.IHostApplicationLifetime? lifetime = null,
-        Microsoft.Extensions.Logging.ILogger<AgentConversationService>? logger = null)
+        Microsoft.Extensions.Logging.ILogger<AgentConversationService>? logger = null, IAuditLogger? audit = null)
     {
         db ??= Db;
         var access = new ProjectAccessService(db, new Caller(UserId, WorkspaceId));
@@ -365,7 +365,7 @@ public sealed class AgentHarness : IDisposable
         return new AgentConversationService(
             db, chat ?? Chat, registry, new AgentPlanService(db, registry, Audit, Clock, NullLogger<AgentPlanService>.Instance, Vault),
             new AgentUsageMeter(db, Clock), new AgentWorkspaceSnapshot(db, new AgentResourceResolver(db, access), access),
-            new FeatureGate(db), Capabilities, Clock, logger ?? NullLogger<AgentConversationService>.Instance, Vault, Audit,
+            new FeatureGate(db), Capabilities, Clock, logger ?? NullLogger<AgentConversationService>.Instance, Vault, audit ?? Audit,
             lifetime, Turns)
         {
             TurnDeadline = turnDeadline ?? AgentConversationService.DefaultTurnDeadline

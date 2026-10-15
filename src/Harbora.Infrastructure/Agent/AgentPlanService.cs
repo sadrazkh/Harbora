@@ -440,9 +440,8 @@ public sealed class AgentPlanService(
         {
             if (stopped)
             {
-                ledger.Results[position] = Skipped(step.Index, "Skipped: an earlier step failed.", "رد شد: مرحلهٔ قبلی ناموفق بود.");
-                ledger.Outcomes[position] = Outcome(step, "skipped", "Skipped: an earlier step failed, so this did not run.",
-                    "رد شد: مرحلهٔ قبلی ناموفق بود و این مرحله اجرا نشد.");
+                ledger.Results[position] = Skipped(step.Index, AfterFailureEn, AfterFailureFa);
+                ledger.Outcomes[position] = Outcome(step, "skipped", AfterFailureOutcomeEn, AfterFailureOutcomeFa);
                 continue;
             }
 
@@ -488,8 +487,8 @@ public sealed class AgentPlanService(
             }
             else
             {
-                var error = result.Error ?? "The step failed.";
-                var errorFa = result.ErrorFa ?? "این مرحله ناموفق بود.";
+                var error = result.Error ?? StepFailedEn;
+                var errorFa = result.ErrorFa ?? StepFailedFa;
                 ledger.Results[position] = new(step.Index, "failed", null, null, error, errorFa, result.Links ?? []);
                 ledger.Outcomes[position] = Outcome(step, "failed", error, errorFa, error: error, resultJson: result.ResultJson);
                 stopped = true;
@@ -582,6 +581,13 @@ public sealed class AgentPlanService(
     private const string RanBeforeRestartEn = "Done before the panel restarted.";
     private const string RanBeforeRestartFa = "پیش از راه‌اندازی دوبارهٔ پنل انجام شد.";
 
+    private const string StepFailedEn = "The step failed.";
+    private const string StepFailedFa = "این مرحله ناموفق بود.";
+    private const string AfterFailureEn = "Skipped: an earlier step failed.";
+    private const string AfterFailureFa = "رد شد: مرحلهٔ قبلی ناموفق بود.";
+    private const string AfterFailureOutcomeEn = "Skipped: an earlier step failed, so this did not run.";
+    private const string AfterFailureOutcomeFa = "رد شد: مرحلهٔ قبلی ناموفق بود و این مرحله اجرا نشد.";
+
     /// <summary>
     /// Settles every plan still <see cref="AgentPlanStatus.Executing"/> when the panel starts. The panel is one
     /// process and a claimed plan runs inside the request that claimed it, so at startup none of them can still
@@ -591,9 +597,11 @@ public sealed class AgentPlanService(
     /// <para>
     /// What each step did is read from where it was recorded as it happened: the results already in the plan,
     /// if any, and otherwise the <c>assistant.step_executed</c> entry every step writes the moment its tool
-    /// returns. A step with a successful entry is done. The first step without one — the step that was
-    /// running, whose effect nobody knows — fails with <see cref="PanelRestartedEn"/>, and the steps after it
-    /// are skipped with the same words; the conversation is told the same, so the next turn knows. The plan is
+    /// returns. A step with a successful entry is done; one whose entry says it failed keeps that failure as
+    /// its own (its words were not recorded, so it says only that it failed), and the steps after it were
+    /// skipped by the run itself, as after any failure. Only the first step without an entry — the step that
+    /// was running, whose effect nobody knows — and the steps after it get <see cref="PanelRestartedEn"/>.
+    /// The conversation is told the same, so the next turn knows. The plan is
     /// <see cref="AgentPlanStatus.Failed"/>, unless every step is known to be done — then only the record was
     /// cut off, and it is <see cref="AgentPlanStatus.Executed"/>, the rule <c>FinishBrokenRunAsync</c> keeps.
     /// </para>
@@ -645,31 +653,45 @@ public sealed class AgentPlanService(
 
         var results = new List<AgentPlanStepResultView>();
         var outcomes = new List<StepOutcome>();
-        var cutOff = false;
+        // How the steps after the current one end: the run's own skip after a step failed, or the restart's words
+        // once a step was cut off running.
+        var after = (StepEnd?)null;
         foreach (var step in steps)
         {
-            if (!cutOff && recorded.TryGetValue(step.Index, out var kept))
+            if (after is StepEnd.FailedBefore)
+            {
+                results.Add(Skipped(step.Index, AfterFailureEn, AfterFailureFa));
+                outcomes.Add(Outcome(step, "skipped", AfterFailureOutcomeEn, AfterFailureOutcomeFa));
+            }
+            else if (after is StepEnd.CutOff)
+            {
+                results.Add(new(step.Index, "skipped", null, null, PanelRestartedEn, PanelRestartedFa, []));
+                outcomes.Add(Outcome(step, "skipped", PanelRestartedEn, PanelRestartedFa, error: PanelRestartedEn));
+            }
+            else if (recorded.TryGetValue(step.Index, out var kept))
             {
                 results.Add(kept);
                 outcomes.Add(Outcome(step, kept.State, kept.SummaryEn ?? kept.ErrorEn ?? kept.State, kept.SummaryFa ?? kept.ErrorFa ?? kept.State,
                     error: kept.ErrorEn));
-                cutOff = kept.State != "done";
+                if (kept.State != "done") after = StepEnd.FailedBefore;
             }
-            else if (!cutOff && audited.GetValueOrDefault(step.Index))
+            else if (audited.TryGetValue(step.Index, out var ok) && ok)
             {
                 results.Add(new(step.Index, "done", RanBeforeRestartEn, RanBeforeRestartFa, null, null, []));
                 outcomes.Add(Outcome(step, "done", RanBeforeRestartEn, RanBeforeRestartFa));
             }
-            else if (!cutOff)
+            else if (audited.ContainsKey(step.Index))
             {
-                results.Add(new(step.Index, "failed", null, null, PanelRestartedEn, PanelRestartedFa, []));
-                outcomes.Add(Outcome(step, "failed", PanelRestartedEn, PanelRestartedFa, error: PanelRestartedEn));
-                cutOff = true;
+                // It ran and failed before the restart: that failure is its own, not the restart's.
+                results.Add(new(step.Index, "failed", null, null, StepFailedEn, StepFailedFa, []));
+                outcomes.Add(Outcome(step, "failed", StepFailedEn, StepFailedFa, error: StepFailedEn));
+                after = StepEnd.FailedBefore;
             }
             else
             {
-                results.Add(new(step.Index, "skipped", null, null, PanelRestartedEn, PanelRestartedFa, []));
-                outcomes.Add(Outcome(step, "skipped", PanelRestartedEn, PanelRestartedFa, error: PanelRestartedEn));
+                results.Add(new(step.Index, "failed", null, null, PanelRestartedEn, PanelRestartedFa, []));
+                outcomes.Add(Outcome(step, "failed", PanelRestartedEn, PanelRestartedFa, error: PanelRestartedEn));
+                after = StepEnd.CutOff;
             }
         }
 
@@ -680,6 +702,16 @@ public sealed class AgentPlanService(
         // No vault survives a restart, so there are no held values left to scrub by.
         await AddOutcomeMessagesAsync(db, plan, outcomes, [], now, ct);
         await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>Why the steps after one did not run, in the startup pass.</summary>
+    private enum StepEnd
+    {
+        /// <summary>A step before them failed, and the run skipped them, as it does after any failure.</summary>
+        FailedBefore,
+
+        /// <summary>A step before them was running when the panel restarted.</summary>
+        CutOff
     }
 
     /// <summary>The step and its outcome from an <c>assistant.step_executed</c> entry's metadata, or null.</summary>

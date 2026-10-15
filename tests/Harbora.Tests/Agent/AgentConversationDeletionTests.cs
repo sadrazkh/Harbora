@@ -353,6 +353,33 @@ public class AgentConversationDeletionTests
             .Which.Text.Should().Contain($"{AgentConversationDeletion.BatchSize} had been deleted");
     }
 
+    [Fact]
+    public async Task A_failing_audit_on_the_way_out_of_a_part_way_delete_all_does_not_replace_the_real_failure()
+    {
+        using var h = new AgentHarness();
+        for (var i = 0; i <= AgentConversationDeletion.BatchSize; i++)
+            h.Db.AgentConversations.Add(new AgentConversation { WorkspaceId = h.WorkspaceId, UserId = h.UserId, Title = $"c{i}", UpdatedAt = Start });
+        await h.Db.SaveChangesAsync();
+        using var failing = new HarboraDbContext(
+            new DbContextOptionsBuilder<HarboraDbContext>().UseInMemoryDatabase(h.DatabaseName)
+                .AddInterceptors(new FailTheSecondDelete()).Options,
+            new Harbora.Application.Abstractions.FixedWorkspaceScope(h.WorkspaceId));
+
+        var act = () => h.ServiceOver(failing, audit: new ThrowingAudit()).DeleteAllAsync(h.Actor, default);
+
+        (await act.Should().ThrowAsync<DbUpdateException>()).WithMessage("The database refused the second batch.",
+            "the failure that stopped the delete is the one the request sees, not the audit's");
+    }
+
+    /// <summary>An audit sink that breaks — the contract says a logger never throws, and this one does anyway.</summary>
+    private sealed class ThrowingAudit : Harbora.Application.Abstractions.IAuditLogger
+    {
+        public Task LogAsync(string action, string? targetType = null, string? targetId = null, string? ipAddress = null,
+            string? actorEmailOverride = null, Guid? userIdOverride = null, string? metadataJson = null,
+            Guid? workspaceId = null, CancellationToken ct = default) =>
+            throw new InvalidOperationException("The audit table is gone.");
+    }
+
     /// <summary>Lets the first save that deletes conversations through and refuses the second.</summary>
     private sealed class FailTheSecondDelete : SaveChangesInterceptor
     {

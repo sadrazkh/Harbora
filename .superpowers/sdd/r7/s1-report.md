@@ -472,3 +472,57 @@ result) and 8 (optional audit logger) are resolved by this pass; the others stan
 
 **Still unverified here:** the Postgres lane (now 6 facts in `AgentConversationDeleteRaceTests`, adjusted for the
 claim time) — compiled, skipped, no Docker.
+
+### Fix pass, last round (after the approved re-review)
+
+1. **Residual window closed: a turn already ending is never reported as stopped.** The turn is now released the
+   moment it begins to end, before any clean-up, and what that release reports decides the ending:
+   - `SendAsync` has one `catch (Exception)` whose first line is `_turns.Release(stop)`; it then branches — Stop
+     (only if a Stop reached the turn before that release), shutdown, deadline, failure. The old
+     `when (stop.StopRequested)` filter is gone.
+   - Earlier on the same paths, before any await: `RunTurnAsync`'s draft-recording catch, `AnswerAsync`'s
+     streamed-call catch and its failed-save catch, the failed-response branch (`ThrowIfCutShort` now takes the
+     release's answer), the cap (released before the cap error is written), and the gate refusal (released as
+     soon as `GateAsync` returns one; a Stop that came first is then the ending and the refusal is not written).
+   - `Release` is idempotent and keeps reporting what it first found, so the later releases agree with the first.
+   Tests (`AgentStopTests`):
+   - `A_stop_pressed_while_a_turn_out_of_time_records_its_steps_is_false_and_the_ending_stays_the_deadline`: a
+     `SaveChangesInterceptor` presses Stop from another request while the deadline-ended turn stores its steps.
+     Expect `stopped:false` and `started, error, done` with the deadline's message; the plan is still `Expired`.
+   - `A_stop_pressed_over_the_cap_error_is_false_and_nothing_says_stopped`.
+   - `A_stop_pressed_over_a_refusal_is_false_and_nothing_says_stopped`.
+   - `A_stop_pressed_while_a_failed_call_closes_its_bubble_is_false_and_the_failure_is_what_is_shown`.
+   Mutation check: with the four new releases removed (draft catch, cap, refusal, streamed catch), exactly those
+   four tests fail (`Failed! 4, Passed 12` of 16). Restored, rebuilt, green.
+2. **Logging.** In the Stop branch, an exception that is not the cancellation itself is logged at **Warning**, with
+   the exception attached. A cancellation stays at Information. The "Dropped" theory now asserts the level for
+   both of its cases.
+3. **DeleteAllAsync.** The part-way failure's audit write is in its own try/catch, and its failure is only logged,
+   so the original exception is the one that leaves. Test:
+   `A_failing_audit_on_the_way_out_of_a_part_way_delete_all_does_not_replace_the_real_failure`: an `IAuditLogger`
+   that throws (`AgentHarness.ServiceOver` gained an optional `audit`), and the request still gets the batch's
+   `DbUpdateException`.
+4. **Startup step.** A step whose audit entry says it failed keeps its own failure: `failed` with "The step
+   failed." / «این مرحله ناموفق بود.», the same words a run uses for a failure that gave none. The steps after it
+   are `skipped` with the run's own "Skipped: an earlier step failed." Only the first step with no entry (the one
+   running) and the steps after it get the restart words. The two wordings are now shared constants of the run
+   and the startup pass. Test:
+   `A_step_that_failed_before_the_restart_keeps_its_own_failure_and_only_a_running_step_gets_the_restart_words`
+   checks `done/failed/skipped` with those exact words, that no result and no conversation line carries the
+   restart text, and that a plan with no entry gets it.
+
+Runs:
+
+```
+export MSBUILDDISABLENODEREUSE=1
+dotnet build Harbora.slnx --nologo -v q --no-restore -p:UseSharedCompilation=false        → BUILD_EXIT=0, compiler warnings 0
+dotnet test tests/Harbora.Tests --nologo -v q --no-build --filter "FullyQualifiedName~AgentStopTests|FullyQualifiedName~AgentConversationDeletionTests|FullyQualifiedName~AgentPlanStartupReconcilerTests|FullyQualifiedName~AgentConversationRetentionTests|FullyQualifiedName~AssistantConversationHttpTests|FullyQualifiedName~AgentTurnTests|FullyQualifiedName~AgentConversationServiceTests|FullyQualifiedName~AssistantHttpTests"
+                                                                     → EXIT=0  Passed! - Failed: 0, Passed: 163, Total: 163
+dotnet test tests/Harbora.Tests --nologo -v q --no-build --filter "FullyQualifiedName~Harbora.Tests.Agent|FullyQualifiedName~Assistant|FullyQualifiedName~AgentSettingsPage|FullyQualifiedName~DependencyInjection"
+                                                                     → EXIT=0  Passed! - Failed: 0, Passed: 918, Total: 918
+```
+
+The first run of the covering classes failed one test: the startup test's own assertion was too broad, because
+"Done before the panel restarted" also contains "panel restarted". It now looks for the restart error text
+itself. This round adds 6 tests to `Harbora.Tests` (Stop 4, deletion 1, and the startup test reworked). Per the
+coordinator, no full-suite run this round; the last full run, at 8f0d3b2, was 7420/7420.

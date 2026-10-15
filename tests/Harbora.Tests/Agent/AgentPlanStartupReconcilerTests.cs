@@ -125,16 +125,33 @@ public sealed class AgentPlanStartupReconcilerTests : IDisposable
     }
 
     [Fact]
-    public async Task A_step_that_failed_before_the_restart_and_one_never_audited_both_stop_the_plan_there()
+    public async Task A_step_that_failed_before_the_restart_keeps_its_own_failure_and_only_a_running_step_gets_the_restart_words()
     {
-        var (_, failedFirst) = await ExecutingAsync(2, (0, false, AgentPlanService.StepExecutedAction));
+        var (failedConversation, failedFirst) = await ExecutingAsync(3,
+            (0, true, AgentPlanService.StepExecutedAction), (1, false, AgentPlanService.StepExecutedAction));
         var (_, nothingRan) = await ExecutingAsync(1);
 
         (await Reconciler().ReconcileAsync(default)).Should().Be(2);
 
-        AgentPlanService.ResultOf(Stored(failedFirst))!.Steps.Select(s => s.State).Should().Equal("failed", "skipped");
-        var untouched = AgentPlanService.ResultOf(Stored(nothingRan))!;
-        untouched.Steps.Single().State.Should().Be("failed");
+        // Step 2 ran and failed before the restart; step 3 was skipped by the run itself, as after any failure.
+        // Neither was cut off by the restart, so neither says it was.
+        var failed = AgentPlanService.ResultOf(Stored(failedFirst))!;
+        failed.Steps.Select(s => s.State).Should().Equal("done", "failed", "skipped");
+        failed.Steps[1].ErrorEn.Should().Be("The step failed.");
+        failed.Steps[1].ErrorFa.Should().Be("این مرحله ناموفق بود.");
+        failed.Steps[2].SummaryEn.Should().Be("Skipped: an earlier step failed.");
+        failed.Steps.Should().NotContain(s => s.ErrorEn == AgentPlanService.PanelRestartedEn || s.SummaryEn == AgentPlanService.PanelRestartedEn);
+        using (var db = _h.NewContext())
+            (await db.AgentMessages.IgnoreQueryFilters()
+                    .Where(m => m.ConversationId == failedConversation && m.PlanId == failedFirst && m.Role == AgentMessageRole.Tool)
+                    .Select(m => m.Text!).ToListAsync())
+                .Should().NotContain(t => t.Contains(AgentPlanService.PanelRestartedEn), "no line tells the model the restart cut a step off");
+        Stored(failedFirst).Status.Should().Be(AgentPlanStatus.Failed);
+
+        // A step with no entry at all was the one running: that one, and only that kind, gets the restart words.
+        var cut = AgentPlanService.ResultOf(Stored(nothingRan))!;
+        cut.Steps.Single().State.Should().Be("failed");
+        cut.Steps.Single().ErrorEn.Should().Be(AgentPlanService.PanelRestartedEn);
         Stored(nothingRan).Status.Should().Be(AgentPlanStatus.Failed);
     }
 

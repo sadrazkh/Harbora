@@ -390,6 +390,121 @@ public class AgentStopTests
         return (outcome, events);
     }
 
+    // ---- a turn already ending is never relabelled as stopped -------------------------------------
+
+    [Fact]
+    public async Task A_stop_pressed_while_a_turn_out_of_time_records_its_steps_is_false_and_the_ending_stays_the_deadline()
+    {
+        var create = new FakeTool("create_database", AgentToolKind.SafeWrite);
+        using var h = new AgentHarness([create]);
+        h.Chat.ThenCall("create_database", """{"name":"shop-db"}""")
+            .ThenText("never", before: ct => Task.Delay(Timeout.Infinite, ct));
+        // The Stop lands exactly while the deadline-ended turn is storing its steps as not run.
+        var interceptor = new StopWhileRecordingDraft(planConversation => StopFromAnotherRequest(h, planConversation));
+        using var db = new Harbora.Data.HarboraDbContext(
+            new DbContextOptionsBuilder<Harbora.Data.HarboraDbContext>().UseInMemoryDatabase(h.DatabaseName).AddInterceptors(interceptor).Options,
+            new Harbora.Application.Abstractions.FixedWorkspaceScope(h.WorkspaceId));
+
+        var (_, events) = await SendWith(h.ServiceOver(db: db, turnDeadline: TimeSpan.FromSeconds(2)), h, "make a database");
+
+        interceptor.Stop.Should().NotBeNull("the Stop was pressed in the window");
+        interceptor.Stop!.Stopped.Should().BeFalse("the turn was already ending by its deadline");
+        events.Names().Should().Equal("started", "error", "done");
+        events.Single<AgentErrorData>("error").MessageEn.Should().StartWith("This answer took longer than");
+        using var other = h.NewContext();
+        (await other.AgentPlans.SingleAsync()).Status.Should().Be(AgentPlanStatus.Expired, "the steps are still recorded as not run");
+    }
+
+    /// <summary>Presses Stop, from another request, the first time this context stores a plan.</summary>
+    private sealed class StopWhileRecordingDraft(Func<Guid, Task<AgentStopView?>> stop)
+        : Microsoft.EntityFrameworkCore.Diagnostics.SaveChangesInterceptor
+    {
+        public AgentStopView? Stop { get; private set; }
+
+        public override async ValueTask<Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int>> SavingChangesAsync(
+            Microsoft.EntityFrameworkCore.Diagnostics.DbContextEventData eventData,
+            Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        {
+            var plan = eventData.Context!.ChangeTracker.Entries<AgentPlan>().FirstOrDefault(e => e.State == EntityState.Added);
+            if (plan is not null && Stop is null) Stop = await stop(plan.Entity.ConversationId);
+            return result;
+        }
+    }
+
+    [Fact]
+    public async Task A_stop_pressed_over_the_cap_error_is_false_and_nothing_says_stopped()
+    {
+        var peek = new FakeTool("peek", AgentToolKind.Read)
+        {
+            OnExecute = (_, _) => new AgentToolResult(true, """{"answer":42}""", "peek looked", "peek دید")
+        };
+        using var h = new AgentHarness([peek]);
+        h.SetDailyLimit("1");
+        h.Chat.ThenCall("peek").ThenText("never asked");
+        AgentStopView? stop = null;
+        var events = new List<AgentStreamEvent>();
+
+        async Task Sink(AgentStreamEvent e, CancellationToken _)
+        {
+            events.Add(e);
+            if (e.Name == AgentStreamEvents.Error) stop = await StopFromAnotherRequest(h, ConversationOf(events));
+        }
+
+        await h.ServiceOver(turnDeadline: Guard).SendAsync(h.Actor, null, new AgentSendMessageRequest("look", null), false, Sink, default);
+
+        stop!.Stopped.Should().BeFalse("the cap had already ended the turn");
+        events.Names().Should().Equal("started", "tool", "tool", "error", "done");
+    }
+
+    [Fact]
+    public async Task A_stop_pressed_over_a_refusal_is_false_and_nothing_says_stopped()
+    {
+        using var h = new AgentHarness();
+        h.SetDailyLimit("1");
+        h.Db.AgentUsageDays.Add(new AgentUsageDay
+        {
+            WorkspaceId = h.WorkspaceId, Day = DateOnly.FromDateTime(AgentHarness.Start.UtcDateTime), ModelCalls = 1
+        });
+        await h.Db.SaveChangesAsync();
+        AgentStopView? stop = null;
+        var events = new List<AgentStreamEvent>();
+
+        async Task Sink(AgentStreamEvent e, CancellationToken _)
+        {
+            events.Add(e);
+            if (e.Name == AgentStreamEvents.Started) stop = await StopFromAnotherRequest(h, ConversationOf(events));
+        }
+
+        await h.ServiceOver(turnDeadline: Guard).SendAsync(h.Actor, null, new AgentSendMessageRequest("hello", null), false, Sink, default);
+
+        stop!.Stopped.Should().BeFalse("today's allowance was gone; the message was never going to be answered");
+        events.Names().Should().Equal("started", "error", "done");
+        h.Chat.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_stop_pressed_while_a_failed_call_closes_its_bubble_is_false_and_the_failure_is_what_is_shown()
+    {
+        using var h = new AgentHarness();
+        h.Chat.ThenStreamed(new AgentChatResponse(true, new AgentChatMessage(AgentRole.Assistant, "never"), "m", null, "stop", null, null),
+            ["Half "], after: _ => throw new InvalidOperationException("The client broke."));
+        AgentStopView? stop = null;
+        var events = new List<AgentStreamEvent>();
+
+        async Task Sink(AgentStreamEvent e, CancellationToken _)
+        {
+            events.Add(e);
+            // The partial is being closed because the call broke: the turn is already ending in that failure.
+            if (e.Name == AgentStreamEvents.Message) stop = await StopFromAnotherRequest(h, ConversationOf(events));
+        }
+
+        await h.ServiceOver(turnDeadline: Guard).SendAsync(h.Actor, null, new AgentSendMessageRequest("go", null), false, Sink, default);
+
+        stop!.Stopped.Should().BeFalse();
+        events.Names().Should().Equal("started", "delta", "message", "error", "done");
+        events.Single<AgentErrorData>("error").MessageEn.Should().StartWith("Something went wrong on the server");
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -407,8 +522,9 @@ public class AgentStopTests
             if (clientThrows) throw new IOException("The response ended prematurely.");
         });
         var events = new List<AgentStreamEvent>();
+        var logger = new ListLogger<AgentConversationService>();
 
-        await h.ServiceOver(turnDeadline: Guard).SendAsync(h.Actor, null, new AgentSendMessageRequest("go", null), false,
+        await h.ServiceOver(turnDeadline: Guard, logger: logger).SendAsync(h.Actor, null, new AgentSendMessageRequest("go", null), false,
             (e, _) =>
             {
                 events.Add(e);
@@ -420,5 +536,10 @@ public class AgentStopTests
         events.Names().Should().Equal("started", "delta", "message", "stopped", "done");
         events.Names().Should().NotContain("error");
         events.Single<AgentMessageView>("message").Text.Should().Be("Half ");
+
+        // A failure that is not the cancellation itself is still seen in the log, at a level someone reads.
+        var line = logger.Entries.Single(e => e.Text.Contains("stopped by the person"));
+        line.Level.Should().Be(clientThrows ? Microsoft.Extensions.Logging.LogLevel.Warning : Microsoft.Extensions.Logging.LogLevel.Information);
+        if (clientThrows) line.Text.Should().Contain("IOException");
     }
 }
