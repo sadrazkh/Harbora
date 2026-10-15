@@ -153,7 +153,8 @@ onUnmounted(() => list.dispose());
       <div class="relative">
         <label for="assistant-history-search" class="sr-only">{{ t('Search titles', 'جست‌وجو در عنوان‌ها') }}</label>
         <span class="pointer-events-none absolute inset-y-0 start-3 grid place-items-center text-ink-faint"><AssistantIcon :icon="Search" :size="14" /></span>
-        <input id="assistant-history-search" ref="searchBox" type="search" autocomplete="off" spellcheck="false"
+        <!-- maxlength: the server refuses a search over 100 characters (AgentConversationService.MaxSearchLength). -->
+        <input id="assistant-history-search" ref="searchBox" type="search" autocomplete="off" spellcheck="false" maxlength="100"
                class="form-control py-1.5 ps-9" :value="state.query" :placeholder="t('Search titles', 'جست‌وجو در عنوان‌ها')"
                data-history-search @input="list.setQuery(($event.target as HTMLInputElement).value)" @keydown="onSearchKey" />
       </div>

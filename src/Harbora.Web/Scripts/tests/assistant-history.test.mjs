@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   BUSY_WORDS, PAGE_SIZE, SEARCH_DEBOUNCE_MS, createConversationList, createDeletionLedger, groupConversations, groupKey, groupLabel,
   keptMessage, mergePage, neighbourAfter, timeLabel,
@@ -986,4 +987,15 @@ test('a day that is 23 or 25 hours long is still one day: groups hold across day
   } finally {
     if (was === undefined) delete process.env.TZ; else process.env.TZ = was;
   }
+});
+
+// ---- round seven, final review: the search box holds no more than the server accepts -----------------------
+
+test('the search box takes at most the 100 characters the server accepts', () => {
+  const vue = readFileSync(new URL('../islands/AssistantHistory.vue', import.meta.url), 'utf8');
+  const service = readFileSync(new URL('../../../Harbora.Infrastructure/Agent/AgentConversationService.cs', import.meta.url), 'utf8');
+  const box = vue.match(/<input id="assistant-history-search"[^>]*>/s)?.[0] ?? '';
+  const limit = service.match(/public const int MaxSearchLength = (\d+);/)?.[1];
+  assert.equal(limit, '100', "the server's own limit");
+  assert.match(box, new RegExp(`maxlength="${limit}"`), 'a longer search would be refused with a 400 rather than searched');
 });
