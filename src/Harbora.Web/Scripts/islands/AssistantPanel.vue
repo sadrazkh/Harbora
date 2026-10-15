@@ -16,8 +16,8 @@ import {
   createTimeline, applyStreamEvent, applyPlanResult, applyApproveRefusal, markPlanRejected,
 } from './assistantTimeline.js';
 import {
-  activityRows, blockView, categoryIcon, formatElapsed, formatSeconds, thinkingLine, thinkingShows, toolLineMark,
-  toolLineText, toolLineTitle, trackThinking,
+  activityRows, blockView, categoryIcon, formatElapsed, formatSeconds, thinkingLine, thinkingShows, toggledChoice,
+  toolLineDetail, toolLineMark, toolLineText, toolLineTitle, trackThinking,
 } from './assistantActivity.js';
 import { checkPlanForm, buildApproveBody } from './assistantPlan.js';
 import { createAssistantSession } from './assistantSession.js';
@@ -289,7 +289,9 @@ const CATEGORY_GLYPHS: Record<string, any> = {
 const categoryGlyph = (category: string | null | undefined) => CATEGORY_GLYPHS[categoryIcon(category)] ?? Wrench;
 
 const toolText = (item: any) => toolLineText(item, fa);
-const toolTitle = (item: any) => toolLineTitle(item, fa);
+// What the server said, as a visible second line — never only in a tooltip.
+const toolDetail = (item: any) => toolLineDetail(item, fa);
+const toolTitle = (item: any) => toolLineTitle(item);
 // The state mark beside a line (spinner, check, cross, question mark), by toolLineMark's name for it.
 const toolIcon = (mark: string | null) => ({ running: LoaderCircle, done: Check, failed: X } as Record<string, any>)[mark ?? ''] ?? CircleHelp;
 const toolIconClass = (mark: string | null) => ({ running: 'text-accent-text', done: 'text-ok', failed: 'text-danger' } as Record<string, string>)[mark ?? ''] ?? 'text-ink-faint';
@@ -297,8 +299,9 @@ const toolIconClass = (mark: string | null) => ({ running: 'text-accent-text', d
 const markOf = (item: any) => toolLineMark(item, { thinkingKey: line.value?.toolKey ?? null });
 
 // The person's own open/closed choice per block, by the block's first line's key: it holds while lines
-// are added to the block and after the turn, over what the rules would say.
-const blockChoices = reactive<Record<string, boolean>>({});
+// are added to the block and after the turn, over what the rules would say — unless a failure arrives
+// after it was made (blockView), which opens the block again.
+const blockChoices = reactive<Record<string, { open: boolean; tone: string }>>({});
 const rows = computed(() => {
   const list = activityRows(timeline.items);
   return list.map((row: any, i: number) => (row.type !== 'activity' ? row : {
@@ -306,7 +309,7 @@ const rows = computed(() => {
     view: blockView(row.block, { answering: answering.value, last: i === list.length - 1, choice: blockChoices[row.key], fa }),
   }));
 });
-const toggleBlock = (row: any) => { blockChoices[row.key] = !row.view.open; };
+const toggleBlock = (row: any) => { blockChoices[row.key] = toggledChoice(row.view); };
 const activityId = (row: any) => `assistant-activity-${row.key}`;
 const blockIcon = (tone: string) => ({ working: LoaderCircle, failed: TriangleAlert, done: CheckCheck, ran: ListChecks, noted: ListChecks } as Record<string, any>)[tone] ?? CircleHelp;
 const blockIconClass = (tone: string) => ({ working: 'text-accent-text', failed: 'text-danger', done: 'text-ok' } as Record<string, string>)[tone] ?? 'text-ink-faint';
@@ -495,16 +498,20 @@ const Back = fa ? ChevronRight : ChevronLeft;
             <span class="min-w-0 flex-1" :class="row.view.tone === 'failed' ? 'font-medium text-danger' : 'text-ink-muted'" data-activity-heading>{{ row.view.heading }}</span>
             <AssistantIcon :icon="ChevronDown" :size="14" class="text-ink-faint motion-safe:transition-transform" :class="row.view.open ? 'rotate-180' : ''" />
           </button>
-          <!-- Each line: its category's icon, the tool's name for people (a failed one: what failed; a saved
-               line that is not a read: its own words), its own duration, and a small mark for its state. A
-               saved line has no mark — a stored tool message does not say whether the tool succeeded — so it
-               is never drawn as a check. -->
+          <!-- Each line: its category's icon, the tool's name for people (a line without an outcome, or
+               without a label: its own words), under it what the server said (11px; danger when it failed),
+               its own duration, and a small mark for its state — a check only where the server said "done",
+               nothing on a saved line whose outcome was not stored. -->
           <ul v-show="row.view.open" :id="activityId(row)" class="space-y-1.5 border-t border-line px-3 py-2">
             <li v-for="item in row.block.items" :key="item.key" class="flex items-start gap-2 text-sm text-ink-muted" data-tool-line
-                :data-tool-state="item.kind === 'tool' ? item.state : undefined" :data-tool-history="item.kind === 'tool-history' ? 'true' : undefined"
+                :data-tool-state="item.state || undefined" :data-tool-history="item.kind === 'tool-history' ? 'true' : undefined"
                 :data-tool-category="item.category || undefined" :title="toolTitle(item)">
               <AssistantIcon :icon="categoryGlyph(item.category)" :size="14" class="mt-[3px] text-ink-faint" />
-              <span class="min-w-0 flex-1 break-words" :class="item.state === 'failed' ? 'text-danger' : ''" :dir="textDirection(toolText(item))">{{ toolText(item) }}</span>
+              <span class="min-w-0 flex-1">
+                <span class="block break-words" :class="item.state === 'failed' && !toolDetail(item) ? 'text-danger' : ''" :dir="textDirection(toolText(item))">{{ toolText(item) }}</span>
+                <span v-if="toolDetail(item)" class="block break-words text-[11px] leading-4" :class="item.state === 'failed' ? 'text-danger' : 'text-ink-muted'"
+                      :dir="textDirection(toolDetail(item))" data-tool-detail>{{ toolDetail(item) }}</span>
+              </span>
               <span v-if="formatSeconds(item.durationMs, fa)" class="mt-0.5 shrink-0 text-[11px] text-ink-muted" data-tool-duration>{{ formatSeconds(item.durationMs, fa) }}</span>
               <AssistantIcon v-if="markOf(item)" :icon="toolIcon(markOf(item))" :size="14" :spin="markOf(item) === 'running'" class="mt-[3px]" :class="toolIconClass(markOf(item))" />
             </li>

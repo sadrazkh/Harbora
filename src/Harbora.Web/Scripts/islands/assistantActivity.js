@@ -4,14 +4,18 @@
 // result, and the thinking line that says what is happening. Plain functions, so `node --test` checks
 // every rule; AssistantPanel.vue and the two cards only draw what these return.
 //
-// Honesty first, as everywhere in this pane: a check is drawn only where the server said "done". A
-// stored tool line (tool-history) does not carry its outcome — AgentMessageView has no state — so a
-// block of stored lines says they ran, in a neutral colour, never that they succeeded.
+// Honesty first, as everywhere in this pane: a check is drawn only where the server said "done" — on a
+// live tool event, or on a stored tool message whose toolState says so. A stored line with no outcome
+// (a proposal, a refused call, an old row) is neutral, and a block of such lines is only counted.
 //
-// A label names an activity ("Deleting a database"), which is true of a read that ran and false of a
-// stored line that only proposed a write, was refused, or reports a plan's execution. Only reads that
-// ran carry a duration (S2), so a stored line is drawn by its label only when it has one; any other
-// stored line is drawn in its own words ("Proposed as step 1: delete old-db"), which say what happened.
+// The server's words are never hover-only. A line shows the tool's label as its main text and, under it,
+// what the server said (its summary, the stored text) whenever that is something else; a failed line
+// always has words there. A label names an activity ("Deleting a database"), which is true of a line
+// that ran and false of one that only proposed a write or was refused: a line without an outcome shows
+// its own words ("Proposed as step 1: delete old-db") instead.
+//
+// A server from before toolState: a stored line with a duration was a read that ran (only those were
+// timed), so it gets its label and counts as "ran" — neutral, never "done"; anything else has no outcome.
 
 import { isThinking } from './assistantTimeline.js';
 import { summarizeResult } from './assistantPlan.js';
@@ -68,26 +72,38 @@ export function toolLabel(item, fa) {
   return pickLang(fa, item?.labelEn, item?.labelFa);
 }
 
-/** A stored line of a read that ran: the only kind with a duration, and the only kind its label fits. */
-const isStoredRead = (item) => item?.kind === 'tool-history' && isDuration(item.durationMs);
+/**
+ * What a line counts as in its block: running, done, failed; `unsettled` — a live line that never got an
+ * outcome (interrupted, or a state the contract does not name); `ran` — a stored read from a server
+ * before toolState (see the top of this file); `noted` — a stored line with no outcome.
+ */
+export function lineOutcome(item) {
+  if (item?.kind === 'tool-history') {
+    if (item.state === 'done' || item.state === 'failed') return item.state;
+    return isDuration(item.durationMs) ? 'ran' : 'noted';
+  }
+  if (item?.state === 'running' || item?.state === 'done' || item?.state === 'failed') return item.state;
+  return 'unsettled';
+}
 
 /**
- * The words of one tool line. The running line reads "<label>…" and a finished one "<label>"; a failed
- * one gives the server's summary, which says what failed. The tool's identifier is the last resort,
- * for a server that sent no label. A stored line reads its label when it is a read that ran, else its
- * stored words (see the top of this file).
+ * The main words of one tool line: the label ("<label>…" while it runs) when there is one and the line
+ * has an outcome; otherwise its own words — the stored text, or for a live line from a server that sent
+ * no label, the summary and only then the tool's identifier.
  */
 export function toolLineText(item, fa) {
   const t = (en, persian) => (fa ? persian : en);
   if (item?.kind === 'tool-history') {
-    return (isStoredRead(item) && item.label) || item.text || item.label || item.toolName || '';
+    if (item.label && lineOutcome(item) !== 'noted') return item.label;
+    return item.text || item.label || item.toolName || '';
   }
   const label = toolLabel(item, fa);
+  if (label) return item.state === 'running' ? `${label}…` : label;
   const summary = pickLang(fa, item.summaryEn, item.summaryFa);
-  const name = label || item.name;
+  const name = item.name;
   switch (item.state) {
-    case 'running': return label ? `${label}…` : summary || t(`Running ${item.name}…`, `در حال اجرای ${item.name}…`);
-    case 'done': return label || summary || t(`${item.name} finished`, `${item.name} انجام شد`);
+    case 'running': return summary || t(`Running ${name}…`, `در حال اجرای ${name}…`);
+    case 'done': return summary || t(`${name} finished`, `${name} انجام شد`);
     case 'failed': return summary || t(`${name} failed`, `${name} ناموفق بود`);
     case 'interrupted': return t(`${name} — no result arrived`, `${name} — نتیجه‌ای نرسید`);
     default: return t(`${name} — outcome unknown`, `${name} — نتیجه نامشخص`);
@@ -95,25 +111,46 @@ export function toolLineText(item, fa) {
 }
 
 /**
- * The line's tooltip: what the server said that the line itself does not show (the summary behind a
- * label: "Read shop: running, 2 replicas"), else the tool's identifier for whoever wants it.
+ * The visible second line under a tool line: what the server said, when the main words are something
+ * else — the summary under a live label, the stored text under a stored label. A failed line always has
+ * words here (or in its main text); a line that never got an outcome says so. '' when there is nothing
+ * more to say.
  */
-export function toolLineTitle(item, fa) {
-  const shown = toolLineText(item, fa);
-  // A stored line shows one of its label and its words; the tooltip gives the other.
-  const detail = item?.kind === 'tool-history'
-    ? (shown === item.text ? item.label : item.text)
-    : pickLang(fa, item?.summaryEn, item?.summaryFa);
-  if (detail && detail !== shown) return detail;
+export function toolLineDetail(item, fa) {
+  const t = (en, persian) => (fa ? persian : en);
+  const main = toolLineText(item, fa);
+  let words = '';
+  if (item?.kind === 'tool-history') {
+    words = item.text || (item.state === 'failed' ? t('It failed.', 'ناموفق بود.') : '');
+  } else if (item) {
+    const summary = pickLang(fa, item.summaryEn, item.summaryFa);
+    if (!toolLabel(item, fa)) {
+      words = item.state === 'unknown' ? summary : '';
+    } else {
+      switch (item.state) {
+        case 'failed': words = summary || t('It failed.', 'ناموفق بود.'); break;
+        case 'interrupted': words = t('No result arrived.', 'نتیجه‌ای نرسید.'); break;
+        case 'unknown': words = summary || t('The outcome is not known.', 'نتیجه نامشخص است.'); break;
+        default: words = summary;
+      }
+    }
+  }
+  return words && words !== main ? words : '';
+}
+
+/** The line's tooltip: the tool's identifier, for whoever wants it. Every word the server said is visible. */
+export function toolLineTitle(item) {
   return (item?.kind === 'tool-history' ? item.toolName : item?.name) || '';
 }
 
 /**
  * The small state mark beside a line: running (a spinner), done (a check), failed (a cross), unknown
- * (a question mark — also for "no result arrived"), or null. A stored line has none: its outcome was
- * not stored. A running line the thinking line is already naming does not spin a second spinner.
+ * (a question mark — also for "no result arrived"), or null. A stored line has a check or a cross only
+ * when the server stored that outcome, and none otherwise. A running line the thinking line is already
+ * naming does not spin a second spinner.
  */
 export function toolLineMark(item, { thinkingKey = null } = {}) {
+  if (item?.kind === 'tool-history') return item.state === 'done' || item.state === 'failed' ? item.state : null;
   if (item?.kind !== 'tool') return null;
   if (item.state === 'running') return item.key === thinkingKey ? null : 'running';
   if (item.state === 'done' || item.state === 'failed') return item.state;
@@ -125,10 +162,8 @@ export function toolLineMark(item, { thinkingKey = null } = {}) {
 const isToolItem = (item) => item?.kind === 'tool' || item?.kind === 'tool-history';
 
 /**
- * The counts a block's heading is made of. `ran`: stored reads that ran, whose outcome is not known;
- * `noted`: other stored lines (a proposal, a refused call, a plan's execution, a row from before
- * durations were kept); `unsettled`: live lines that never got an outcome (interrupted, or a state the
- * contract does not name). `totalMs` only when every line has a duration — a sum with a gap in it would
+ * The counts a block's heading is made of, one per lineOutcome — stored lines with an outcome count
+ * exactly like live ones. `totalMs` only when every line has a duration — a sum with a gap in it would
  * be a smaller number than the truth.
  */
 function summarizeBlock(key, items) {
@@ -136,11 +171,7 @@ function summarizeBlock(key, items) {
   let total = 0;
   let timed = true;
   for (const item of items) {
-    if (item.kind === 'tool-history') block[isStoredRead(item) ? 'ran' : 'noted']++;
-    else if (item.state === 'running') block.running++;
-    else if (item.state === 'done') block.done++;
-    else if (item.state === 'failed') block.failed++;
-    else block.unsettled++;
+    block[lineOutcome(item)]++;
     if (isDuration(item.durationMs)) total += item.durationMs;
     else timed = false;
   }
@@ -205,62 +236,71 @@ export function activityRows(items) {
   return rows;
 }
 
+// The parts of a heading, in the order they are said: what failed first, then what was done, what got
+// no outcome, what ran with its outcome unstored, and the lines that only say something (a proposal).
+const HEADING_PARTS = [
+  ['failed', 'failed', 'ناموفق'],
+  ['done', 'done', 'انجام شد'],
+  ['unsettled', 'with no result', 'بی‌نتیجه'],
+  ['ran', 'ran', 'اجرا شد'],
+  ['noted', 'other', 'مورد دیگر'],
+];
+
+/**
+ * "3 actions done", "1 action failed, 2 done", «۱ کار ناموفق، ۲ انجام شد، ۱ مورد دیگر»: every kind of line
+ * in the block is counted, the first with the noun. A block of only noted lines is just "2 actions".
+ */
+function countsHeading(block, fa) {
+  const n = (k) => count(k, fa);
+  const actions = (k) => (k === 1 ? 'action' : 'actions');
+  const parts = HEADING_PARTS.filter(([kind]) => block[kind] > 0);
+  return parts.map(([kind, en, persian], i) => {
+    const k = block[kind];
+    if (i > 0) return fa ? `${n(k)} ${persian}` : `${n(k)} ${en}`;
+    if (kind === 'noted') return fa ? `${n(k)} کار` : `${n(k)} ${actions(k)}`;
+    return fa ? `${n(k)} کار ${persian}` : `${n(k)} ${actions(k)} ${en}`;
+  }).join(fa ? '، ' : ', ');
+}
+
 /**
  * How a block is drawn now. `answering`: a turn is being answered; `last`: the block is the last thing
- * in the log; `choice`: the person's own open/closed toggle for it, if any, which wins over the rules —
- * for the rest of the turn and after it.
- *   working  — a line is running, or the turn is still going and the block is the last thing (more
- *              tools may follow): open, "Working…" with a spinner;
- *   failed   — open, in the danger colour: "1 action failed, 2 done";
- *   unsettled — collapsed: lines that never got an outcome ("2 done, 1 with no result");
- *   noted    — collapsed, neutral: stored lines that are not all reads that ran — a proposal did not do
- *              what it proposed — so only how many ("2 actions");
- *   ran      — collapsed, neutral: stored reads, whose outcome was not stored ("3 actions ran · 2.4 s");
- *   done     — collapsed, a success check: "3 actions done · 2.4 s".
+ * in the log; `choice`: the person's own open/closed toggle for it, `{ open, tone }` (toggledChoice),
+ * which wins over the rules for the rest of the turn and after it — except that a failure arriving after
+ * it was made opens the block again: a choice made before anything failed is not a choice to hide a
+ * failure.
+ *   working   — a line is running, or the turn is still going and the block is the last thing (more
+ *               tools may follow): open, "Working…" with a spinner;
+ *   failed    — open, in the danger colour: "1 action failed, 2 done";
+ *   unsettled — collapsed: lines that never got an outcome ("1 action done, 1 with no result");
+ *   done      — collapsed, a success check: "3 actions done · 2.4 s";
+ *   ran       — collapsed, neutral: stored reads from a server before toolState ("3 actions ran · 2.4 s");
+ *   noted     — collapsed, neutral: stored lines without an outcome among them ("2 actions").
  * @returns {{ tone: string, working: boolean, heading: string, open: boolean }}
  */
 export function blockView(block, { answering = false, last = false, choice, fa = false } = {}) {
-  const t = (en, persian) => (fa ? persian : en);
-  const n = (k) => count(k, fa);
-  const actions = (k) => (k === 1 ? 'action' : 'actions');
   const total = block.items.length;
-  const duration = block.totalMs !== null && block.totalMs !== undefined ? ` · ${formatSeconds(block.totalMs, fa)}` : '';
+  const timed = block.totalMs !== null && block.totalMs !== undefined;
   let tone;
+  if (block.running > 0 || (answering && last)) tone = 'working';
+  else if (block.failed > 0) tone = 'failed';
+  else if (block.unsettled > 0) tone = 'unsettled';
+  else if (block.done === total) tone = 'done';
+  else if (block.noted > 0) tone = 'noted';
+  else tone = 'ran';
+
   let heading;
-  let open;
-  if (block.running > 0 || (answering && last)) {
-    tone = 'working';
-    heading = t('Working…', 'در حال کار…');
-    open = true;
-  } else if (block.failed > 0) {
-    tone = 'failed';
-    const done = block.done;
-    heading = done > 0
-      ? t(`${n(block.failed)} ${actions(block.failed)} failed, ${n(done)} done`, `${n(block.failed)} کار ناموفق، ${n(done)} انجام شد`)
-      : t(`${n(block.failed)} ${actions(block.failed)} failed`, `${n(block.failed)} کار ناموفق`);
-    open = true;
-  } else if (block.unsettled > 0) {
-    tone = 'unsettled';
-    const done = block.done;
-    heading = done > 0
-      ? t(`${n(done)} done, ${n(block.unsettled)} with no result`, `${n(done)} کار انجام شد، ${n(block.unsettled)} بی‌نتیجه`)
-      : t(`${n(block.unsettled)} ${actions(block.unsettled)} with no result`, `${n(block.unsettled)} کار بی‌نتیجه`);
-    open = false;
-  } else if (block.noted > 0) {
-    tone = 'noted';
-    heading = t(`${n(total)} ${actions(total)}`, `${n(total)} کار`) + duration;
-    open = false;
-  } else if (block.ran > 0) {
-    tone = 'ran';
-    heading = t(`${n(total)} ${actions(total)} ran`, `${n(total)} کار اجرا شد`) + duration;
-    open = false;
-  } else {
-    tone = 'done';
-    heading = t(`${n(total)} ${actions(total)} done`, `${n(total)} کار انجام شد`) + duration;
-    open = false;
-  }
-  if (typeof choice === 'boolean') open = choice;
+  if (tone === 'working') heading = fa ? 'در حال کار…' : 'Working…';
+  else heading = countsHeading(block, fa) + ((tone === 'done' || tone === 'ran') && timed ? ` · ${formatSeconds(block.totalMs, fa)}` : '');
+
+  let open = tone === 'working' || tone === 'failed';
+  const stale = tone === 'failed' && choice?.tone !== 'failed';
+  if (typeof choice?.open === 'boolean' && !stale) open = choice.open;
   return { tone, working: tone === 'working', heading, open };
+}
+
+/** The choice a click on a block's header records: the other state, and the tone it was made under. */
+export function toggledChoice(view) {
+  return { open: !view.open, tone: view.tone };
 }
 
 // ---- finished plan cards -------------------------------------------------------------------------
@@ -296,13 +336,17 @@ export function planCardLine(item, fa) {
 
 // ---- the thinking line ---------------------------------------------------------------------------
 
-/** The newest tool line still running in the turn being streamed, if any. */
+/**
+ * The newest tool line still running in the turn being streamed, if any — among the tool lines at the
+ * end of the log only, as isThinking looks at the last item: once text or anything else follows, that
+ * is what is being shown, not the tool.
+ */
 function runningTool(state) {
   if (!state?.streaming) return null;
   for (let i = state.items.length - 1; i >= 0; i--) {
     const item = state.items[i];
-    if (item.kind === 'user') return null;
-    if (item.kind === 'tool' && item.state === 'running') return item;
+    if (item.kind !== 'tool') return null;
+    if (item.state === 'running') return item;
   }
   return null;
 }

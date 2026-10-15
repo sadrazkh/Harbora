@@ -566,8 +566,18 @@ test('a stored tool message keeps its label, category, duration and plan', () =>
     ],
   });
   const [labelled, older] = state.items;
-  assert.deepEqual({ ...labelled }, { key: 'msg-m1', kind: 'tool-history', toolName: 'get_app', text: 'shop خوانده شد', label: 'خواندن اپ', category: 'app', durationMs: 412, planId: null });
-  assert.deepEqual([older.label, older.category, older.durationMs, older.planId], [null, null, null, null], 'an older server: no label');
+  assert.deepEqual({ ...labelled }, { key: 'msg-m1', kind: 'tool-history', toolName: 'get_app', text: 'shop خوانده شد', state: null, label: 'خواندن اپ', category: 'app', durationMs: 412, planId: null });
+  assert.deepEqual([older.label, older.category, older.durationMs, older.planId, older.state], [null, null, null, null, null], 'an older server: no label');
+});
+
+test('a stored tool message takes its outcome from toolState: done, failed, or none', () => {
+  const state = createTimeline();
+  const line = (id, toolState) => ({ id, role: 'tool', text: 'x', toolName: 'get_app', createdAt: '2026-10-15T10:00:00Z', toolState });
+  loadConversation(state, {
+    id: 'c1', title: 't', pendingPlan: null,
+    messages: [line('m1', 'done'), line('m2', 'failed'), line('m3', null), line('m4', undefined), line('m5', 'skipped'), line('m6', 'Done')],
+  });
+  assert.deepEqual(state.items.map((i) => i.state), ['done', 'failed', null, null, null, null], 'anything the contract does not name is no outcome, never "done"');
 });
 
 const HISTORY = '0199d0c4-6a1e-7000-8000-0000000000b1';
@@ -733,6 +743,22 @@ test('a plan without a result keeps the lines it wrote, and a refused one has it
   assert.deepEqual(refused.notes, ['Not run: old-db is still attached to two apps.', 'Not run: another step was refused.']);
   const rejected = state.items[6];
   assert.deepEqual([rejected.notRun, rejected.notes], [undefined, undefined], 'only a failed plan is marked so');
+});
+
+test('a refused plan drawn first (no anchor) keeps its proposal lines as lines: only execution lines are notes', () => {
+  const state = createTimeline();
+  loadConversation(state, {
+    id: 'c1', title: 't', pendingPlan: null,
+    messages: [
+      msg('m1', 'tool', 'Proposed as step 1: delete old-db', { toolName: 'delete_database', planId: HISTORY, toolState: null }),
+      msg('m2', 'assistant', 'Here is the plan.'),
+      msg('m3', 'tool', 'Not run: old-db is still attached to two apps.', { toolName: 'delete_database', planId: HISTORY, toolState: 'failed' }),
+    ],
+    plans: [decided(HISTORY, 'failed', { after: null })],
+  });
+  assert.deepEqual(state.items.map((i) => i.key), [`plan-${HISTORY}`, 'msg-m1', 'msg-m2']);
+  assert.deepEqual(state.items[0].notes, ['Not run: old-db is still attached to two apps.'], 'the proposal is not a reason');
+  assert.equal(state.items[1].text, 'Proposed as step 1: delete old-db');
 });
 
 test('a refused plan whose card goes last (its anchor is not in the view) keeps its lines as lines', () => {

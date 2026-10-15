@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  categoryIcon, formatSeconds, formatElapsed, toolLabel, toolLineText, toolLineTitle, toolLineMark,
-  activityRows, blockView, ranCompactly, ranHeading, resultLinks, planCardLine,
+  categoryIcon, formatSeconds, formatElapsed, toolLabel, toolLineText, toolLineDetail, toolLineTitle, toolLineMark, lineOutcome,
+  activityRows, blockView, toggledChoice, ranCompactly, ranHeading, resultLinks, planCardLine,
   thinkingShows, trackThinking, thinkingLine,
 } from '../islands/assistantActivity.js';
 import { createTimeline, addUserMessage, applyStreamEvent, applyPlanResult, loadConversation } from '../islands/assistantTimeline.js';
@@ -15,7 +15,7 @@ import { createTimeline, addUserMessage, applyStreamEvent, applyPlanResult, load
 const PLAN_ID = '0199d0c4-6a1e-7000-8000-0000000000aa';
 
 const live = (key, state, extra = {}) => ({ key, kind: 'tool', name: 'get_app', toolKind: 'read', state, summaryEn: null, summaryFa: null, labelEn: null, labelFa: null, category: null, durationMs: null, ...extra });
-const saved = (key, extra = {}) => ({ key, kind: 'tool-history', toolName: 'get_app', text: 'Read shop', label: null, category: null, durationMs: null, planId: null, ...extra });
+const saved = (key, extra = {}) => ({ key, kind: 'tool-history', toolName: 'get_app', text: 'Read shop', state: null, label: null, category: null, durationMs: null, planId: null, ...extra });
 const user = (key, text = 'x') => ({ key, kind: 'user', text });
 const said = (key, text = 'ok') => ({ key, kind: 'assistant', text });
 
@@ -51,19 +51,30 @@ test('every category has its icon, and anything else gets the generic wrench', (
   }
 });
 
-test('a labelled line reads "<label>…" while running, "<label>" when done, and the server\'s summary when it failed', () => {
+test('a labelled line reads "<label>…" while running and "<label>" after, whatever its outcome', () => {
   const labels = { labelEn: "Reading the deployment's logs", labelFa: 'خواندن لاگ‌های استقرار', category: 'deployment' };
   assert.equal(toolLineText(live('a', 'running', labels), false), "Reading the deployment's logs…");
   assert.equal(toolLineText(live('a', 'running', labels), true), 'خواندن لاگ‌های استقرار…');
+  for (const state of ['done', 'failed', 'interrupted', 'unknown']) {
+    assert.equal(toolLineText(live('a', state, { ...labels, summaryEn: 'No deployments yet' }), false), "Reading the deployment's logs", state);
+  }
+  assert.equal(toolLineText(live('a', 'done', labels), true), 'خواندن لاگ‌های استقرار');
+});
+
+test('under a label, the server\'s words are a visible second line — and a failed line always has words', () => {
+  const labels = { labelEn: "Reading the deployment's logs", labelFa: 'خواندن لاگ‌های استقرار' };
   const done = live('a', 'done', { ...labels, summaryEn: 'Read 40 lines', summaryFa: '۴۰ خط خوانده شد' });
-  assert.equal(toolLineText(done, false), "Reading the deployment's logs");
-  assert.equal(toolLineText(done, true), 'خواندن لاگ‌های استقرار');
+  assert.equal(toolLineDetail(done, false), 'Read 40 lines');
+  assert.equal(toolLineDetail(done, true), '۴۰ خط خوانده شد');
   const failed = live('a', 'failed', { ...labels, summaryEn: 'No deployments yet', summaryFa: 'هنوز استقراری نیست' });
-  assert.equal(toolLineText(failed, false), 'No deployments yet', 'the summary says what failed');
-  assert.equal(toolLineText(failed, true), 'هنوز استقراری نیست');
-  assert.equal(toolLineText(live('a', 'failed', labels), false), "Reading the deployment's logs failed", 'no summary: the label, not the identifier');
-  assert.equal(toolLineText(live('a', 'interrupted', labels), true), 'خواندن لاگ‌های استقرار — نتیجه‌ای نرسید');
-  assert.equal(toolLineText(live('a', 'unknown', { ...labels, summaryEn: 'Read shop' }), false), "Reading the deployment's logs — outcome unknown", 'an unnamed state never reads as its summary');
+  assert.equal(toolLineDetail(failed, true), 'هنوز استقراری نیست', 'the summary says what failed');
+  assert.equal(toolLineDetail(live('a', 'failed', labels), false), 'It failed.', 'no summary: still words');
+  assert.equal(toolLineDetail(live('a', 'failed', labels), true), 'ناموفق بود.');
+  assert.equal(toolLineDetail(live('a', 'interrupted', labels), true), 'نتیجه‌ای نرسید.');
+  assert.equal(toolLineDetail(live('a', 'unknown', { ...labels, summaryEn: 'Read shop' }), false), 'Read shop', 'an unnamed state: its words, under a label, not as a check');
+  assert.equal(toolLineDetail(live('a', 'unknown', labels), false), 'The outcome is not known.');
+  assert.equal(toolLineDetail(live('a', 'running', labels), false), '', 'nothing said yet');
+  assert.equal(toolLineDetail(live('a', 'done', { ...labels, summaryEn: "Reading the deployment's logs" }), false), '', 'never the same words twice');
 });
 
 test('an unlabelled line, from an older server, falls back to the summary and only then to the identifier', () => {
@@ -75,29 +86,50 @@ test('an unlabelled line, from an older server, falls back to the summary and on
   assert.equal(toolLineText(live('a', 'interrupted'), false), 'get_app — no result arrived');
   // One language missing: the other is used rather than nothing.
   assert.equal(toolLineText(live('a', 'done', { labelEn: 'Reading the app' }), true), 'Reading the app');
+  // The words are already the main text: no second line repeats them.
+  assert.equal(toolLineDetail(live('a', 'failed', { summaryEn: 'No deployments yet' }), false), '');
+  assert.equal(toolLineDetail(live('a', 'done', { summaryEn: 'Read shop: running' }), false), '');
+  assert.equal(toolLineDetail(live('a', 'unknown', { summaryEn: 'Read shop' }), false), 'Read shop', 'under "get_app — outcome unknown"');
 });
 
-test('a saved read that ran reads its label; any other saved line reads its own words', () => {
-  assert.equal(toolLineText(saved('s', { label: 'خواندن اپ', durationMs: 410 }), true), 'خواندن اپ');
+test('a saved line with an outcome reads its label, with the stored text visible under it', () => {
+  const read = saved('s', { label: 'خواندن اپ', text: 'shop خوانده شد: در حال اجرا', state: 'done', durationMs: 410 });
+  assert.equal(toolLineText(read, true), 'خواندن اپ');
+  assert.equal(toolLineDetail(read, true), 'shop خوانده شد: در حال اجرا', 'never hover-only');
+  const failed = saved('f', { label: 'Reading an app\'s details', text: 'App not found', state: 'failed', durationMs: 90 });
+  assert.equal(toolLineText(failed, false), "Reading an app's details");
+  assert.equal(toolLineDetail(failed, false), 'App not found', 'a stored failure says what failed');
+  assert.equal(toolLineDetail(saved('f', { label: 'Deleting a database', text: '', state: 'failed' }), true), 'ناموفق بود.', 'a failed line always has words');
+  const executed = saved('e', { toolName: 'delete_database', label: 'Deleting a database', text: 'Deleted old-db', state: 'done', planId: 'x' });
+  assert.equal(toolLineText(executed, false), 'Deleting a database', 'an execution line that ran: the label fits');
+  assert.equal(toolLineDetail(executed, false), 'Deleted old-db');
   assert.equal(toolLabel(saved('s', { label: 'خواندن اپ' }), false), 'خواندن اپ', 'the server already chose the language');
-  // A proposal, a refused call or a plan's execution line has no duration: "Deleting a database" would
-  // say it happened. Its own words say what did.
+});
+
+test('a saved line without an outcome reads its own words: "Deleting a database" would say it happened', () => {
   const proposal = saved('p', { toolName: 'delete_database', text: 'Proposed as step 1: delete old-db', label: 'Deleting a database', planId: 'x' });
   assert.equal(toolLineText(proposal, false), 'Proposed as step 1: delete old-db');
-  assert.equal(toolLineText(saved('s', { label: 'خواندن اپ' }), true), 'Read shop', 'a row from before durations were kept');
+  assert.equal(toolLineDetail(proposal, false), '', 'the words are the line');
   assert.equal(toolLineText(saved('s', { text: '', label: 'Deleting a database' }), false), 'Deleting a database', 'no words: the label');
   assert.equal(toolLineText(saved('s', { text: '' }), true), 'get_app', 'nothing else: the identifier');
 });
 
-test('the tooltip carries what the line does not show: the summary behind a label, else the identifier', () => {
-  assert.equal(toolLineTitle(saved('s', { label: 'Reading the app', durationMs: 410 }), false), 'Read shop');
-  assert.equal(toolLineTitle(saved('s', { label: 'Deleting a database' }), false), 'Deleting a database', 'the label behind the words');
-  assert.equal(toolLineTitle(saved('s'), false), 'get_app', 'the summary is already the line');
-  assert.equal(toolLineTitle(live('a', 'done', { labelEn: 'Reading the app', summaryEn: 'Read shop: running' }), false), 'Read shop: running');
-  assert.equal(toolLineTitle(live('a', 'running', { labelEn: 'Reading the app' }), false), 'get_app');
+test('a server from before toolState: a timed stored line was a read that ran — its label, its words under it', () => {
+  const read = saved('s', { label: 'خواندن اپ', durationMs: 410 });
+  assert.equal(lineOutcome(read), 'ran');
+  assert.equal(toolLineText(read, true), 'خواندن اپ');
+  assert.equal(toolLineDetail(read, true), 'Read shop');
+  assert.equal(toolLineMark(read), null, 'its outcome was not stored: no check');
+  assert.equal(lineOutcome(saved('s', { label: 'خواندن اپ' })), 'noted', 'an untimed row');
+  assert.equal(toolLineText(saved('s', { label: 'خواندن اپ' }), true), 'Read shop');
 });
 
-test('the state mark: a spinner, a check or a cross only for live lines, and none on a saved one', () => {
+test('the tooltip is only the identifier: every word the server said is on the line', () => {
+  assert.equal(toolLineTitle(saved('s', { label: 'Reading the app', state: 'done' })), 'get_app');
+  assert.equal(toolLineTitle(live('a', 'done', { labelEn: 'Reading the app', summaryEn: 'Read shop: running' })), 'get_app');
+});
+
+test('the state mark: a spinner, a check or a cross where the server said so, and none on a saved line without an outcome', () => {
   assert.equal(toolLineMark(live('a', 'running')), 'running');
   assert.equal(toolLineMark(live('a', 'running'), { thinkingKey: 'a' }), null, 'the thinking line names it: no second spinner');
   assert.equal(toolLineMark(live('a', 'running'), { thinkingKey: 'b' }), 'running');
@@ -105,7 +137,9 @@ test('the state mark: a spinner, a check or a cross only for live lines, and non
   assert.equal(toolLineMark(live('a', 'failed')), 'failed');
   assert.equal(toolLineMark(live('a', 'interrupted')), 'unknown');
   assert.equal(toolLineMark(live('a', 'unknown')), 'unknown');
-  assert.equal(toolLineMark(saved('s')), null, 'a stored line does not say whether it worked');
+  assert.equal(toolLineMark(saved('s')), null, 'a stored line without an outcome');
+  assert.equal(toolLineMark(saved('s', { state: 'done' })), 'done', 'the server stored "done"');
+  assert.equal(toolLineMark(saved('s', { state: 'failed' })), 'failed');
 });
 
 test('durations are seconds with one decimal in the panel\'s digits, and a tiny one is not rounded to zero', () => {
@@ -191,29 +225,45 @@ test('a failure keeps its block open, in the danger colour, and is counted in th
   assert.equal(blockView(only.block, { fa: true }).heading, '۲ کار ناموفق');
 });
 
-test('saved lines say they ran, never that they succeeded: a stored tool message has no outcome', () => {
+test('saved lines with an outcome count and colour exactly like live ones', () => {
+  const [done] = activityRows([saved('a', { state: 'done', durationMs: 400 }), saved('b', { state: 'done', durationMs: 2000 })]);
+  assert.deepEqual(blockView(done.block), { tone: 'done', working: false, heading: '2 actions done · 2.4 s', open: false });
+  const [failed] = activityRows([saved('a', { state: 'failed', durationMs: 90 }), saved('b', { state: 'done', durationMs: 400 })]);
+  const view = blockView(failed.block, { fa: true });
+  assert.deepEqual([view.tone, view.open, view.heading], ['failed', true, '۱ کار ناموفق، ۱ انجام شد'], 'a stored failure is open too');
+});
+
+test('saved lines from a server before toolState say they ran, never that they succeeded', () => {
   const [row] = activityRows([saved('a', { durationMs: 1200 }), saved('b', { durationMs: 1200 })]);
   const view = blockView(row.block);
   assert.equal(view.tone, 'ran');
-  assert.notEqual(view.tone, 'done');
   assert.equal(view.open, false);
   assert.equal(view.heading, '2 actions ran · 2.4 s');
   assert.equal(blockView(row.block, { fa: true }).heading, '۲ کار اجرا شد · ۲٫۴ ثانیه');
 });
 
-test('saved lines that are not all reads that ran are only counted: a proposal did not do what it proposed', () => {
-  const [row] = activityRows([saved('a', { durationMs: 640 }), saved('b', { toolName: 'delete_database', text: 'Proposed as step 1: delete old-db', planId: 'x' })]);
-  assert.deepEqual([row.block.ran, row.block.noted, row.block.totalMs], [1, 1, null], 'no total: the proposal has no duration');
-  const view = blockView(row.block);
-  assert.deepEqual([view.tone, view.heading, view.open], ['noted', '2 actions', false]);
-  assert.equal(blockView(row.block, { fa: true }).heading, '۲ کار');
+test('saved lines without an outcome are only counted, with no time — a proposal did not do what it proposed', () => {
+  const proposal = { toolName: 'delete_database', text: 'Proposed as step 1: delete old-db', planId: 'x' };
+  const [only] = activityRows([saved('a', proposal), saved('b', proposal)]);
+  assert.deepEqual([blockView(only.block).tone, blockView(only.block).heading, blockView(only.block).open], ['noted', '2 actions', false]);
+  assert.equal(blockView(only.block, { fa: true }).heading, '۲ کار');
+  // Mixed: every kind is counted, the first with the noun.
+  const [mixed] = activityRows([saved('a', { state: 'done', durationMs: 640 }), saved('b', proposal)]);
+  assert.deepEqual([mixed.block.done, mixed.block.noted, mixed.block.totalMs], [1, 1, null], 'no total: the proposal has no duration');
+  assert.deepEqual([blockView(mixed.block).tone, blockView(mixed.block).heading], ['noted', '1 action done, 1 other']);
+  assert.equal(blockView(mixed.block, { fa: true }).heading, '۱ کار انجام شد، ۱ مورد دیگر');
+  const [older] = activityRows([saved('a', { durationMs: 640 }), saved('b', proposal)]);
+  assert.equal(blockView(older.block).heading, '1 action ran, 1 other');
+  const [failedToo] = activityRows([saved('a', { state: 'failed' }), saved('b', { state: 'done' }), saved('c', proposal)]);
+  assert.equal(blockView(failedToo.block).heading, '1 action failed, 1 done, 1 other');
+  assert.equal(blockView(failedToo.block, { fa: true }).heading, '۱ کار ناموفق، ۱ انجام شد، ۱ مورد دیگر');
 });
 
 test('lines that never got an outcome are said to have none, not counted as done', () => {
   const [row] = activityRows([live('a', 'done'), live('b', 'interrupted')]);
   const view = blockView(row.block);
   assert.equal(view.tone, 'unsettled');
-  assert.equal(view.heading, '1 done, 1 with no result');
+  assert.equal(view.heading, '1 action done, 1 with no result');
   assert.equal(blockView(row.block, { fa: true }).heading, '۱ کار انجام شد، ۱ بی‌نتیجه');
   const [none] = activityRows([live('a', 'interrupted')]);
   assert.equal(blockView(none.block).heading, '1 action with no result');
@@ -221,12 +271,36 @@ test('lines that never got an outcome are said to have none, not counted as done
 
 test('the person\'s choice wins over the rules, both ways', () => {
   const [running] = activityRows([live('a', 'running')]);
-  assert.equal(blockView(running.block, { answering: true, last: true, choice: false }).open, false, 'closed while it works');
+  const working = blockView(running.block, { answering: true, last: true });
+  assert.equal(blockView(running.block, { answering: true, last: true, choice: toggledChoice(working) }).open, false, 'closed while it works');
   const [failed] = activityRows([live('a', 'failed')]);
-  assert.equal(blockView(failed.block, { choice: false }).open, false, 'a failure they have seen and folded');
+  const failing = blockView(failed.block);
+  assert.deepEqual(toggledChoice(failing), { open: false, tone: 'failed' });
+  assert.equal(blockView(failed.block, { choice: toggledChoice(failing) }).open, false, 'a failure they have seen and folded');
   const [done] = activityRows([live('a', 'done')]);
-  assert.equal(blockView(done.block, { choice: true }).open, true, 'opened after the turn');
+  assert.equal(blockView(done.block, { choice: toggledChoice(blockView(done.block)) }).open, true, 'opened after the turn');
   assert.equal(blockView(done.block, { choice: undefined }).open, false);
+});
+
+test('a failure arriving after the person folded the block opens it again', () => {
+  const state = createTimeline();
+  addUserMessage(state, 'x');
+  state.streaming = true;
+  applyStreamEvent(state, 'tool', { name: 'get_app', state: 'running', labelEn: 'Reading the app' });
+  const [first] = activityRows(state.items).filter((r) => r.type === 'activity');
+  const choice = toggledChoice(blockView(first.block, { answering: true, last: true })); // folded while it works
+  applyStreamEvent(state, 'tool', { name: 'get_app', state: 'failed', summaryEn: 'App not found' });
+  applyStreamEvent(state, 'done', { conversationId: 'c', remainingToday: 1 });
+  state.streaming = false;
+  const [after] = activityRows(state.items).filter((r) => r.type === 'activity');
+  const view = blockView(after.block, { choice });
+  assert.deepEqual([view.tone, view.open], ['failed', true], 'not hidden behind the earlier click');
+  // Folded again now that it failed: that choice holds.
+  assert.equal(blockView(after.block, { choice: toggledChoice(view) }).open, false);
+  // A block that turns done keeps a fold made while it worked.
+  const [ok] = activityRows([live('a', 'done')]);
+  assert.equal(blockView(ok.block, { choice: { open: false, tone: 'working' } }).open, false);
+  assert.equal(blockView(ok.block, { choice: { open: true, tone: 'working' } }).open, true);
 });
 
 test('the choice survives the next events of the turn: the block keeps its first line\'s key as lines are added', () => {
@@ -235,7 +309,7 @@ test('the choice survives the next events of the turn: the block keeps its first
   state.streaming = true;
   applyStreamEvent(state, 'tool', { name: 'get_app', state: 'running', labelEn: 'Reading the app', category: 'app' });
   const first = activityRows(state.items).find((r) => r.type === 'activity');
-  const choices = { [first.key]: false }; // the person folds it while it works
+  const choices = { [first.key]: toggledChoice(blockView(first.block, { answering: true, last: true })) }; // folded while it works
   applyStreamEvent(state, 'tool', { name: 'get_app', state: 'done', durationMs: 300 });
   applyStreamEvent(state, 'tool', { name: 'get_deployment', state: 'running' });
   const rows = activityRows(state.items);
@@ -248,7 +322,7 @@ test('the choice survives the next events of the turn: the block keeps its first
   state.streaming = false;
   const ended = activityRows(state.items).find((r) => r.type === 'activity');
   assert.equal(blockView(ended.block, { choice: choices[ended.key] }).open, false);
-  assert.equal(blockView(ended.block, { choice: true }).open, true);
+  assert.equal(blockView(ended.block, { choice: { open: true, tone: 'done' } }).open, true);
 });
 
 // ---- plans that ran ------------------------------------------------------------------------------
@@ -343,6 +417,17 @@ test('a running tool from an older server is named by its identifier', () => {
   assert.deepEqual([thinkingLine(state, 0).labelEn, thinkingLine(state, 0).labelFa, thinkingLine(state, 0).category], ['Running get_app…', 'در حال اجرای get_app…', null]);
 });
 
+test('a running tool with text after it is not what the thinking line names: the text is the sign of life', () => {
+  const state = createTimeline();
+  addUserMessage(state, 'x');
+  state.streaming = true;
+  applyStreamEvent(state, 'tool', { name: 'get_app', state: 'running', labelEn: 'Reading the app' });
+  applyStreamEvent(state, 'delta', { text: 'Meanwhile' });
+  assert.equal(thinkingLine(state, 0), null);
+  assert.equal(thinkingShows(state), false);
+  assert.equal(toolLineMark(state.items[1], { thinkingKey: null }), 'running', 'so the line spins itself');
+});
+
 test('no thinking line when nothing is being answered; "Thinking…" for a conversation opened mid-answer', () => {
   const state = createTimeline();
   assert.equal(thinkingLine(state, 0), null);
@@ -383,19 +468,36 @@ test('the clock starts when the line appears, runs on under a tool, and is clear
   assert.equal(thinkingLine(state, 9_500).seconds, null);
 });
 
-test('a stored conversation\'s tool lines feed the same blocks, with their labels and durations', () => {
+test('a stored conversation\'s tool lines feed the same blocks, with their labels, words, outcomes and durations', () => {
   const state = createTimeline();
+  const read = (id, tool, text, label, category, durationMs, toolState) => ({ id, role: 'tool', text, toolName: tool, createdAt: '2026-10-15T10:00:01Z', toolLabel: label, toolCategory: category, durationMs, toolState });
   loadConversation(state, {
-    id: 'c1', title: 't', pendingPlan: null,
+    id: 'c1', title: 't', pendingPlan: null, plans: [],
     messages: [
       { id: 'm1', role: 'user', text: 'how is shop?', toolName: null, createdAt: '2026-10-15T10:00:00Z' },
-      { id: 'm2', role: 'tool', text: 'shop خوانده شد', toolName: 'get_app', createdAt: '2026-10-15T10:00:01Z', toolLabel: 'خواندن اپ', toolCategory: 'app', durationMs: 400 },
-      { id: 'm3', role: 'tool', text: 'لاگ خوانده شد', toolName: 'get_deployment', createdAt: '2026-10-15T10:00:02Z', toolLabel: 'خواندن لاگ‌های استقرار', toolCategory: 'deployment', durationMs: 2000 },
+      read('m2', 'get_app', 'shop خوانده شد', 'خواندن اپ', 'app', 400, 'done'),
+      read('m3', 'get_deployment', 'هنوز استقراری نیست', 'خواندن لاگ‌های استقرار', 'deployment', 2000, 'failed'),
       { id: 'm4', role: 'assistant', text: 'shop is fine.', toolName: null, createdAt: '2026-10-15T10:00:03Z' },
     ],
   });
   const rows = activityRows(state.items);
   assert.deepEqual(rows.map((r) => r.type), ['item', 'activity', 'item']);
-  assert.equal(blockView(rows[1].block, { fa: true }).heading, '۲ کار اجرا شد · ۲٫۴ ثانیه');
-  assert.deepEqual(rows[1].block.items.map((i) => [toolLineText(i, true), categoryIcon(i.category)]), [['خواندن اپ', 'AppWindow'], ['خواندن لاگ‌های استقرار', 'Rocket']]);
+  const view = blockView(rows[1].block, { fa: true });
+  assert.deepEqual([view.tone, view.open, view.heading], ['failed', true, '۱ کار ناموفق، ۱ انجام شد']);
+  assert.deepEqual(rows[1].block.items.map((i) => [toolLineText(i, true), toolLineDetail(i, true), toolLineMark(i), categoryIcon(i.category)]), [
+    ['خواندن اپ', 'shop خوانده شد', 'done', 'AppWindow'],
+    ['خواندن لاگ‌های استقرار', 'هنوز استقراری نیست', 'failed', 'Rocket'],
+  ]);
+
+  // The same conversation from a server before toolState: reads that ran, neutral, words still visible.
+  const older = createTimeline();
+  loadConversation(older, {
+    id: 'c1', title: 't', pendingPlan: null,
+    messages: [read('m2', 'get_app', 'shop خوانده شد', 'خواندن اپ', 'app', 400, undefined), read('m3', 'get_deployment', 'لاگ خوانده شد', 'خواندن لاگ‌های استقرار', 'deployment', 2000, undefined)],
+  });
+  const [block] = activityRows(older.items);
+  assert.equal(blockView(block.block, { fa: true }).heading, '۲ کار اجرا شد · ۲٫۴ ثانیه');
+  assert.deepEqual(block.block.items.map((i) => [toolLineText(i, true), toolLineDetail(i, true), toolLineMark(i)]), [
+    ['خواندن اپ', 'shop خوانده شد', null], ['خواندن لاگ‌های استقرار', 'لاگ خوانده شد', null],
+  ]);
 });

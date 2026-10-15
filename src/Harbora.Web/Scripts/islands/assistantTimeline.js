@@ -9,7 +9,9 @@
 //
 // Tool items carry the tool's name for people and its icon group (AgentToolLabels): `tool` keeps
 // labelEn/labelFa, category and durationMs from its events; `tool-history` keeps label, category,
-// durationMs and planId from the stored message. assistantActivity.js turns them into what is drawn.
+// durationMs, planId and its outcome as `state` ("done" / "failed" from the stored message's toolState,
+// null when the server does not know it) from the stored message. assistantActivity.js turns them into
+// what is drawn.
 
 import { createPlanForm } from './assistantPlan.js';
 
@@ -62,6 +64,13 @@ function toolState(state) {
 
 const duration = (ms) => (typeof ms === 'number' && Number.isFinite(ms) && ms >= 0 ? ms : null);
 
+/**
+ * A stored tool message's outcome (AgentMessageView.ToolState): "done" or "failed" when the server knows
+ * it — a read that ran, a plan's execution line — and null otherwise (a proposal, a refused call, an old
+ * row, or a server from before the field).
+ */
+const storedState = (toolState) => (toolState === 'done' || toolState === 'failed' ? toolState : null);
+
 /** The labels, icon group and duration an event brings; what it leaves out stays as the line had it. */
 function describeTool(item, data) {
   if (data.labelEn != null) item.labelEn = data.labelEn;
@@ -109,9 +118,11 @@ function currentTurnStart(state) {
  *
  * The tool lines a plan wrote (its proposal, its execution) go only when its result card is drawn,
  * which says the same thing. A plan without a result keeps them — and one refused when it was checked
- * again gets the lines written after its card (its execution's, the only place its reason is written)
- * on the card itself as `notes`, so the reason is in view rather than inside a folded block. The pending
- * plan is last, as before.
+ * again gets its execution's lines (the only place its reason is written) on the card itself as `notes`,
+ * so the reason is in view rather than inside a folded block. Its proposal lines are never notes: they
+ * are the turn's own, at or before the card's anchor, so a line is an execution line when it comes after
+ * the anchor — or, for a card drawn first (no anchor to be after), when the server gave it an outcome,
+ * which a proposal never has. The pending plan is last, as before.
  */
 export function loadConversation(state, view) {
   state.conversationId = view?.id ?? null;
@@ -133,26 +144,27 @@ export function loadConversation(state, view) {
   }
 
   const items = [];
-  const placed = new Map(); // plan id → its card, once drawn
-  const place = (entries) => {
+  const placed = new Map(); // plan id → { card, anchored }, once drawn
+  const place = (entries, anchored) => {
     for (const entry of entries) {
       const drawn = decidedPlanItems(entry);
-      placed.set(entry.plan.id, drawn[0]);
+      placed.set(entry.plan.id, { card: drawn[0], anchored });
       items.push(...drawn);
     }
   };
-  place(leading);
+  place(leading, false);
   for (const m of messages) {
     if (m.role === 'tool') {
-      // A stored tool message carries what the tool returned to the model, not whether it worked;
-      // it is drawn neutral, never as a check. A refused plan's line after its card goes on the card; a
-      // line of a plan whose result card is drawn goes, since that card says the same.
-      const card = m.planId ? placed.get(m.planId) : null;
-      if (card?.notRun && m.text) {
-        card.notes.push(m.text);
+      // A stored tool message is drawn with the outcome the server stored for it — a check only for
+      // "done" — and neutral when it has none. A refused plan's execution line goes on its card; a line of
+      // a plan whose result card is drawn goes, since that card says the same.
+      const state = storedState(m.toolState);
+      const drawn = m.planId ? placed.get(m.planId) : null;
+      if (drawn?.card.notRun && m.text && (drawn.anchored || state !== null)) {
+        drawn.card.notes.push(m.text);
       } else if (!(m.planId && reported.has(m.planId))) {
         items.push({
-          key: `msg-${m.id}`, kind: 'tool-history', toolName: m.toolName ?? '', text: m.text ?? '',
+          key: `msg-${m.id}`, kind: 'tool-history', toolName: m.toolName ?? '', text: m.text ?? '', state,
           label: m.toolLabel ?? null, category: m.toolCategory ?? null, durationMs: duration(m.durationMs), planId: m.planId ?? null,
         });
       }
@@ -162,9 +174,9 @@ export function loadConversation(state, view) {
     }
     // After the message whether or not it was drawn: a card placed after a text-less message, or after
     // its own hidden proposal line, goes where that message would have been.
-    place(after.get(m.id) ?? []);
+    place(after.get(m.id) ?? [], true);
   }
-  place(trailing);
+  place(trailing, true);
   if (view?.pendingPlan) items.push(planItem(view.pendingPlan));
   state.items = items;
 }
@@ -356,11 +368,7 @@ export function applyStreamEvent(state, name, data) {
       // a tool still running gets no outcome and says so; and one muted line says it was stopped, in the
       // server's words. `done` still follows and settles the rest.
       closeLive(state, { cut: false });
-      const from = currentTurnStart(state);
-      for (let i = from + 1; i < state.items.length; i++) {
-        const item = state.items[i];
-        if (item.kind === 'tool' && item.state === 'running') item.state = 'interrupted';
-      }
+      interruptRunning(state);
       state.items.push({ key: nextKey('stopped'), kind: 'stopped', messageEn: data.messageEn ?? '', messageFa: data.messageFa ?? '' });
       return;
     }
@@ -447,6 +455,11 @@ export function markPlanRejected(state, planId) {
  */
 export function settleTurn(state) {
   closeLive(state, { cut: true });
+  interruptRunning(state);
+}
+
+/** This turn's tool lines still running get no outcome — "no result arrived" — never a check. */
+function interruptRunning(state) {
   const from = currentTurnStart(state);
   for (let i = from + 1; i < state.items.length; i++) {
     const item = state.items[i];
