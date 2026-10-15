@@ -22,4 +22,11 @@ public static class AgentSettingKeys
     public const string DailyRequestLimit = "assistant.agent_daily_request_limit";
 
     public const int DefaultDailyRequestLimit = 300;
+
+    /// <summary>
+    /// Conversations not used for this many days are deleted, once a day, with their messages and plans.
+    /// Blank or 0 keeps them for ever (the default). A conversation still answering, or with a plan still
+    /// executing, is never deleted. The audit trail of what the assistant did is not touched.
+    /// </summary>
+    public const string ConversationRetentionDays = "assistant.conversation_retention_days";
 }

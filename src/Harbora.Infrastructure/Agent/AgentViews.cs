@@ -12,18 +12,40 @@ public sealed record AgentStatusView(
     string? Model,
     int? RemainingToday);
 
-/// <summary>One row of <c>GET /assistant/conversations</c>.</summary>
+/// <summary>
+/// One row of <c>GET /assistant/conversations?q=&amp;skip=</c> — at most
+/// <c>AgentConversationService.ConversationListSize</c> rows a page, most recently active first; a page
+/// shorter than that is the last. <c>q</c> matches inside the title, ignoring case.
+/// </summary>
 public sealed record AgentConversationSummaryView(Guid Id, string Title, DateTimeOffset UpdatedAt);
+
+/// <summary><c>DELETE /assistant/conversations</c>: how many of this person's conversations in this
+/// workspace were deleted, and how many were kept because a turn or a plan was still running in them.</summary>
+public sealed record AgentDeleteAllView(int Deleted, int Skipped);
+
+/// <summary><c>POST /assistant/conversations/{id}/stop</c>: whether a turn was running here and has been
+/// told to stop. False when there was nothing to stop (the turn had already ended).</summary>
+public sealed record AgentStopView(bool Stopped);
 
 /// <summary>A message as the pane renders it.</summary>
 /// <param name="Role">"user", "assistant" or "tool".</param>
 /// <param name="ToolName">For "tool" messages: which tool ran.</param>
+/// <param name="ToolLabel">For "tool" messages: the tool's name for people, in the panel's language
+/// (<see cref="AgentToolLabels"/>) — "Reading the deployment's logs", never <c>get_deployment</c>.</param>
+/// <param name="ToolCategory">For "tool" messages: one of <see cref="AgentToolLabels.Categories"/>, for the icon.</param>
+/// <param name="DurationMs">For "tool" messages of a read that ran: how long it took. Null otherwise.</param>
+/// <param name="PlanId">For messages written by a plan's execution: the plan they report on. The pane
+/// hides those lines when it draws that plan's result card, which says the same thing.</param>
 public sealed record AgentMessageView(
     Guid Id,
     string Role,
     string? Text,
     string? ToolName,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    string? ToolLabel = null,
+    string? ToolCategory = null,
+    int? DurationMs = null,
+    Guid? PlanId = null);
 
 /// <summary>One step of a plan card.</summary>
 /// <param name="Kind">"safe", "dangerous" or "destructive".</param>
@@ -70,12 +92,27 @@ public sealed record AgentPlanResultView(
 /// <param name="InProgress">A turn is still being answered for this conversation — the person reloaded
 /// or came back mid-answer. The pane shows the typing indicator and reads the conversation again until
 /// this is false; the answer is saved by the server whether or not anybody is still listening.</param>
+/// <param name="Plans">Every other plan of this conversation whose proposal is among
+/// <paramref name="Messages"/> — executing, executed, failed, rejected or expired — oldest first, so a
+/// conversation reopened later still shows what was proposed and what it did. The pending plan is only
+/// in <paramref name="PendingPlan"/>, never here as well.</param>
 public sealed record AgentConversationView(
     Guid Id,
     string Title,
     IReadOnlyList<AgentMessageView> Messages,
     AgentPlanView? PendingPlan,
-    bool InProgress = false);
+    bool InProgress = false,
+    IReadOnlyList<AgentPlanHistoryView>? Plans = null);
+
+/// <summary>A decided (or executing) plan in a stored conversation, and where it goes.</summary>
+/// <param name="Result">What it did — null while it is executing, and for a plan that never ran
+/// (rejected, expired, or refused when checked again: then <see cref="AgentPlanView.Status"/> says which).</param>
+/// <param name="AfterMessageId">The id of the message in <see cref="AgentConversationView.Messages"/> the
+/// card is drawn after: the last visible message of the turn that proposed it. Null: before the first.</param>
+public sealed record AgentPlanHistoryView(
+    AgentPlanView Plan,
+    AgentPlanResultView? Result,
+    Guid? AfterMessageId);
 
 /// <summary>Body of <c>POST /assistant/conversations/{id}/messages</c>.</summary>
 public sealed record AgentSendMessageRequest(string Text, AgentPageContext? Page);
@@ -93,7 +130,8 @@ public static class AgentStreamEvents
     /// <summary><c>{ conversationId }</c> — first event; the id is new when the conversation was.</summary>
     public const string Started = "started";
 
-    /// <summary><c>{ name, kind, state: "running"|"done"|"failed", summaryEn, summaryFa }</c>.</summary>
+    /// <summary><c>{ name, kind, state: "running"|"done"|"failed", summaryEn, summaryFa, labelEn, labelFa,
+    /// category, durationMs }</c> — see <see cref="AgentToolEventData"/>.</summary>
     public const string Tool = "tool";
 
     /// <summary>
@@ -115,6 +153,14 @@ public static class AgentStreamEvents
 
     /// <summary><c>{ messageEn, messageFa }</c>.</summary>
     public const string Error = "error";
+
+    /// <summary>
+    /// <c>{ messageEn, messageFa }</c> — the person pressed Stop (<c>POST …/stop</c>) and the turn ended
+    /// there. Not a failure: what was written so far was saved (as a <see cref="Message"/> sent just
+    /// before this), and a plan already claimed for execution was not interrupted. <see cref="Done"/>
+    /// still follows.
+    /// </summary>
+    public const string Stopped = "stopped";
 
     /// <summary><c>{ conversationId, remainingToday }</c> — always last.</summary>
     public const string Done = "done";

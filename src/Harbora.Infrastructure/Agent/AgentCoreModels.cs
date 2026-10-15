@@ -24,7 +24,13 @@ public sealed record AgentStartedData(Guid ConversationId);
 
 /// <summary>Data of <see cref="AgentStreamEvents.Tool"/>. <paramref name="State"/> is "running",
 /// "done" or "failed"; <paramref name="Kind"/> is <see cref="AgentConsentPolicy.KindLabel"/>.</summary>
-public sealed record AgentToolEventData(string Name, string Kind, string State, string? SummaryEn, string? SummaryFa);
+/// <param name="LabelEn">The tool's name for people (<see cref="AgentToolLabels"/>), on every state —
+/// the running line reads "Reading the deployment's logs…", not the tool's identifier.</param>
+/// <param name="Category">One of <see cref="AgentToolLabels.Categories"/>, for the icon.</param>
+/// <param name="DurationMs">On "done" and "failed": how long the tool ran. Null on "running".</param>
+public sealed record AgentToolEventData(
+    string Name, string Kind, string State, string? SummaryEn, string? SummaryFa,
+    string? LabelEn = null, string? LabelFa = null, string? Category = null, int? DurationMs = null);
 
 /// <summary>Data of <see cref="AgentStreamEvents.Delta"/>: the next piece of the model's text.</summary>
 public sealed record AgentDeltaData(string Text);
