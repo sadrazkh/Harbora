@@ -45,10 +45,20 @@ public sealed class AgentPlanStartupReconcilerTests : IDisposable
     private static AgentPlanStep Step(int index, string tool) =>
         new(index, tool, AgentToolKind.SafeWrite, "{}", $"call_{index}", $"Run {tool}", $"اجرای {tool}", null, null, [], [], null, false);
 
+    /// <summary>When the conversations here were last used: long before the restart, as a plan cut off by one is.</summary>
+    private static readonly DateTimeOffset LastUsed = AgentHarness.Start - TimeSpan.FromDays(20);
+
     /// <summary>A conversation with a plan claimed and executing, and an audit entry for each step that "ran".</summary>
-    private async Task<(Guid Conversation, Guid Plan)> ExecutingAsync(int steps, params (int Index, bool Ok, string Action)[] ran)
+    private Task<(Guid Conversation, Guid Plan)> ExecutingAsync(int steps, params (int Index, bool Ok, string Action)[] ran) =>
+        ExecutingAsync(steps, ran.Select(r => (r.Index, r.Ok, r.Action, At: AgentHarness.Start + TimeSpan.FromSeconds(1 + r.Index))).ToArray());
+
+    /// <summary>The same, with when each audit entry was written: the plan was claimed at <see cref="AgentHarness.Start"/>.</summary>
+    private async Task<(Guid Conversation, Guid Plan)> ExecutingAsync(int steps, (int Index, bool Ok, string Action, DateTimeOffset At)[] ran)
     {
-        var conversation = new AgentConversation { WorkspaceId = _h.WorkspaceId, UserId = _h.UserId, Title = "deploy the shop" };
+        var conversation = new AgentConversation
+        {
+            WorkspaceId = _h.WorkspaceId, UserId = _h.UserId, Title = "deploy the shop", CreatedAt = LastUsed, UpdatedAt = LastUsed
+        };
         var plan = new AgentPlan
         {
             WorkspaceId = _h.WorkspaceId, UserId = _h.UserId, ConversationId = conversation.Id, Status = AgentPlanStatus.Executing,
@@ -57,11 +67,11 @@ public sealed class AgentPlanStartupReconcilerTests : IDisposable
         };
         _h.Db.AgentConversations.Add(conversation);
         _h.Db.AgentPlans.Add(plan);
-        foreach (var (index, ok, action) in ran)
+        foreach (var (index, ok, action, at) in ran)
             _h.Db.AuditLogs.Add(new AuditLog
             {
                 Action = action, ActorEmail = "person@example.com", TargetType = "agent_plan", TargetId = plan.Id.ToString(),
-                WorkspaceId = _h.WorkspaceId,
+                WorkspaceId = _h.WorkspaceId, CreatedAt = at,
                 MetadataJson = JsonSerializer.Serialize(new { conversationId = conversation.Id, planId = plan.Id, step = index + 1, stepIndex = index, tool = $"tool_{index}", ok })
             });
         await _h.Db.SaveChangesAsync();
@@ -91,7 +101,11 @@ public sealed class AgentPlanStartupReconcilerTests : IDisposable
         result.Steps.Select(s => s.State).Should().Equal("done", "failed", "skipped");
         result.Steps[1].ErrorEn.Should().Be("The panel restarted while this plan was running — check the resource before trying again.");
         result.Steps[1].ErrorFa.Should().Be("پنل هنگام اجرای این برنامه دوباره راه‌اندازی شد — پیش از تلاش دوباره، منبع را بررسی کنید.");
-        result.Steps[2].ErrorEn.Should().Be(AgentPlanService.PanelRestartedEn);
+        // The step after it did not run, so — like every skipped step — the reason is its summary, not an error.
+        result.Steps[2].SummaryEn.Should().Be(AgentPlanService.PanelRestartedEn);
+        result.Steps[2].SummaryFa.Should().Be(AgentPlanService.PanelRestartedFa);
+        result.Steps[2].ErrorEn.Should().BeNull();
+        result.Steps[2].ErrorFa.Should().BeNull();
 
         // The conversation is told, so the next turn knows the plan did not finish.
         using (var db = _h.NewContext())
@@ -153,6 +167,47 @@ public sealed class AgentPlanStartupReconcilerTests : IDisposable
         cut.Steps.Single().State.Should().Be("failed");
         cut.Steps.Single().ErrorEn.Should().Be(AgentPlanService.PanelRestartedEn);
         Stored(nothingRan).Status.Should().Be(AgentPlanStatus.Failed);
+    }
+
+    [Fact]
+    public async Task Settling_a_plan_does_not_move_its_conversation_up_the_list_or_restart_its_retention_clock()
+    {
+        var (conversationId, planId) = await ExecutingAsync(2, (0, true, AgentPlanService.StepExecutedAction));
+        _h.Clock.UtcNow = AgentHarness.Start + TimeSpan.FromDays(3); // the restart, days later
+
+        (await Reconciler().ReconcileAsync(default)).Should().Be(1);
+
+        using var db = _h.NewContext();
+        var conversation = await db.AgentConversations.IgnoreQueryFilters().AsNoTracking().SingleAsync(c => c.Id == conversationId);
+        conversation.UpdatedAt.Should().Be(LastUsed, "nobody used the conversation: the panel only wrote down what the restart cut off");
+        (await db.AgentMessages.IgnoreQueryFilters().CountAsync(m => m.PlanId == planId)).Should().BeGreaterThan(0,
+            "the conversation is still told, so the next turn knows");
+    }
+
+    [Fact]
+    public void The_audit_read_is_bounded_below_by_the_claim_so_the_CreatedAt_index_carries_it()
+    {
+        using var db = new HarboraDbContext(new DbContextOptionsBuilder<HarboraDbContext>()
+            .UseNpgsql("Host=unused;Database=unused;Username=unused;Password=unused").Options);
+        var plan = new AgentPlan { ConversationId = Guid.NewGuid(), StepsJson = "[]", DecidedAt = AgentHarness.Start };
+
+        var sql = AgentPlanService.StepEntriesOf(db, plan).ToQueryString();
+
+        sql.Should().Contain("\"CreatedAt\" >=", "only entries written since the run was claimed are read");
+        sql.Should().Contain("\"TargetId\" =");
+    }
+
+    [Fact]
+    public async Task An_entry_from_before_the_claim_is_not_the_runs_own()
+    {
+        // The bound is the claim: an entry dated before it cannot have been written by this run's steps.
+        var (_, planId) = await ExecutingAsync(1, [(0, true, AgentPlanService.StepExecutedAction, AgentHarness.Start - TimeSpan.FromMinutes(1))]);
+
+        await Reconciler().ReconcileAsync(default);
+
+        var result = AgentPlanService.ResultOf(Stored(planId))!;
+        result.Steps.Single().State.Should().Be("failed", "nothing this run wrote says the step finished");
+        result.Steps.Single().ErrorEn.Should().Be(AgentPlanService.PanelRestartedEn);
     }
 
     [Fact]

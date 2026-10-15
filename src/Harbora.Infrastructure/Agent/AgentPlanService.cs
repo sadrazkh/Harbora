@@ -640,13 +640,8 @@ public sealed class AgentPlanService(
         var recorded = (AgentJson.Deserialize<List<AgentPlanStepResultView>>(plan.ResultsJson) ?? [])
             .GroupBy(r => r.Index).ToDictionary(g => g.Key, g => g.First());
 
-        // The audit entry of a step under a support or sign-in-token session carries a prefix; it is still the step's.
-        var planId = plan.Id.ToString();
         var audited = new Dictionary<int, bool>();
-        foreach (var metadata in await db.AuditLogs.IgnoreQueryFilters().AsNoTracking()
-                     .Where(a => a.TargetId == planId && a.Action.EndsWith(StepExecutedAction))
-                     .Select(a => a.MetadataJson)
-                     .ToListAsync(ct))
+        foreach (var metadata in await StepEntriesOf(db, plan).ToListAsync(ct))
         {
             if (StepEntry(metadata) is { } entry) audited[entry.Index] = audited.GetValueOrDefault(entry.Index) || entry.Ok;
         }
@@ -665,8 +660,9 @@ public sealed class AgentPlanService(
             }
             else if (after is StepEnd.CutOff)
             {
-                results.Add(new(step.Index, "skipped", null, null, PanelRestartedEn, PanelRestartedFa, []));
-                outcomes.Add(Outcome(step, "skipped", PanelRestartedEn, PanelRestartedFa, error: PanelRestartedEn));
+                // Skipped, so the restart's words are its summary — as every skipped step's reason is — not an error.
+                results.Add(Skipped(step.Index, PanelRestartedEn, PanelRestartedFa));
+                outcomes.Add(Outcome(step, "skipped", PanelRestartedEn, PanelRestartedFa));
             }
             else if (recorded.TryGetValue(step.Index, out var kept))
             {
@@ -699,9 +695,26 @@ public sealed class AgentPlanService(
         plan.ResultsJson = AgentJson.Serialize(results);
         // Set, so the result is shown: a step was running, and what it did is exactly what the person must check.
         plan.ExecutedAt = now;
-        // No vault survives a restart, so there are no held values left to scrub by.
-        await AddOutcomeMessagesAsync(db, plan, outcomes, [], now, ct);
+        // No vault survives a restart, so there are no held values left to scrub by. Nobody did anything in
+        // the conversation just now, so it is not touched: settling an old plan must neither lift its
+        // conversation to the top of the list nor restart its retention clock.
+        await AddOutcomeMessagesAsync(db, plan, outcomes, [], now, touch: false, ct);
         await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// The <c>assistant.step_executed</c> entries of one plan's run, as their metadata. An entry under a support
+    /// or sign-in-token session carries a prefix; it is still the step's. Bounded below by when the run was
+    /// claimed (a plan is claimed before any of its steps can write one), so the read walks the audit log's
+    /// <c>CreatedAt</c> index from there instead of the whole table.
+    /// </summary>
+    internal static IQueryable<string?> StepEntriesOf(HarboraDbContext db, AgentPlan plan)
+    {
+        var planId = plan.Id.ToString();
+        var since = plan.DecidedAt ?? plan.CreatedAt;
+        return db.AuditLogs.IgnoreQueryFilters().AsNoTracking()
+            .Where(a => a.TargetId == planId && a.Action.EndsWith(StepExecutedAction) && a.CreatedAt >= since)
+            .Select(a => a.MetadataJson);
     }
 
     /// <summary>Why the steps after one did not run, in the startup pass.</summary>
@@ -1024,12 +1037,14 @@ public sealed class AgentPlanService(
     /// <see cref="FinishAsync"/> can write them in the same save as the plan's own result.</summary>
     private Task AddOutcomeMessagesAsync(
         AgentPlan plan, IReadOnlyList<StepOutcome> outcomes, IReadOnlyList<string> known, DateTimeOffset now, CancellationToken ct) =>
-        AddOutcomeMessagesAsync(db, plan, outcomes, known, now, ct);
+        AddOutcomeMessagesAsync(db, plan, outcomes, known, now, touch: true, ct);
 
-    /// <summary>The same, on a context of the caller's — for the startup pass, which has no service.</summary>
+    /// <summary>The same, on a context of the caller's — for the startup pass, which has no service.
+    /// <paramref name="touch"/>: whether the conversation moves to the top of the list, as it does for anything
+    /// that happens in it now (the startup pass says why it does not there).</summary>
     private static async Task AddOutcomeMessagesAsync(
         HarboraDbContext db, AgentPlan plan, IReadOnlyList<StepOutcome> outcomes, IReadOnlyList<string> known,
-        DateTimeOffset now, CancellationToken ct)
+        DateTimeOffset now, bool touch, CancellationToken ct)
     {
         if (outcomes.Count == 0) return;
 
@@ -1079,7 +1094,7 @@ public sealed class AgentPlanService(
             });
         }
 
-        await AgentConversationLog.TouchAsync(db, plan.ConversationId, now, ct);
+        if (touch) await AgentConversationLog.TouchAsync(db, plan.ConversationId, now, ct);
     }
 
     /// <summary>
