@@ -161,10 +161,16 @@
   box-shadow: 0 10px 40px rgb(16 12 40 / .14);
   visibility: hidden;
   transform: translateX(100%);
-  transition: transform .2s ease, visibility 0s linear .2s;
+  transition: transform .2s ease, visibility 0s linear .2s, width .2s ease;
 }
 html[dir="rtl"] .assistant-drawer { transform: translateX(-100%); }
-html[dir] .assistant-drawer.is-open { visibility: visible; transform: none; transition: transform .2s ease, visibility 0s; }
+html[dir] .assistant-drawer.is-open { visibility: visible; transform: none; transition: transform .2s ease, visibility 0s, width .2s ease; }
+/* Round seven P3 — the wide drawer (the header's widen button; Scripts/assistantDrawer.js adds `is-wide`): about 40 rem, and
+   never more than the box it sits in, which is the page beside the main menu, not the whole window. On a
+   phone the drawer is the whole screen already, so this applies from 640 px up. */
+@media (min-width: 640px) {
+  .assistant-drawer.is-wide { width: min(40rem, 100%); }
+}
 @media (max-width: 639px) {
   .assistant-drawer { position: fixed; inset: 0; z-index: 60; width: 100%; border-inline-start: 0; }
 }

@@ -23,6 +23,10 @@ import {
 
 const OUTBOX_LIFETIME_MS = 60 * 60 * 1000;
 
+// After Stop, a conversation only being followed (no stream in this tab) is read again this soon: long
+// enough for the server to have saved what was written and ended the turn, far shorter than a poll.
+const STOP_REREAD_MS = 400;
+
 const MAYBE_UNSENT = {
   kind: 'restored',
   messageEn: 'Your last message may not have reached the assistant before the page changed. It is back in the box below — send it again if it is not in the conversation.',
@@ -127,6 +131,7 @@ export function createAssistantSession({
   const turns = createTurnTracker();
   const clock = timers ?? { setTimeout: globalThis.setTimeout.bind(globalThis), clearTimeout: globalThis.clearTimeout.bind(globalThis) };
   let reread = null;
+  let stopping = null;
   const poller = createResumePoller({
     load: (id) => api.conversation(id),
     onUpdate: (view) => {
@@ -466,6 +471,39 @@ export function createAssistantSession({
           // Nothing more to do; the next open reads it again.
         }
       }, delayMs);
+    },
+
+    /**
+     * The Stop button: asks the server to end the turn in progress in this conversation
+     * (`POST …/{id}/stop`). Resolves to `{ stopped }`, or `{ stopped: false, error }` — the error is
+     * also the composer's notice. Pressed again while the first is in flight, it is the same request.
+     *
+     * A turn streaming in this tab ends by itself: its `stopped` and `done` events arrive on the
+     * stream that is already open, and drawing them is the timeline's job. A conversation only being
+     * followed after a reload (`resuming`) has no stream here, just the poller — so once the server
+     * has answered, it is read again promptly instead of when the next poll comes round.
+     * `stopped: false` ("it had already finished") is no error and says nothing; a tab that was only
+     * following still reads the conversation, which shows the finished answer.
+     */
+    stop() {
+      if (stopping) return stopping;
+      const conversationId = timeline.conversationId;
+      if (!conversationId || !(timeline.streaming || timeline.resuming)) return Promise.resolve({ stopped: false });
+      const following = !timeline.streaming;
+      stopping = (async () => {
+        try {
+          const outcome = await api.stop(conversationId);
+          if (following && timeline.conversationId === conversationId) session.rereadSoon(STOP_REREAD_MS);
+          return { stopped: outcome?.stopped === true };
+        } catch (error) {
+          if (timeline.conversationId === conversationId) timeline.notice = { kind: 'stop-failed', ...wordsOf(error) };
+          onChange('stop-failed');
+          return { stopped: false, error };
+        } finally {
+          stopping = null;
+        }
+      })();
+      return stopping;
     },
 
     /** The drawer closed: stop re-reading (the island stays mounted). */

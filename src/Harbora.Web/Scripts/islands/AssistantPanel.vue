@@ -24,7 +24,8 @@ import { checkPlanForm, buildApproveBody } from './assistantPlan.js';
 import { createAssistantSession } from './assistantSession.js';
 import { createSecretBook, createSecretForm, looksLikeSecret, withoutSecrets } from './assistantSecrets.js';
 import AssistantSecretText from './AssistantSecretText.vue';
-import { createAssistantPrefs } from '../assistantDrawer.js';
+import { MoveHorizontal, Square } from 'lucide';
+import { createAssistantPrefs, EVENT_TOGGLE_WIDE, EVENT_WIDTH } from '../assistantDrawer.js';
 
 // The assistant pane: status, conversations, the message stream, plan and result cards.
 //
@@ -222,6 +223,30 @@ function onComposerKey(event: KeyboardEvent) {
   }
 }
 
+// ---- stopping an answer and widening the drawer ---------------------------------------------------
+// While an answer is coming the Send button is a Stop button. session.stop() does the asking (and puts a
+// failure in the composer's notice); this keeps the button from being pressed twice while it waits. Enter
+// in the composer only ever sends — it cannot reach this.
+const stopping = ref(false);
+
+async function stopAnswer() {
+  if (stopping.value) return;
+  stopping.value = true;
+  try {
+    await session.stop();
+  } finally {
+    stopping.value = false;
+  }
+  // The Stop button is about to be Send again; the keyboard focus goes to the box rather than nowhere.
+  focusComposer();
+}
+
+// The drawer around this pane owns its width (assistantDrawer.js): the header button asks it to toggle,
+// and it says what the width is — when the island has just mounted, and whenever it changes.
+const wide = ref(false);
+const onWidth = (event: Event) => { wide.value = (event as CustomEvent).detail?.wide === true; };
+const toggleWide = () => document.dispatchEvent(new CustomEvent(EVENT_TOGGLE_WIDE));
+
 function useSuggestion(text: string) {
   draft.value = text;
   focusComposer();
@@ -364,6 +389,7 @@ onMounted(async () => {
   refreshStatus();
   document.addEventListener('harbora:assistant-opened', onOpened);
   document.addEventListener('harbora:assistant-closed', onClosed);
+  document.addEventListener(EVENT_WIDTH, onWidth);
   if (props.autofocus) focusComposer();
   // The remembered conversation (the person's own message shows at once, and a turn still being
   // answered is followed to its end), and any words that were on their way when the page went. A
@@ -381,6 +407,7 @@ onUnmounted(() => {
   secretForm.close();
   document.removeEventListener('harbora:assistant-opened', onOpened);
   document.removeEventListener('harbora:assistant-closed', onClosed);
+  document.removeEventListener(EVENT_WIDTH, onWidth);
   session.dispose();
 });
 
@@ -411,6 +438,14 @@ const suggestions = fa
           </template>
         </div>
       </div>
+      <!-- Hidden on a phone, where the drawer is the whole screen already. The label stays "Wider" and
+           aria-pressed says whether it is on; the tooltip names what the next press does. -->
+      <button type="button" class="hidden rounded-lg p-1.5 text-ink-muted hover:bg-surface-2 hover:text-ink sm:block"
+              :class="wide ? 'bg-surface-2 text-ink' : ''" :aria-pressed="wide"
+              :title="wide ? t('Narrower', 'باریک‌تر') : t('Wider', 'پهن‌تر')" :aria-label="t('Wider', 'پهن‌تر')"
+              data-assistant-wide @click="toggleWide">
+        <AssistantIcon :icon="MoveHorizontal" />
+      </button>
       <button type="button" class="rounded-lg p-1.5 text-ink-muted hover:bg-surface-2 hover:text-ink disabled:opacity-40"
               :class="view === 'history' ? 'bg-surface-2 text-ink' : ''" :aria-pressed="view === 'history'"
               :title="t('Conversations', 'گفت‌وگوها')" :aria-label="t('Conversations', 'گفت‌وگوها')"
@@ -622,9 +657,17 @@ const suggestions = fa
                 data-assistant-lock @click="secretForm.state.open ? closeSecretForm() : openSecretForm()">
           <AssistantIcon :icon="Lock" />
         </button>
-        <button type="submit" class="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-accent text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
+        <!-- While an answer is coming the Send button is Stop. A button of its own (not the submit button
+             with another label), so that nothing which submits the form can ever stop an answer. -->
+        <button v-if="answering" key="stop" type="button"
+                class="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-danger/40 px-2.5 text-sm font-medium text-danger hover:bg-danger-soft disabled:cursor-wait"
+                :disabled="stopping" :aria-busy="stopping ? 'true' : undefined"
+                :aria-label="t('Stop the answer', 'توقف پاسخ')" :title="t('Stop the answer', 'توقف پاسخ')" data-assistant-stop @click="stopAnswer">
+          <AssistantIcon :icon="stopping ? LoaderCircle : Square" :size="14" :spin="stopping" />{{ t('Stop', 'توقف') }}
+        </button>
+        <button v-else key="send" type="submit" class="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-accent text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
                 :disabled="!canSend" :aria-label="t('Send', 'ارسال')" :title="t('Send', 'ارسال')" data-assistant-send>
-          <AssistantIcon :icon="answering ? LoaderCircle : ArrowUp" :spin="answering" />
+          <AssistantIcon :icon="ArrowUp" />
         </button>
       </div>
       <p class="mt-1.5 px-1 text-[11px] text-ink-muted">{{ t('Enter to send · Shift+Enter for a new line · Ctrl+J to open or close', 'Enter برای ارسال · Shift+Enter برای خط تازه · Ctrl+J برای باز و بسته کردن') }}</p>

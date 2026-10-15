@@ -305,6 +305,11 @@ export function createAssistantApi({ fetch: fetchImpl = globalThis.fetch?.bind(g
     conversation: (id) => json('GET', `/conversations/${encodeURIComponent(id)}`),
     approve: (planId, body) => json('POST', `/plans/${encodeURIComponent(planId)}/approve`, body),
     reject: (planId) => json('POST', `/plans/${encodeURIComponent(planId)}/reject`),
+    /**
+     * `POST /assistant/conversations/{id}/stop` → AgentStopView `{ stopped }`: whether a turn was running
+     * there and has been told to stop. `false` is not a failure — the turn had already ended.
+     */
+    stop: (conversationId) => json('POST', `/conversations/${encodeURIComponent(conversationId)}/stop`),
 
     /**
      * Sends one message and reports the stream through `onEvent(name, data)` as it arrives. Never

@@ -1,5 +1,5 @@
-// The assistant drawer: open/close, the topbar toggle, Ctrl/Cmd+J, Escape, and remembering
-// open/closed and the current conversation across page loads.
+// The assistant drawer: open/close, the topbar toggle, Ctrl/Cmd+J, Escape, its width (normal or wide),
+// and remembering open/closed, wide/normal and the current conversation across page loads.
 //
 // The drawer itself is Razor (`_Layout.cshtml`, `#assistant-panel`, rendered only when the
 // workspace is entitled to the assistant). The Vue island inside it is a chunk of its own, loaded
@@ -12,6 +12,14 @@
 export const STORAGE_OPEN = 'harbora-assistant-open';
 export const STORAGE_CONVERSATION = 'harbora-assistant-conversation';
 export const STORAGE_OUTBOX = 'harbora-assistant-outbox';
+export const STORAGE_WIDE = 'harbora-assistant-wide';
+
+// The wide button lives in the island's header, but the width belongs to the drawer around it (a class
+// on #assistant-panel, see app.css). They talk by events on the document, like open and close do: the
+// island asks, the drawer decides and says what the width now is — also once the island has mounted,
+// since the drawer may have been painted wide before there was an island to hear it.
+export const EVENT_TOGGLE_WIDE = 'harbora:assistant-toggle-wide';
+export const EVENT_WIDTH = 'harbora:assistant-width';
 
 /**
  * localStorage, made safe to call: in a private window or with a full quota the Storage methods
@@ -35,6 +43,9 @@ export function createAssistantPrefs(storage) {
   return {
     isOpen: () => attempt(() => storage?.getItem(STORAGE_OPEN) === '1', false),
     setOpen: (open) => attempt(() => storage?.setItem(STORAGE_OPEN, open ? '1' : '0')),
+    /** The wide drawer (about 40 rem) instead of the normal one. Off until somebody turns it on. */
+    isWide: () => attempt(() => storage?.getItem(STORAGE_WIDE) === '1', false),
+    setWide: (wide) => attempt(() => storage?.setItem(STORAGE_WIDE, wide ? '1' : '0')),
     conversationId: () => attempt(() => storage?.getItem(STORAGE_CONVERSATION) || null, null),
     setConversationId: (id) => attempt(() => (id
       ? storage?.setItem(STORAGE_CONVERSATION, id)
@@ -77,16 +88,19 @@ export function createAssistantPrefs(storage) {
  *   prefs: ReturnType<typeof createAssistantPrefs>,
  *   onOpen?: () => void,
  *   onClose?: () => void,
+ *   onWidth?: (wide: boolean) => void,
  *   isCompact?: () => boolean,
  * }} deps
  *   `isCompact`: whether the drawer is the whole screen right now (a phone; below 640 px).
  */
-export function createAssistantDrawer({ panel, toggles = [], prefs, onOpen, onClose, isCompact = () => false }) {
+export function createAssistantDrawer({ panel, toggles = [], prefs, onOpen, onClose, onWidth, isCompact = () => false }) {
   let open = false;
+  let wide = false;
 
   function paint() {
     panel.classList.toggle('is-open', open);
     panel.setAttribute('aria-hidden', open ? 'false' : 'true');
+    panel.classList.toggle('is-wide', wide);
     for (const toggle of toggles) toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
   }
 
@@ -99,17 +113,31 @@ export function createAssistantDrawer({ panel, toggles = [], prefs, onOpen, onCl
     else onClose?.();
   }
 
-  return {
+  const drawer = {
     open: () => set(true),
     close: () => set(false),
     toggle: () => set(!open),
     isOpen: () => open,
+    isWide: () => wide,
+    /**
+     * Wide or normal, remembered. Kept as a setting even where the button is hidden (a phone, where the
+     * drawer is the whole screen already), so the choice is still there on a wider screen.
+     */
+    setWide(next) {
+      if (next === wide) return;
+      wide = next;
+      paint();
+      prefs.setWide(wide);
+      onWidth?.(wide);
+    },
+    toggleWide: () => drawer.setWide(!wide),
     /**
      * Paints the remembered state on page load; opening it there counts as an open. Not on a phone:
      * there the drawer is the whole screen, and reopening it on every load would put it over every
      * page the person goes to — including the one a result card's link just took them to.
      */
     restore() {
+      wide = prefs.isWide();
       open = prefs.isOpen() && !isCompact();
       paint();
       if (open) onOpen?.();
@@ -122,6 +150,7 @@ export function createAssistantDrawer({ panel, toggles = [], prefs, onOpen, onCl
       if (isCompact()) set(false);
     },
   };
+  return drawer;
 }
 
 /**
@@ -172,7 +201,7 @@ export function initAssistantDrawer(panel, mountIsland, env = {}) {
     if (!mounted) {
       panel.querySelector('[data-assistant-loading]')?.removeAttribute('hidden');
       panel.querySelector('[data-assistant-load-failed]')?.setAttribute('hidden', '');
-      mounted = mountIsland(host ?? panel, { close, focus }).catch(() => {
+      mounted = mountIsland(host ?? panel, { close, focus }).then(announceWidth).catch(() => {
         // The chunk did not load (offline, a bad deploy). Say so in the drawer instead of leaving
         // "Loading…" up for ever, and let the next open try again.
         panel.querySelector('[data-assistant-loading]')?.setAttribute('hidden', '');
@@ -183,6 +212,11 @@ export function initAssistantDrawer(panel, mountIsland, env = {}) {
     }
     // Already mounted: the island refreshes its status (and focuses the composer) on this signal.
     mounted.then(() => doc.dispatchEvent(new CustomEvent('harbora:assistant-opened', { detail: { focus } })));
+  }
+
+  // Tells the island, which draws the wide button, what the width is — now, and whenever it changes.
+  function announceWidth() {
+    doc.dispatchEvent(new CustomEvent(EVENT_WIDTH, { detail: { wide: drawer.isWide() } }));
   }
 
   // Closing only hides the pane; the island hears it so it can stop re-reading a conversation that
@@ -197,6 +231,7 @@ export function initAssistantDrawer(panel, mountIsland, env = {}) {
     prefs: createAssistantPrefs(storage),
     onOpen,
     onClose,
+    onWidth: announceWidth,
     isCompact,
   });
 
@@ -213,6 +248,9 @@ export function initAssistantDrawer(panel, mountIsland, env = {}) {
       toggleByPerson();
     });
   }
+
+  // The island's wide button.
+  doc.addEventListener(EVENT_TOGGLE_WIDE, () => drawer.toggleWide());
 
   // A plain left click on a link in the drawer (a result card's "open the database"): on a phone,
   // close before the navigation, so the next page is not covered. Modified clicks open elsewhere.
