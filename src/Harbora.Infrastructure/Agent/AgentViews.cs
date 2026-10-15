@@ -100,6 +100,12 @@ public sealed record AgentPlanResultView(
 /// <paramref name="Messages"/> — executing, executed, failed, rejected or expired — oldest first, so a
 /// conversation reopened later still shows what was proposed and what it did. The pending plan is only
 /// in <paramref name="PendingPlan"/>, never here as well.</param>
+/// <remarks>
+/// What a Stop leaves is stored as an ordinary assistant message: the text written so far, with nothing to
+/// say it was cut short. So a reopened conversation shows that text, and the steps the turn had proposed as
+/// an expired plan (<paramref name="Plans"/>), but not the "You stopped this answer." line the live stream
+/// drew from its <see cref="AgentStreamEvents.Stopped"/> event — no column records that a turn was stopped.
+/// </remarks>
 public sealed record AgentConversationView(
     Guid Id,
     string Title,
@@ -148,7 +154,12 @@ public static class AgentStreamEvents
     /// <summary>An <see cref="AgentMessageView"/> — the model's text.</summary>
     public const string Message = "message";
 
-    /// <summary>An <see cref="AgentPlanView"/> waiting for approval.</summary>
+    /// <summary>
+    /// An <see cref="AgentPlanView"/> waiting for approval — or, when a Stop, the deadline, a shutdown or a
+    /// failure ended the turn after it had proposed steps but before they became a card, those steps as a plan
+    /// already expired (nothing ran), sent before the <see cref="Stopped"/> or <see cref="Error"/> that ends the
+    /// turn: the card a reopened conversation shows for them.
+    /// </summary>
     public const string Plan = "plan";
 
     /// <summary>An <see cref="AgentPlanResultView"/> — a plan that ran without a card (all steps were
@@ -161,8 +172,9 @@ public static class AgentStreamEvents
     /// <summary>
     /// <c>{ messageEn, messageFa }</c> — the person pressed Stop (<c>POST …/stop</c>) and the turn ended
     /// there. Not a failure: what was written so far was saved (as a <see cref="Message"/> sent just
-    /// before this), and a plan already claimed for execution was not interrupted. <see cref="Done"/>
-    /// still follows.
+    /// before this). Never follows a claimed plan: the turn lets go of its Stop before it stores its plan, so a
+    /// Stop after that answers false and the plan runs (or waits) as if none had been pressed. Steps proposed
+    /// before the Stop come just before this as an expired <see cref="Plan"/>. <see cref="Done"/> still follows.
     /// </summary>
     public const string Stopped = "stopped";
 

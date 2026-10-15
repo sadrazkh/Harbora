@@ -340,8 +340,11 @@ public class AgentStopTests
 
         await h.ServiceOver(turnDeadline: Guard).SendAsync(h.Actor, null, new AgentSendMessageRequest("make a database", null), false, Sink, default);
 
-        events.Names().Should().Equal("started", "delta", "message", "stopped", "done");
-        events.Names().Should().NotContain("plan", "no card is offered for an answer the person stopped");
+        // The steps go out as the plan they became — expired, so no card offers Run for an answer the person
+        // stopped — before the `stopped` that ends the turn.
+        events.Names().Should().Equal("started", "delta", "message", "plan", "stopped", "done");
+        var shown = events.Single<AgentPlanView>("plan");
+        shown.Status.Should().Be("expired");
         var id = ConversationOf(events);
         using (var other = h.NewContext())
         {
@@ -351,7 +354,8 @@ public class AgentStopTests
 
             var view = await h.ServiceOver(other).GetAsync(h.Actor, id, persian: false, default);
             view!.PendingPlan.Should().BeNull();
-            view.Plans.Should().ContainSingle().Which.Plan.Status.Should().Be("expired");
+            view.Plans.Should().ContainSingle().Which.Plan.Should().BeEquivalentTo(shown,
+                "live and reopened tell the same story: the same plan, expired, with the same steps");
         }
 
         h.Chat.ThenText("Understood.");
@@ -373,7 +377,8 @@ public class AgentStopTests
         var (outcome, events) = await SendWith(h.ServiceOver(turnDeadline: TimeSpan.FromSeconds(2)), h, "make a database");
 
         outcome.Status.Should().Be(AgentSendStatus.Streamed);
-        events.Names().Should().Equal("started", "error", "done");
+        events.Names().Should().Equal("started", "plan", "error", "done");
+        events.Single<AgentPlanView>("plan").Status.Should().Be("expired", "shown as not run, before the deadline's error");
         using var other = h.NewContext();
         (await other.AgentPlans.SingleAsync()).Status.Should().Be(AgentPlanStatus.Expired);
         (await other.AgentMessages.CountAsync(m => m.Role == AgentMessageRole.Tool && m.PlanId != null && m.Text!.Contains("\"state\":\"expired\"")))
@@ -409,7 +414,7 @@ public class AgentStopTests
 
         interceptor.Stop.Should().NotBeNull("the Stop was pressed in the window");
         interceptor.Stop!.Stopped.Should().BeFalse("the turn was already ending by its deadline");
-        events.Names().Should().Equal("started", "error", "done");
+        events.Names().Should().Equal("started", "plan", "error", "done");
         events.Single<AgentErrorData>("error").MessageEn.Should().StartWith("This answer took longer than");
         using var other = h.NewContext();
         (await other.AgentPlans.SingleAsync()).Status.Should().Be(AgentPlanStatus.Expired, "the steps are still recorded as not run");

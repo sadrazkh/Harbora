@@ -851,8 +851,9 @@ public sealed class AgentConversationService(
 
             // A turn that ended before its steps became a plan — stopped, out of time, shut down, or broken —
             // had already told the model "added as step N … the user will approve it". Left like that, the
-            // next turn would speak of a card that does not exist, so the steps are recorded as not run.
-            await RecordDraftNotRunAsync(actor, conversation, turn);
+            // next turn would speak of a card that does not exist, so the steps are recorded as not run — and
+            // shown so, before the turn's ending (`stopped` or `error`) is.
+            await RecordDraftNotRunAsync(actor, conversation, turn, emit);
             throw;
         }
     }
@@ -1091,16 +1092,22 @@ public sealed class AgentConversationService(
     /// The steps a turn proposed before it ended, stored as a plan and expired at once — the same path a card
     /// takes when the person sends a new message instead of deciding (<see cref="AgentPlanService.SupersedePendingAsync"/>).
     /// The conversation then records, beside the "added as step N" answers the model was given, that the plan
-    /// expired and nothing ran, and the reopened conversation shows the plan as expired. Runs on no token and
+    /// expired and nothing ran, and the reopened conversation shows the plan as expired. The live stream says
+    /// the same: the plan goes out as a <c>plan</c> event, expired, before the <c>stopped</c> or <c>error</c>
+    /// that ends the turn — so the person watching sees the card a reload would show. Runs on no token and
     /// never throws: it runs while the turn's real ending is on its way out.
     /// </summary>
-    private async Task RecordDraftNotRunAsync(AgentActor actor, AgentConversation conversation, Turn turn)
+    private async Task RecordDraftNotRunAsync(
+        AgentActor actor, AgentConversation conversation, Turn turn, Func<AgentStreamEvent, CancellationToken, Task> emit)
     {
         try
         {
-            await plans.CreatePendingAsync(actor, conversation.Id, turn.Draft, CancellationToken.None);
+            var plan = await plans.CreatePendingAsync(actor, conversation.Id, turn.Draft, CancellationToken.None);
             turn.DraftStored = true;
             await plans.SupersedePendingAsync(actor, conversation.Id, CancellationToken.None);
+            // Only once it is expired: a card offering Run for steps whose turn has ended would be false.
+            if (plan.Status == AgentPlanStatus.Expired)
+                await emit(new AgentStreamEvent(AgentStreamEvents.Plan, plans.ViewOf(plan)), CancellationToken.None);
         }
         catch (Exception ex)
         {
