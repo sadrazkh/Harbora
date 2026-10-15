@@ -24,7 +24,9 @@ public sealed record AgentConversationSummaryView(Guid Id, string Title, DateTim
 public sealed record AgentDeleteAllView(int Deleted, int Skipped);
 
 /// <summary><c>POST /assistant/conversations/{id}/stop</c>: whether a turn was running here and has been
-/// told to stop. False when there was nothing to stop (the turn had already ended).</summary>
+/// told to stop. False when there was nothing to stop: the turn had already ended — or it is finishing and
+/// can no longer be stopped (from the model's last word on, and while it stores and runs its plan, the turn
+/// has let go of its Stop and ends as it would have anyway).</summary>
 public sealed record AgentStopView(bool Stopped);
 
 /// <summary>A message as the pane renders it.</summary>
@@ -118,7 +120,11 @@ public sealed record AgentConversationView(
 /// <param name="Result">What it did — null while it is executing, and for a plan that never ran
 /// (rejected, expired, or refused when checked again: then <see cref="AgentPlanView.Status"/> says which).</param>
 /// <param name="AfterMessageId">The id of the message in <see cref="AgentConversationView.Messages"/> the
-/// card is drawn after: the last visible message of the turn that proposed it. Null: before the first.</param>
+/// card is drawn after: the last visible message of the turn that proposed it. Never null from this server: a
+/// plan is listed only when one of its proposal lines is among the messages, and that line — or a later
+/// message of the same turn — is the anchor. Null would mean "before the first message": the case of a plan
+/// with nothing in the view to anchor it, which this server leaves out of the list instead. A client that
+/// gets one anyway draws the card first.</param>
 public sealed record AgentPlanHistoryView(
     AgentPlanView Plan,
     AgentPlanResultView? Result,
