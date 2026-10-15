@@ -159,6 +159,10 @@ public static class DependencyInjection
         // above: a plain hosted service, so it starts only once Program.cs's migrate-then-seed block
         // has already returned.
         services.AddHostedService<Proxy.ProxyBootRepublisher>();
+        // An assistant plan a restart cut off is still "executing" in the table; nothing runs it any more (one
+        // process), so it is settled as the panel starts — or its conversation could never be deleted. A
+        // startup reconciler like the ones above, so it is registered above the gate, as the line below asks.
+        services.AddHostedService<Agent.AgentPlanStartupReconciler>();
         // Lets the job worker start claiming. Hosted services start in registration order, so every
         // startup reconciler — including any added later — must be registered ABOVE this line; that
         // is the whole guarantee, and it is on the reconciler's registration, not on this one.
@@ -443,9 +447,6 @@ public static class DependencyInjection
         // owner's conversation retention, a once-a-day timer like the sweepers above it.
         services.AddSingleton<Agent.AgentTurnRegistry>();
         services.AddHostedService<Maintenance.AgentConversationRetentionSweeper>();
-        // A plan a restart cut off is still "executing" in the table; nothing runs it any more (one process),
-        // so it is settled as the panel starts — or its conversation could never be deleted.
-        services.AddHostedService<Agent.AgentPlanStartupReconciler>();
         // The lock-button vault (2026-10-12 owner decision, "secrets as black boxes"): one in-memory store
         // for the whole process — a singleton because it is the store, and a restart forgetting every
         // handle is the safe failure. The same instance answers both the contract and the redaction view.

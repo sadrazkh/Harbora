@@ -66,6 +66,11 @@ public class DependencyInjectionTests
         openerIndex.Should().BeGreaterThan(deploymentReconcilerIndex,
             "DeploymentReconciler must finish failing stranded deployments — and settling their jobs — " +
             "before the worker may claim work again");
+
+        var planReconcilerIndex = hostedServices.IndexOf(typeof(Harbora.Infrastructure.Agent.AgentPlanStartupReconciler));
+        planReconcilerIndex.Should().BeGreaterThan(-1, "AgentPlanStartupReconciler must be registered as a hosted service at all");
+        openerIndex.Should().BeGreaterThan(planReconcilerIndex,
+            "the assistant's plan reconciler is a startup reconciler too, and every one of them is above the gate");
     }
 
     [Fact]
