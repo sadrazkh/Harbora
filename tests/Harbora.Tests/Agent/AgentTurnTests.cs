@@ -409,7 +409,7 @@ public class AgentTurnTests
         var created = await h.Service.CreateAsync(h.Actor, default);
 
         created!.Title.Should().BeEmpty();
-        (await h.Service.ListAsync(h.Actor, default)).Should().BeEmpty("a reserved conversation is not something the person said");
+        (await h.Service.ListAsync(h.Actor, null, 0, default)).Value.Should().BeEmpty("a reserved conversation is not something the person said");
         var view = await h.Service.GetAsync(h.Actor, created.Id, persian: false, default);
         view!.Messages.Should().BeEmpty();
         view.InProgress.Should().BeFalse();
@@ -419,7 +419,7 @@ public class AgentTurnTests
 
         outcome.Status.Should().Be(AgentSendStatus.Streamed);
         events.Single<AgentStartedData>("started").ConversationId.Should().Be(created.Id);
-        (await h.Service.ListAsync(h.Actor, default)).Should().ContainSingle(c => c.Id == created.Id && c.Title == "hello there");
+        (await h.Service.ListAsync(h.Actor, null, 0, default)).Value.Should().ContainSingle(c => c.Id == created.Id && c.Title == "hello there");
     }
 
     [Fact]

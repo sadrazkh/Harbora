@@ -135,10 +135,6 @@ public sealed class AgentConversationService(
         return new(true, null, null, model, remaining);
     }
 
-    /// <summary>The first page of <see cref="ListAsync(AgentActor, string?, int, CancellationToken)"/>, unsearched.</summary>
-    public async Task<IReadOnlyList<AgentConversationSummaryView>> ListAsync(AgentActor actor, CancellationToken ct) =>
-        (await ListAsync(actor, q: null, skip: 0, ct)).Value!;
-
     /// <summary>
     /// One page of this person's conversations in this workspace, most recently active first, at most
     /// <see cref="ConversationListSize"/> rows — a shorter page is the last. A conversation created ahead of
@@ -340,9 +336,9 @@ public sealed class AgentConversationService(
         return after;
     }
 
-    /// <summary>Whether a turn mark still means a turn is being answered — see <see cref="TurnMarkGrace"/>.</summary>
-    private bool IsTurnLive(DateTimeOffset? turnStartedAt) =>
-        turnStartedAt is { } started && clock.UtcNow - started < TurnMarkLifetime;
+    /// <summary>Whether a turn mark still means a turn is being answered — see <see cref="TurnMarkGrace"/>. The same
+    /// rule a delete refuses by (<see cref="AgentBusyCut.TurnLive"/>).</summary>
+    private bool IsTurnLive(DateTimeOffset? turnStartedAt) => BusyCut().TurnLive(turnStartedAt);
 
     /// <summary>
     /// A new, empty conversation — created before its first message, so the pane can remember the id at
@@ -473,12 +469,13 @@ public sealed class AgentConversationService(
             .FirstOrDefaultAsync(ct);
         if (current is null) return NoSuchConversation;
 
-        if (current.TurnStartedAt is { } started && started > cut.TurnMarkBefore)
+        if (cut.TurnLive(current.TurnStartedAt))
             return new(AgentDeleteStatus.Busy,
                 "This conversation is still answering a message — stop it or wait for it to finish, then delete it.",
                 "این گفت‌وگو هنوز در حال پاسخ به پیامی است — آن را متوقف کنید یا صبر کنید تمام شود، بعد حذفش کنید.");
 
-        if (await db.AgentPlans.IgnoreQueryFilters().AnyAsync(AgentConversationDeletion.Running(conversationId, cut), ct))
+        if (await db.AgentPlans.IgnoreQueryFilters().Where(p => p.ConversationId == conversationId)
+                .AnyAsync(AgentConversationDeletion.Running(cut), ct))
             return new(AgentDeleteStatus.Busy,
                 "A plan in this conversation is still running — wait for it to finish, then delete the conversation.",
                 "برنامه‌ای در این گفت‌وگو هنوز در حال اجراست — صبر کنید تمام شود، بعد گفت‌وگو را حذف کنید.");

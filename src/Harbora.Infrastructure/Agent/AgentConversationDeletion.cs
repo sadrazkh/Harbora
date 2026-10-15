@@ -36,6 +36,11 @@ internal sealed record AgentBusyCut(DateTimeOffset TurnMarkBefore, DateTimeOffse
 {
     public static AgentBusyCut At(DateTimeOffset now, TimeSpan turnMarkLifetime) =>
         new(now - turnMarkLifetime, now - AgentConversationDeletion.ExecutingPlanAbandonedAfter);
+
+    /// <summary>Whether a turn mark means a turn is being answered: one younger than its lifetime. What
+    /// <c>InProgress</c> reports and a refused delete names — the turn half of <see cref="AgentConversationDeletion.Idle"/>,
+    /// over a mark already read.</summary>
+    public bool TurnLive(DateTimeOffset? turnStartedAt) => turnStartedAt is { } started && started > TurnMarkBefore;
 }
 
 /// <summary>How many conversations a deletion has committed so far — readable after it threw, because the
@@ -112,17 +117,19 @@ internal static class AgentConversationDeletion
         return tally.Deleted;
     }
 
-    /// <summary>Not busy: no live turn mark, and no plan executing under a live claim.</summary>
-    internal static Expression<Func<AgentConversation, bool>> Idle(HarboraDbContext db, AgentBusyCut cut) =>
-        c => (c.TurnStartedAt == null || c.TurnStartedAt <= cut.TurnMarkBefore)
-             && !db.AgentPlans.IgnoreQueryFilters().Any(p => p.ConversationId == c.Id && p.Status == AgentPlanStatus.Executing
-                                                            && (p.DecidedAt ?? p.UpdatedAt) > cut.ClaimBefore);
+    /// <summary>Not busy: no live turn mark, and none of its plans <see cref="Running"/>.</summary>
+    internal static Expression<Func<AgentConversation, bool>> Idle(HarboraDbContext db, AgentBusyCut cut)
+    {
+        // Inlined into the subquery by EF, so the plan half is this one rule in SQL as well.
+        var running = Running(cut);
+        return c => (c.TurnStartedAt == null || c.TurnStartedAt <= cut.TurnMarkBefore)
+                    && !db.AgentPlans.IgnoreQueryFilters().Where(running).Any(p => p.ConversationId == c.Id);
+    }
 
-    /// <summary>A plan that keeps <paramref name="conversationId"/> busy — <see cref="Idle"/>'s plan half,
-    /// for naming the reason a delete was refused.</summary>
-    internal static Expression<Func<AgentPlan, bool>> Running(Guid conversationId, AgentBusyCut cut) =>
-        p => p.ConversationId == conversationId && p.Status == AgentPlanStatus.Executing
-             && (p.DecidedAt ?? p.UpdatedAt) > cut.ClaimBefore;
+    /// <summary>A plan that keeps its conversation busy: executing under a claim younger than the cut. The plan
+    /// half of <see cref="Idle"/>, and what a refused delete names as its reason.</summary>
+    internal static Expression<Func<AgentPlan, bool>> Running(AgentBusyCut cut) =>
+        p => p.Status == AgentPlanStatus.Executing && (p.DecidedAt ?? p.UpdatedAt) > cut.ClaimBefore;
 
     /// <summary>
     /// Every plan row of these conversations, locked until the transaction ends — the approval's claim

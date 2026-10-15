@@ -144,7 +144,8 @@ public class AgentPlanServiceTests
         outcome.Refusal!.Code.Should().Be(AgentPlanRefusal.ExpiredCode);
         tool.Executions.Should().Be(0);
         (await h.Db.AgentPlans.AsNoTracking().SingleAsync()).Status.Should().Be(AgentPlanStatus.Expired);
-        (await h.Plans.PendingPlanAsync(h.Actor, plan.ConversationId, default)).Should().BeNull();
+        h.Plans.PendingAmong(await h.Plans.PlansOfAsync(h.Actor, plan.ConversationId, since: null, default))
+            .Should().BeNull("nothing is waiting any more, by the rule the conversation view uses");
     }
 
     [Fact]

@@ -436,8 +436,6 @@ public class AgentConversationDeletionTests
         beyond.Should().BeEmpty();
         first.Concat(second).Select(c => c.Id).Should().OnlyHaveUniqueItems().And.BeEquivalentTo(all.Select(c => c.Id));
         first.Concat(second).Select(c => c.UpdatedAt).Should().BeInDescendingOrder();
-        (await h.Service.ListAsync(h.Actor, default)).Select(c => c.Id).Should().Equal(first.Select(c => c.Id),
-            "the old overload is the first page, unsearched");
     }
 
     [Fact]

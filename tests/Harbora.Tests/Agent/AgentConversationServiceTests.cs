@@ -520,7 +520,7 @@ public class AgentConversationServiceTests
         outcome.Status.Should().Be(AgentSendStatus.NotFound);
         events.Should().BeEmpty();
         (await colleague.Service.GetAsync(colleague.Actor, id, persian: false, default)).Should().BeNull();
-        (await colleague.Service.ListAsync(colleague.Actor, default)).Should().BeEmpty();
+        (await colleague.Service.ListAsync(colleague.Actor, null, 0, default)).Value.Should().BeEmpty();
     }
 
     [Theory]
@@ -564,7 +564,7 @@ public class AgentConversationServiceTests
         view.Messages[1].Text.Should().Be("peek دید", "a Persian reader gets the Persian summary");
         view.PendingPlan!.Steps.Single().Tool.Should().Be("create_database");
 
-        var list = await h.Service.ListAsync(h.Actor, default);
+        var list = (await h.Service.ListAsync(h.Actor, null, 0, default)).Value;
         list.Should().ContainSingle(c => c.Id == id && c.Title == "go");
     }
 

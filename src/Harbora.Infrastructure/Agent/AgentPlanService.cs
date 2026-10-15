@@ -236,18 +236,6 @@ public sealed class AgentPlanService(
     public AgentPlanStatus EffectiveStatus(AgentPlan plan) =>
         plan.Status == AgentPlanStatus.Pending && clock.UtcNow >= plan.ExpiresAt ? AgentPlanStatus.Expired : plan.Status;
 
-    /// <summary>The conversation's plan still waiting for a decision, if any. <see cref="PendingAmong"/> is
-    /// the same rule over plans already in hand.</summary>
-    public async Task<AgentPlan?> PendingPlanAsync(AgentActor actor, Guid conversationId, CancellationToken ct)
-    {
-        var now = clock.UtcNow;
-        return await db.AgentPlans.IgnoreQueryFilters().AsNoTracking()
-            .Where(p => p.ConversationId == conversationId && p.WorkspaceId == actor.WorkspaceId
-                        && p.UserId == actor.UserId && p.Status == AgentPlanStatus.Pending && p.ExpiresAt > now)
-            .OrderByDescending(p => p.CreatedAt)
-            .FirstOrDefaultAsync(ct);
-    }
-
     /// <summary>
     /// The plans of this person's conversation that the conversation view may need, oldest first — pending,
     /// decided and expired alike: those made at or after <paramref name="since"/>, and the plan still
@@ -269,7 +257,8 @@ public sealed class AgentPlanService(
     }
 
     /// <summary>The newest of these plans still waiting for a decision — <see cref="EffectiveStatus"/>
-    /// pending, so one past its expiry is not — or null. What <see cref="PendingPlanAsync"/> asks the database.</summary>
+    /// pending, so one past its expiry is not — or null: the conversation's waiting plan, over the plans
+    /// <see cref="PlansOfAsync"/> read.</summary>
     public AgentPlan? PendingAmong(IEnumerable<AgentPlan> candidates) =>
         candidates.Where(p => EffectiveStatus(p) == AgentPlanStatus.Pending).MaxBy(p => p.CreatedAt);
 
