@@ -24,7 +24,9 @@ import { checkPlanForm, buildApproveBody } from './assistantPlan.js';
 import { createAssistantSession } from './assistantSession.js';
 import { createSecretBook, createSecretForm, looksLikeSecret, withoutSecrets } from './assistantSecrets.js';
 import AssistantSecretText from './AssistantSecretText.vue';
+import { provide, watch } from 'vue';
 import { MoveHorizontal, Square } from 'lucide';
+import { ANNOUNCER, createAnnouncer } from './assistantAnnouncer.js';
 import { createAssistantPrefs, EVENT_TOGGLE_WIDE, EVENT_WIDTH } from '../assistantDrawer.js';
 
 // The assistant pane: status, conversations, the message stream, plan and result cards.
@@ -224,22 +226,31 @@ function onComposerKey(event: KeyboardEvent) {
 }
 
 // ---- stopping an answer and widening the drawer ---------------------------------------------------
-// While an answer is coming the Send button is a Stop button. session.stop() does the asking (and puts a
-// failure in the composer's notice); this keeps the button from being pressed twice while it waits. Enter
-// in the composer only ever sends — it cannot reach this.
-const stopping = ref(false);
+// While an answer is coming the Send button is a Stop button. session.stop() remembers the press and does
+// the asking, for as long as that takes (and puts a failure in the composer's notice); the button says
+// "Stopping…" — and cannot be pressed again — until the answer is over, not merely until the request came
+// back. Enter in the composer only ever sends: it cannot reach this.
+const stopping = computed(() => timeline.stopping === true);
+let stopPressed = false;
 
-async function stopAnswer() {
+function stopAnswer() {
   if (stopping.value) return;
-  stopping.value = true;
-  try {
-    await session.stop();
-  } finally {
-    stopping.value = false;
-  }
-  // The Stop button is about to be Send again; the keyboard focus goes to the box rather than nowhere.
-  focusComposer();
+  stopPressed = true;
+  session.stop();
 }
+
+// The Stop button is gone only when the answer is over; that is the moment the keyboard focus can go to the
+// box. Never earlier: while Stop or Stopping is on screen the focus stays where the person put it.
+watch(answering, (now) => {
+  if (!now && stopPressed) {
+    stopPressed = false;
+    focusComposer();
+  }
+});
+
+// One announcer for the pane (assistantAnnouncer.js): «کپی شد» and the like are said here, outside the log.
+const announcer = createAnnouncer({ wrap: reactive });
+provide(ANNOUNCER, announcer);
 
 // The drawer around this pane owns its width (assistantDrawer.js): the header button asks it to toggle,
 // and it says what the width is — when the island has just mounted, and whenever it changes.
@@ -408,6 +419,7 @@ onUnmounted(() => {
   document.removeEventListener('harbora:assistant-opened', onOpened);
   document.removeEventListener('harbora:assistant-closed', onClosed);
   document.removeEventListener(EVENT_WIDTH, onWidth);
+  announcer.dispose();
   session.dispose();
 });
 
@@ -628,6 +640,10 @@ const suggestions = fa
       </div>
     </div>
 
+    <!-- The pane's one announcer (assistantAnnouncer.js): outside the log, which is aria-busy while an answer
+         runs and so is not read until it is over. It says «کپی شد» / "Copied" and «کپی نشد» / "Couldn't copy". -->
+    <p class="sr-only" role="status" aria-live="polite" data-assistant-announce>{{ announcer.state.text }}</p>
+
     <!-- Composer -->
     <form class="border-t border-line p-3" @submit.prevent="send">
       <!-- A password or key typed into the message: the AI would see it. Offered, never forced. -->
@@ -659,11 +675,15 @@ const suggestions = fa
         </button>
         <!-- While an answer is coming the Send button is Stop. A button of its own (not the submit button
              with another label), so that nothing which submits the form can ever stop an answer. -->
+        <!-- aria-disabled, not disabled, while it is stopping: a focused button that becomes disabled loses the
+             keyboard focus in some browsers. The press is ignored (stopAnswer). -->
         <button v-if="answering" key="stop" type="button"
-                class="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-danger/40 px-2.5 text-sm font-medium text-danger hover:bg-danger-soft disabled:cursor-wait"
-                :disabled="stopping" :aria-busy="stopping ? 'true' : undefined"
-                :aria-label="t('Stop the answer', 'توقف پاسخ')" :title="t('Stop the answer', 'توقف پاسخ')" data-assistant-stop @click="stopAnswer">
-          <AssistantIcon :icon="stopping ? LoaderCircle : Square" :size="14" :spin="stopping" />{{ t('Stop', 'توقف') }}
+                class="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-danger/40 px-2.5 text-sm font-medium text-danger hover:bg-danger-soft"
+                :class="stopping ? 'cursor-wait opacity-70' : ''" :aria-disabled="stopping ? 'true' : undefined"
+                :aria-label="stopping ? t('Stopping the answer…', 'در حال توقف پاسخ…') : t('Stop the answer', 'توقف پاسخ')"
+                :title="stopping ? t('Stopping the answer…', 'در حال توقف پاسخ…') : t('Stop the answer', 'توقف پاسخ')"
+                data-assistant-stop @click="stopAnswer">
+          <AssistantIcon :icon="stopping ? LoaderCircle : Square" :size="14" :spin="stopping" />{{ stopping ? t('Stopping…', 'در حال توقف…') : t('Stop', 'توقف') }}
         </button>
         <button v-else key="send" type="submit" class="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-accent text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
                 :disabled="!canSend" :aria-label="t('Send', 'ارسال')" :title="t('Send', 'ارسال')" data-assistant-send>

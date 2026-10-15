@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive } from 'vue';
+import { computed, inject, onBeforeUnmount, reactive } from 'vue';
 import { Check, Copy, TriangleAlert } from 'lucide';
 import {
   formatMessage, textDirection, createSteadyDirection, blockText, inlineText, listStyleOf, messageCopyText, codeCopyText,
 } from './assistantFormat.js';
-import { createCopyFeedback } from './assistantCopy.js';
+import { createCopyFeedback, copyNotice } from './assistantCopy.js';
+import { ANNOUNCER } from './assistantAnnouncer.js';
 import { AssistantIcon } from './assistantIcon';
 import AssistantInline from './AssistantInline.vue';
 
@@ -19,7 +20,8 @@ import AssistantInline from './AssistantInline.vue';
 //
 // Copying: once the message is finished (not `live`) it has a copy button under it, and each code block
 // a button of its own in its corner. What they take is decided in assistantFormat.js, how it is put on
-// the clipboard and what the button says afterwards in assistantCopy.js.
+// the clipboard and what the button says afterwards in assistantCopy.js; the words a screen reader hears
+// go to the pane's announcer (assistantAnnouncer.js), outside the conversation log.
 const props = defineProps<{ text: string; live?: boolean; streamed?: boolean; nameOf?: (handle: string) => string | null; fa?: boolean }>();
 const t = (en: string, persian: string) => (props.fa ? persian : en);
 const blocks = computed(() => formatMessage(props.text));
@@ -39,10 +41,12 @@ const cellDir = (cell: any[]) => {
 const feedback = createCopyFeedback({ wrap: reactive });
 onBeforeUnmount(() => feedback.dispose());
 const messageText = computed(() => messageCopyText(props.text));
-const announcement = computed(() => {
-  const status = feedback.state.status;
-  return status === 'copied' ? t('Copied', 'کپی شد') : status === 'failed' ? t("Couldn't copy", 'کپی نشد') : '';
-});
+// «کپی شد» / «کپی نشد» go to the pane's one announcer (assistantAnnouncer.js), not to a region per message.
+const announcer = inject(ANNOUNCER, null);
+async function copy(key: string, text: string | null) {
+  if (text === null) return;
+  announcer?.say(copyNotice(await feedback.copy(key, text), props.fa === true));
+}
 const iconFor = (key: string) => ({ copied: Check, failed: TriangleAlert } as Record<string, any>)[feedback.statusOf(key)] ?? Copy;
 const iconClassFor = (key: string) => ({ copied: 'text-ok', failed: 'text-danger' } as Record<string, string>)[feedback.statusOf(key)] ?? '';
 </script>
@@ -95,7 +99,7 @@ const iconClassFor = (key: string) => ({ copied: 'text-ok', failed: 'text-danger
           <button v-if="!live && codeCopyText(block) !== null" type="button"
                   class="absolute end-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-md text-code-ink/70 hover:bg-code-ink/10 hover:text-code-ink"
                   :aria-label="t('Copy code', 'کپی کد')" :title="t('Copy code', 'کپی کد')" data-assistant-copy-code
-                  @click="feedback.copy('code-' + b, codeCopyText(block))">
+                  @click="copy('code-' + b, codeCopyText(block))">
             <AssistantIcon :icon="iconFor('code-' + b)" :size="14" :class="iconClassFor('code-' + b)" />
           </button>
         </div>
@@ -104,11 +108,9 @@ const iconClassFor = (key: string) => ({ copied: 'text-ok', failed: 'text-danger
     <div v-if="!live && messageText !== null" class="mt-1">
       <button type="button" class="grid h-7 w-7 place-items-center rounded-md text-ink-faint hover:bg-surface-2 hover:text-ink"
               :aria-label="t('Copy answer', 'کپی پاسخ')" :title="t('Copy answer', 'کپی پاسخ')" data-assistant-copy
-              @click="feedback.copy('message', messageText)">
+              @click="copy('message', messageText)">
         <AssistantIcon :icon="iconFor('message')" :size="14" :class="iconClassFor('message')" />
       </button>
     </div>
-    <!-- Always in the page, so that a change to its text is announced: «کپی شد» / "Copied". -->
-    <p class="sr-only" role="status" aria-live="polite">{{ announcement }}</p>
   </div>
 </template>

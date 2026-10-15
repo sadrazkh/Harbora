@@ -119,3 +119,12 @@ export function createCopyFeedback({
     },
   };
 }
+
+/**
+ * What the pane's announcer says after a copy: «کپی شد» / "Copied", or «کپی نشد» / "Couldn't copy".
+ * @param {boolean} ok @param {boolean} fa
+ */
+export function copyNotice(ok, fa) {
+  if (ok) return fa ? 'کپی شد' : 'Copied';
+  return fa ? 'کپی نشد' : "Couldn't copy";
+}

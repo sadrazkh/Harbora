@@ -157,3 +157,75 @@ afterwards, not committed) served by `npx vite --port 5183`, in the Browser pane
   (not folded into the item).
 - The shared preview harness (`assistant-panel.preview.html`) has no `/stop` handler, so Stop there answers 404 and
   shows as a composer notice; I left it alone to avoid a three-way merge on its scenario list.
+
+## Fix pass (coordinator review)
+
+The coordinator's resolution of the brief's ambiguity: "`{ stopped: false }` is silent" means "the answer had
+already finished"; while this tab's own stream is open, a Stop that did nothing is not that case.
+
+**Important — an early Stop is no longer dead** (`assistantSession.js`, `AssistantPanel.vue`):
+
+- Stop is an intent the session remembers (`timeline.stopping`, set by the press). The button shows
+  «در حال توقف…» / "Stopping…" (spinner, `aria-disabled`, press ignored) and stays in that state until
+  `answering` is false — it does not go back to Stop when the POST returns. Cleared by `done`, by an `error`
+  event, when the stream ends (the `send()` finally), when the poller settles or the conversation is gone, when the
+  person starts a new conversation or opens another, and on dispose. A failed request is the exception: it shows the
+  composer's notice and ends the state, so the button is Stop again.
+- No conversation id yet (the create round trip, or the legacy path): the request waits and goes when the id is
+  known (a microtask after the message request is made) or when `started` brings it.
+- `{ stopped: false }` with this tab's stream open: if `started` has not arrived, no timer — it is asked again the
+  moment `started` arrives (also when `started` arrives while the first request is still out); after `started`, about
+  every 500 ms. At most 6 requests in all per press, never two in flight; after the sixth it waits for the turn's own
+  end. No retry once the turn ended or the person switched conversations (timer cancelled, late answers ignored).
+- Resuming (no stream here): one POST, then the prompt re-read (400 ms). `{ stopped: false }` there is the truth
+  and silent; if the re-read still finds the conversation in progress after such a "false", the stopping state is
+  cleared so the button is Stop again.
+- Tests (`assistant-stop.test.mjs`, rewritten, 32 tests): Stop while the conversation id is null, then fired on the id
+  and on `started` (create path and legacy path); "false" with the stream open, retried on `started` and then every
+  500 ms until it stops; the six-request cap; no double POST in the stopping state (in flight, after the answer, during a
+  retry); the state cleared on `done`, on `error`, on a stream that just ends; no retry after the turn ended or after
+  `startNew()`/`open()`; the followed-conversation cases; the HTTP call; the markup. I mutation-checked the session
+  (cap changed, id trigger removed, `started` trigger removed, `endStop` removed in each place, immediate retry removed,
+  retry period changed): each made at least one test fail.
+- Checked in the browser with a scripted preview whose stop endpoint answered "false" twice: the button read
+  «Stopping…» with a spinner, stayed that way through the retries, a second press sent nothing, the focus stayed on the
+  button until the answer ended and then went to the composer, and Send came back.
+
+**Minors**
+
+1. Focus moves to the composer only when `answering` becomes false (`watch(answering)`, only if Stop was pressed);
+   `stopAnswer()` moves nothing, and the stopping button uses `aria-disabled` rather than `disabled` so it keeps the
+   focus while it waits.
+2. The heading pattern is linear: the closing `#`s are cut by scanning back from the end instead of a lazy
+   `(.*?)(\s+#+)?\s*$` (the old pattern took 2.2 s for `# a` + 50,000 spaces + `x`, measured). A test formats seven
+   50k-space lines in under 250 ms (they take a few ms); the other line patterns were measured and are linear.
+3. `__bold__` is gone (`__init__.py`, `__main__`, `snake__case__name` are text). `**bold**` has flanking rules: an
+   opening `**` at the line start or after whitespace or `( [ { « " ' “ ‘`; a closing `**` at the line end or before
+   whitespace or punctuation other than `/` and `*`. So `src/**/a and lib/**/b` and `a**b**c` stay literal, and
+   `**x**،`, `**x**.`, `**x**؟`, `«**x**»` are bold. Tests updated and added (Persian comma and full stop included).
+   Since a secret's handle cannot contain `*`, the special handling of handles in the scanner went too.
+4. One announcer for the pane: new `assistantAnnouncer.js` (`createAnnouncer`, `ANNOUNCER` key). The panel owns one
+   `role="status" aria-live="polite"` `sr-only` element, outside the log (after the thinking-status line, before the
+   composer), and `provide`s the announcer; `AssistantText.vue` injects it and says `copyNotice(ok, fa)`
+   («کپی شد» / «کپی نشد», in `assistantCopy.js`). No `role="status"` in messages any more (a test pins this and the
+   placement).
+5. The formatter is split without behaviour change: `assistantInline.js` (code spans, bold, `inlineText`) and
+   `assistantTable.js` (`tableCells`, `parseTable`) are new modules; `assistantFormat.js` keeps the block cutter,
+   lists, headings and direction helpers, imports them and re-exports `inlineText`. A test covers the module boundary.
+
+New files: `islands/assistantInline.js`, `islands/assistantTable.js`, `islands/assistantAnnouncer.js`,
+`tests/assistant-announcer.test.mjs`. Changed: `assistantFormat.js`, `assistantSession.js`, `assistantCopy.js`
+(`copyNotice`), `AssistantText.vue`, `AssistantPanel.vue` (stopping button, focus watcher, announcer element, two
+more import lines of my own: `import { provide, watch } from 'vue'` and the announcer), tests. The regex markup
+tests in `assistant-format.test.mjs` were not touched.
+
+Commands (after the last source change):
+
+- `node --test src/Harbora.Web/Scripts/tests/*.test.mjs` → exit 0, `# tests 337 / # pass 337 / # fail 0`
+  (309 before this pass).
+- `cd src/Harbora.Web && npm run build` → exit 0, `✓ built in 4.83s`.
+- The full dotnet suite was **not** re-run in this pass (no .NET, layout or Razor file changed since the run recorded
+  above: 7304 passed in `Harbora.Tests.dll`).
+
+Still unverified: the real `…/stop` endpoint (the 500 ms / 6-request retry numbers are the coordinator's, tuned to no
+measured server latency).

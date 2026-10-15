@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
   formatMessage, blockText, inlineText, textDirection, createSteadyDirection, messageCopyText, codeCopyText, listStyleOf,
 } from '../islands/assistantFormat.js';
+import { inline, inlineText as inlineTextOf, codeSpans } from '../islands/assistantInline.js';
+import { parseTable, tableCells } from '../islands/assistantTable.js';
 
 // Round seven P3: bold, numbered lists, headings and tables — still without markup. The tree's leaves
 // are plain strings that the template writes with {{ }}; these tests pin what the new blocks look like
@@ -22,13 +24,43 @@ function inlineOf(source) {
   return blocks[0].lines[0];
 }
 
+// ---- the formatter's parts ----------------------------------------------------------------------------
+
+test('the inline scanner and the table parser are modules of their own, and the formatter is built from them', () => {
+  assert.deepEqual(inline('a **b** `c`'), [text('a '), bold('b'), text(' '), code('c')]);
+  assert.deepEqual(codeSpans('a `b` `c'), [[2, 5]]);
+  assert.equal(inlineTextOf(inline('a `b` **c**')), 'a  c');
+  assert.equal(inlineText, inlineTextOf, 'assistantFormat re-exports the same inlineText');
+  assert.deepEqual(tableCells('| a | b |'), ['a', 'b']);
+  assert.equal(tableCells('no pipes'), null);
+  const lines = ['| a | b |', '|---|---|', '| 1 | 2 |', '```'];
+  const parsed = parseTable(lines, 0, (line) => line.startsWith('```'));
+  assert.equal(parsed.next, 3, 'a table stops at what the caller says is a fence');
+  assert.deepEqual(parsed.block.rows, [[[text('1')], [text('2')]]]);
+  assert.equal(parseTable(['| a |', '| b |'], 0, () => false), null);
+});
+
 // ---- bold ---------------------------------------------------------------------------------------------
 
-test('**bold** and __bold__ become bold runs inside a sentence', () => {
+test('**bold** becomes a bold run inside a sentence', () => {
   assert.deepEqual(inlineOf('Created **shop-db** for you'), [text('Created '), bold('shop-db'), text(' for you')]);
-  assert.deepEqual(inlineOf('Created __shop-db__.'), [text('Created '), bold('shop-db'), text('.')]);
   assert.deepEqual(inlineOf('**one** and **two**'), [bold('one'), text(' and '), bold('two')]);
   assert.deepEqual(inlineOf('**دیتابیس ساخته شد**'), [bold('دیتابیس ساخته شد')]);
+  assert.deepEqual(inlineOf('Done: **shop-db**'), [text('Done: '), bold('shop-db')]);
+});
+
+test('__double underscores__ are not bold: dunder names are everyday words in this product\'s chats', () => {
+  for (const line of [
+    'open __init__.py first',
+    'the __main__ module',
+    'Created __shop-db__.',
+    '__init__',
+    'snake__case__name',
+    'fill in ____ here',
+    'use _private_ and _x',
+  ]) {
+    assert.deepEqual(inlineOf(line), [text(line)], line);
+  }
 });
 
 test('a lone * or _ stays a character: products, snake_case names, file globs', () => {
@@ -37,7 +69,6 @@ test('a lone * or _ stays a character: products, snake_case names, file globs', 
     'set snake_case_name to 1',
     'delete *.log and src/*.js',
     'a * b * c',
-    'use _private_ and _x',
     'cost: 5 * 4 * 3',
   ]) {
     assert.deepEqual(inlineOf(line), [text(line)], line);
@@ -57,17 +88,56 @@ test('a pair that does not enclose text on one line is not bold', () => {
   }
 });
 
-test('runs of three or more, and double underscores inside a word, are left alone', () => {
+test('runs of three or more asterisks are left alone', () => {
   assert.deepEqual(inlineOf('***x***'), [text('***x***')]);
-  assert.deepEqual(inlineOf('fill in ____ here'), [text('fill in ____ here')]);
-  assert.deepEqual(inlineOf('snake__case__name'), [text('snake__case__name')]);
-  assert.deepEqual(inlineOf('call my__init__x now'), [text('call my__init__x now')]);
+  assert.deepEqual(inlineOf('****'), [text('****')]);
+});
+
+test('an opening ** stands at the start of the line, or after a space or an opening bracket or quote', () => {
+  assert.deepEqual(inlineOf('(**x**)'), [text('('), bold('x'), text(')')]);
+  assert.deepEqual(inlineOf('[**x**]'), [text('['), bold('x'), text(']')]);
+  assert.deepEqual(inlineOf('«**x**»'), [text('«'), bold('x'), text('»')]);
+  assert.deepEqual(inlineOf('"**x**"'), [text('"'), bold('x'), text('"')]);
+  assert.deepEqual(inlineOf("'**x**'"), [text("'"), bold('x'), text("'")]);
+  assert.deepEqual(inlineOf('\t**x** y'), [text('\t'), bold('x'), text(' y')]);
+  // Not after a letter, a digit, a slash or a colon, nor inside a word.
+  for (const line of ['a**b**', 'a**b** c', '1**2**', 'src/**b** c', 'Note:**b** c', 'x**y**z']) {
+    assert.deepEqual(inlineOf(line), [text(line)], line);
+  }
+});
+
+test('a closing ** stands at the end of the line, or before a space or punctuation other than / and *', () => {
+  assert.deepEqual(inlineOf('**x**.'), [bold('x'), text('.')]);
+  assert.deepEqual(inlineOf('**x**, y'), [bold('x'), text(', y')]);
+  assert.deepEqual(inlineOf('**x**: y'), [bold('x'), text(': y')]);
+  assert.deepEqual(inlineOf('**x**)'), [bold('x'), text(')')]);
+  // Persian comma, full stop, semicolon and question mark, and the closing guillemet.
+  assert.deepEqual(inlineOf('**shop-db**، **old-db** و **web**.'), [bold('shop-db'), text('، '), bold('old-db'), text(' و '), bold('web'), text('.')]);
+  assert.deepEqual(inlineOf('این **مهم** است؛ آیا **مهم** است؟'), [text('این '), bold('مهم'), text(' است؛ آیا '), bold('مهم'), text(' است؟')]);
+  assert.deepEqual(inlineOf('«**مهم**»'), [text('«'), bold('مهم'), text('»')]);
+  assert.deepEqual(inlineOf('**مهم**.'), [bold('مهم'), text('.')]);
+  // Not before a letter, a digit, a slash or another asterisk.
+  for (const line of ['**a**b', '**a**1', '**a**/b', '**a**ب']) {
+    assert.deepEqual(inlineOf(line), [text(line)], line);
+  }
+});
+
+test('globs with ** stay literal, even two of them in one line', () => {
+  for (const line of [
+    'src/**/a and lib/**/b',
+    'use src/**/*.js and lib/**/*.ts',
+    'ignore **/node_modules and **/dist',
+  ]) {
+    const nodes = inlineOf(line);
+    assert.equal(nodes.some((n) => n.bold), false, line);
+    assert.equal(nodes.filter((n) => n.type === 'text').map((n) => n.text).join(''), line.replace(/`\*\*`/, ''), line);
+  }
 });
 
 test('bold never reaches into code, and a marker inside code is only a character', () => {
   assert.deepEqual(inlineOf('`**x**`'), [code('**x**')]);
   assert.deepEqual(inlineOf('run `a**` then b**'), [text('run '), code('a**'), text(' then b**')]);
-  assert.deepEqual(inlineOf('`__a__` and __b__'), [code('__a__'), text(' and '), bold('b')]);
+  assert.deepEqual(inlineOf('`**a**` and **b**'), [code('**a**'), text(' and '), bold('b')]);
 });
 
 test('bold may wrap code, and the code is bold too', () => {
@@ -79,10 +149,10 @@ test('bold stays on its own line', () => {
   assert.deepEqual(formatMessage('**one\ntwo**'), [{ type: 'p', lines: [[text('**one')], [text('two**')]] }]);
 });
 
-test('a secret handle is never read for markers, even though it can contain __', () => {
+test('a secret handle inside bold, or beside it, is left whole', () => {
   const handle = '{{secret:AbCdEfGhIjKlMnOpQr__Uv}}';
-  assert.deepEqual(inlineOf(`${handle} and __x__`), [text(`${handle} and `), bold('x')]);
-  assert.deepEqual(inlineOf(`__${handle}__`), [bold(handle)]);
+  assert.deepEqual(inlineOf(`${handle} and **x**`), [text(`${handle} and `), bold('x')]);
+  assert.deepEqual(inlineOf(`**${handle}**`), [bold(handle)]);
   assert.deepEqual(inlineOf(`${handle} ${handle}`), [text(`${handle} ${handle}`)]);
 });
 
@@ -177,6 +247,28 @@ test('a # that is not followed by a space, or has nothing after it, is text', ()
   for (const line of ['#hashtag', '#', '#   ', '####### seven', 'issue #12', '    ## indented four spaces']) {
     assert.deepEqual(formatMessage(line), [para(text(line))], line);
   }
+});
+
+test('a heading line with a long run of spaces is formatted in linear time', () => {
+  // The first pattern for a heading's closing "#"s took about two seconds for this one line (quadratic
+  // backtracking), and a message is formatted again with every word that arrives while it is written.
+  const lines = [
+    `# a${' '.repeat(50000)}x`,
+    `# a${' '.repeat(50000)}`,
+    `#${' '.repeat(50000)}`,
+    `#${' '.repeat(50000)}x`,
+    `${' '.repeat(50000)}# a`,
+    `# a${' #'.repeat(25000)}`,
+    `## a${' '.repeat(50000)}##`,
+  ];
+  const started = Date.now();
+  for (const line of lines) formatMessage(line);
+  const took = Date.now() - started;
+  assert.ok(took < 250, `seven long lines took ${took} ms`);
+  // and still reads them right
+  assert.deepEqual(formatMessage(`# a${' '.repeat(50000)}x`)[0].nodes, [text(`a${' '.repeat(50000)}x`)]);
+  assert.deepEqual(formatMessage(`## a${' '.repeat(50000)}##`), [{ type: 'heading', level: 2, nodes: [text('a')] }]);
+  assert.deepEqual(formatMessage('# a #  #'), [{ type: 'heading', level: 1, nodes: [text('a #')] }]);
 });
 
 test('a # line inside a code block is code', () => {

@@ -27,6 +27,12 @@ const OUTBOX_LIFETIME_MS = 60 * 60 * 1000;
 // enough for the server to have saved what was written and ended the turn, far shorter than a poll.
 const STOP_REREAD_MS = 400;
 
+// A Stop that finds nothing to stop while this tab's own stream is still open reached the server before
+// the turn was registered there. It is asked again — at once when `started` arrives, otherwise this often —
+// for at most this many requests in all; the turn's end (`done`) closes the stopping state either way.
+const STOP_RETRY_MS = 500;
+const STOP_MAX_TRIES = 6;
+
 const MAYBE_UNSENT = {
   kind: 'restored',
   messageEn: 'Your last message may not have reached the assistant before the page changed. It is back in the box below — send it again if it is not in the conversation.',
@@ -131,7 +137,11 @@ export function createAssistantSession({
   const turns = createTurnTracker();
   const clock = timers ?? { setTimeout: globalThis.setTimeout.bind(globalThis), clearTimeout: globalThis.clearTimeout.bind(globalThis) };
   let reread = null;
-  let stopping = null;
+  // The Stop the person asked for, until the turn it is about to end has ended (see stop()).
+  let stopIntent = null;
+  // Whether this tab's stream has delivered `started`: from then on the server knows the turn exists.
+  let streamStarted = false;
+  timeline.stopping = false;
   const poller = createResumePoller({
     load: (id) => api.conversation(id),
     onUpdate: (view) => {
@@ -141,11 +151,13 @@ export function createAssistantSession({
     },
     onSettled: () => {
       timeline.resuming = false;
+      endStop();
       if (timeline.notice?.kind === 'busy') timeline.notice = null; // the answer it waited for is in
       onChange('settled');
     },
     onGone: () => {
       timeline.resuming = false;
+      endStop();
       if (timeline.notice?.kind === 'busy') timeline.notice = null;
       onChange('settled');
     },
@@ -168,12 +180,94 @@ export function createAssistantSession({
 
   function resumeIfAnswering(view) {
     if (view?.inProgress === true && timeline.conversationId) {
+      // A Stop that was told "nothing to stop" by a conversation that is still being answered has not
+      // stopped anything (another tab began a new turn, say): the button is Stop again, not Stopping.
+      if (stopIntent?.sawNothing) endStop();
       follow(timeline.conversationId);
     } else {
       // Not being answered: nothing to re-read — including a poller some earlier open started.
       poller.stop();
       timeline.resuming = false;
+      endStop();
     }
+  }
+
+  // ---- Stop ------------------------------------------------------------------------------------------
+  // Pressing Stop is an intent that is remembered until the turn it is meant for has ended — it is not a
+  // request that is made once and forgotten. `timeline.stopping` is what the button shows («در حال توقف…»);
+  // it stays true after the request has been answered and goes false only when the turn is over (or the
+  // asking failed, or the person moved to another conversation).
+
+  /** Ends the stopping state (and any retry that is waiting); `outcome` settles what stop() returned. */
+  function endStop(outcome = { stopped: false }) {
+    const intent = stopIntent;
+    if (!intent) return;
+    stopIntent = null;
+    timeline.stopping = false;
+    if (intent.timer !== null) clock.clearTimeout(intent.timer);
+    intent.timer = null;
+    intent.settle(outcome);
+  }
+
+  /** The asking is over (answered, or given up): stop() resolves, the stopping state goes on. */
+  function stopAsked(intent, outcome) {
+    intent.asked = true;
+    intent.settle(outcome);
+  }
+
+  /** One request to `POST …/{id}/stop`, if one can be made now; never more than one in flight. */
+  async function askToStop(intent) {
+    if (stopIntent !== intent || intent.asked || intent.asking || !intent.id) return;
+    intent.asking = true;
+    intent.tries++;
+    const startedThen = streamStarted;
+    let outcome;
+    try {
+      outcome = await api.stop(intent.id);
+    } catch (error) {
+      intent.asking = false;
+      // The turn ended, or the person moved on, while it was in flight: the words are not for this screen.
+      if (stopIntent !== intent) return;
+      if (timeline.conversationId === intent.id) timeline.notice = { kind: 'stop-failed', ...wordsOf(error) };
+      onChange('stop-failed');
+      endStop({ stopped: false, error });
+      return;
+    }
+    intent.asking = false;
+    if (stopIntent !== intent) return; // over meanwhile: nothing more to ask, and no retry
+
+    if (outcome?.stopped === true) {
+      stopAsked(intent, { stopped: true });
+      if (intent.following && timeline.conversationId === intent.id) session.rereadSoon(STOP_REREAD_MS);
+      return;
+    }
+
+    if (intent.following) {
+      // No stream here, so "nothing to stop" is the truth: the turn had already finished. The
+      // conversation is read to show it — and to end the stopping state.
+      intent.sawNothing = true;
+      stopAsked(intent, { stopped: false });
+      if (timeline.conversationId === intent.id) session.rereadSoon(STOP_REREAD_MS);
+      return;
+    }
+
+    // This tab's stream is open, so the turn exists — the server has just not registered it yet.
+    if (intent.tries >= STOP_MAX_TRIES) {
+      stopAsked(intent, { stopped: false });
+    } else if (!startedThen && streamStarted) {
+      askToStop(intent); // `started` arrived while the request was out: ask again at once
+    } else if (streamStarted) {
+      intent.timer = clock.setTimeout(() => { intent.timer = null; askToStop(intent); }, STOP_RETRY_MS);
+    }
+    // else: `started` has not arrived; the stream's `started` (see send) asks again.
+  }
+
+  /** The conversation's id became known, or `started` arrived: a Stop that was waiting for it can go. */
+  function stopCanProceed() {
+    const intent = stopIntent;
+    if (!intent || intent.following || intent.asked) return;
+    intent.id ??= timeline.conversationId;
+    askToStop(intent);
   }
 
   // Each open() takes a number; a read that comes back after a later open() began is stale and is
@@ -199,6 +293,8 @@ export function createAssistantSession({
   /** Abandons the turn in flight, if any — see createTurnTracker. Returns whether there was one. */
   function abandonTurn() {
     if (!turns.abort()) return false;
+    endStop();
+    streamStarted = false;
     settleTurn(timeline);
     timeline.streaming = false;
     return true;
@@ -225,6 +321,7 @@ export function createAssistantSession({
     async open(id, { quietIfGone = false, holdOnFailure = false } = {}) {
       if (!isGuid(id)) { prefs.setConversationId(null); return {}; }
       const mine = ++opening;
+      endStop();
       const previousId = timeline.conversationId;
       const wasResuming = timeline.resuming;
       const abandoned = abandonTurn();
@@ -287,6 +384,7 @@ export function createAssistantSession({
     },
 
     startNew() {
+      endStop();
       abandonTurn();
       poller.stop();
       loadConversation(timeline, null);
@@ -323,6 +421,7 @@ export function createAssistantSession({
       timeline.notice = null;
       const userKey = addUserMessage(timeline, message);
       const turn = turns.begin();
+      streamStarted = false;
       timeline.streaming = true;
       onChange('sent');
 
@@ -351,6 +450,9 @@ export function createAssistantSession({
           timeline.conversationId = created.id;
           prefs.setConversationId(created.id);
           prefs.moveOutbox(created.id);
+          // A Stop pressed during the create round trip goes out now — after the message request that
+          // is about to be made, hence the microtask.
+          Promise.resolve().then(stopCanProceed);
         }
       }
       const conversationId = timeline.conversationId;
@@ -372,8 +474,11 @@ export function createAssistantSession({
             applyStreamEvent(timeline, name, data);
             if (name === 'started') {
               started = true;
+              streamStarted = true;
               prefs.clearOutbox(conversationId);
+              stopCanProceed();
             }
+            if (name === 'done' || name === 'error') endStop(); // the turn is over: nothing left to stop
             if (['tool', 'delta', 'message', 'plan', 'executed'].includes(name)) progressed = true;
             if (name === 'error' && started && !progressed) refusedAtGate = true;
             if ((name === 'started' || name === 'done') && timeline.conversationId) prefs.setConversationId(timeline.conversationId);
@@ -385,6 +490,8 @@ export function createAssistantSession({
           turns.end(turn);
           settleTurn(timeline);
           timeline.streaming = false;
+          streamStarted = false;
+          endStop();
         }
       }
       // Abandoned (a new conversation, another one opened, the pane going away): the conversation on
@@ -474,36 +581,35 @@ export function createAssistantSession({
     },
 
     /**
-     * The Stop button: asks the server to end the turn in progress in this conversation
-     * (`POST …/{id}/stop`). Resolves to `{ stopped }`, or `{ stopped: false, error }` — the error is
-     * also the composer's notice. Pressed again while the first is in flight, it is the same request.
+     * The Stop button: asks the server to end the turn in progress (`POST …/{id}/stop`), and keeps
+     * asking for as long as that takes to be true. Resolves to `{ stopped }` once the asking is over —
+     * or `{ stopped: false, error }`, the error also being the composer's notice. Pressed again while
+     * the intent stands, it is the same intent, never a second request. `timeline.stopping` is true from
+     * the press until the turn has ended.
      *
-     * A turn streaming in this tab ends by itself: its `stopped` and `done` events arrive on the
-     * stream that is already open, and drawing them is the timeline's job. A conversation only being
-     * followed after a reload (`resuming`) has no stream here, just the poller — so once the server
-     * has answered, it is read again promptly instead of when the next poll comes round.
-     * `stopped: false` ("it had already finished") is no error and says nothing; a tab that was only
-     * following still reads the conversation, which shows the finished answer.
+     *  - A turn streaming in this tab ends by itself: its `stopped` and `done` events arrive on the
+     *    stream that is open, and drawing them is the timeline's job. If the conversation has no id yet
+     *    (the create round trip of a first message, or a server without the create endpoint), the request
+     *    waits for the id, or for `started`. `{ stopped: false }` here means the server has not registered
+     *    the turn yet — not that it is over — so it is asked again: when `started` arrives, if it had not,
+     *    and then every ~500 ms, six requests at most.
+     *  - A conversation only being followed after a reload (`resuming`) has no stream here, just the
+     *    poller. One request; then it is read again promptly instead of when the next poll comes round.
+     *    `stopped: false` there is the truth — the turn had already finished — and says nothing.
      */
     stop() {
-      if (stopping) return stopping;
-      const conversationId = timeline.conversationId;
-      if (!conversationId || !(timeline.streaming || timeline.resuming)) return Promise.resolve({ stopped: false });
-      const following = !timeline.streaming;
-      const asking = (async () => {
-        try {
-          const outcome = await api.stop(conversationId);
-          if (following && timeline.conversationId === conversationId) session.rereadSoon(STOP_REREAD_MS);
-          return { stopped: outcome?.stopped === true };
-        } catch (error) {
-          if (timeline.conversationId === conversationId) timeline.notice = { kind: 'stop-failed', ...wordsOf(error) };
-          onChange('stop-failed');
-          return { stopped: false, error };
-        }
-      })();
-      stopping = asking;
-      asking.finally(() => { if (stopping === asking) stopping = null; });
-      return asking;
+      if (stopIntent) return stopIntent.promise;
+      if (!(timeline.streaming || timeline.resuming)) return Promise.resolve({ stopped: false });
+      const intent = {
+        id: timeline.conversationId,
+        following: !timeline.streaming,
+        tries: 0, asking: false, asked: false, sawNothing: false, timer: null,
+      };
+      intent.promise = new Promise((resolve) => { intent.settle = resolve; });
+      stopIntent = intent;
+      timeline.stopping = true;
+      askToStop(intent); // does nothing yet when the conversation has no id
+      return intent.promise;
     },
 
     /** The drawer closed: stop re-reading (the island stays mounted). */
@@ -520,6 +626,7 @@ export function createAssistantSession({
 
     /** The island is going away. */
     dispose() {
+      endStop();
       poller.stop();
       turns.abort();
       if (reread !== null) clock.clearTimeout(reread);
