@@ -38,6 +38,42 @@ test('a later line replaces an earlier one, and the first one\'s timer cannot em
   assert.equal(timers.queue.length, 1, 'one timer, the latest');
 });
 
+test('the same line twice within the hold is said again: emptied, then set on the next tick', () => {
+  const timers = fakeTimers();
+  const announcer = createAnnouncer({ timers });
+  announcer.say('کپی شد');
+  assert.equal(announcer.state.text, 'کپی شد');
+  announcer.say('کپی شد'); // pressed again while it is still showing
+  assert.equal(announcer.state.text, '', 'cleared, so that the next value is a change');
+  assert.deepEqual(timers.queue.map((t) => t.ms), [0], 'set on the next tick, and not before; the old hold timer is gone');
+  timers.queue.shift().fn();
+  assert.equal(announcer.state.text, 'کپی شد');
+  assert.deepEqual(timers.queue.map((t) => t.ms), [1500], 'and held again from here');
+  timers.queue.shift().fn();
+  assert.equal(announcer.state.text, '');
+});
+
+test('a different line, or the same one after the hold, needs no tick of its own', () => {
+  const timers = fakeTimers();
+  const announcer = createAnnouncer({ timers });
+  announcer.say('Copied');
+  announcer.say("Couldn't copy");
+  assert.equal(announcer.state.text, "Couldn't copy", 'a change already');
+  timers.queue.shift().fn(); // the hold ends
+  announcer.say("Couldn't copy");
+  assert.equal(announcer.state.text, "Couldn't copy", 'the region was empty, so this is a change too');
+});
+
+test('disposing while a repeat is waiting for its tick says nothing', () => {
+  const timers = fakeTimers();
+  const announcer = createAnnouncer({ timers });
+  announcer.say('Copied');
+  announcer.say('Copied');
+  announcer.dispose();
+  assert.equal(timers.queue.length, 0);
+  assert.equal(announcer.state.text, '');
+});
+
 test('saying nothing says nothing', () => {
   const timers = fakeTimers();
   const announcer = createAnnouncer({ timers });

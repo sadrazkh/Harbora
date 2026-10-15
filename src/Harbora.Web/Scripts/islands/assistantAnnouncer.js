@@ -32,19 +32,32 @@ export function createAnnouncer({
     timer = null;
   };
 
+  const show = (line) => {
+    state.text = line;
+    if (line) {
+      timer = timers.setTimeout(() => {
+        timer = null;
+        state.text = '';
+      }, holdMs);
+    }
+  };
+
   return {
     state,
-    /** Says `text` (a later line replaces an earlier one); empty or missing text says nothing. */
+    /**
+     * Says `text` (a later line replaces an earlier one); empty or missing text says nothing. The same line
+     * again while it is still showing is said again: a screen reader reads a *change* in the region, so it is
+     * emptied first and set on the next tick.
+     */
     say(text) {
       const line = typeof text === 'string' ? text : '';
       clear();
-      state.text = line;
-      if (line) {
-        timer = timers.setTimeout(() => {
-          timer = null;
-          state.text = '';
-        }, holdMs);
+      if (line && state.text === line) {
+        state.text = '';
+        timer = timers.setTimeout(() => { timer = null; show(line); }, 0);
+        return;
       }
+      show(line);
     },
     /** The pane is going away: nothing more is said, and no timer is left running. */
     dispose() {

@@ -24,7 +24,6 @@ export function codeSpans(line) {
 // a single `*` is never one (`2*3`, `*.js`) and neither is a longer run (`***`).
 const RUN = /\*+/g;
 const SPACE = /\s/;
-const PUNCTUATION = /\p{P}/u;
 // What may stand in front of an opening `**` besides a space or the start of the line.
 const OPENING_PUNCTUATION = new Set(['(', '[', '{', '«', '"', "'", '“', '‘']);
 
@@ -46,10 +45,12 @@ function scanPlain(text, tokens) {
  * The pair counts only on this one line and outside code, and by flanking rules that keep globs and
  * arithmetic literal:
  *  - an opening `**` stands at the start of the line, or after a space or an opening bracket or quote
- *    (`( [ { « " ' “ ‘`), and is followed by something that is not a space;
- *  - a closing `**` is preceded by something that is not a space, and stands at the end of the line, or
- *    before a space, or before punctuation other than `/` and `*` — so `src/**\/a and lib/**\/b` is
- *    text, and `**مهم**،` and `**مهم**.` are bold.
+ *    (`( [ { « " ' “ ‘`), and is followed by something that is neither a space nor a `/`;
+ *  - a closing `**` is preceded by something that is neither a space nor a `/`, and is not followed by
+ *    a `/` or a `*`.
+ * So `ignore **\/node_modules\/** please`, `see **\/bin\/** and **\/obj\/**` and `src/**\/a and lib/**\/b` are
+ * text, while `**اپ**ها` (a Persian plural written straight on), `**اپ**‌ها` (with the half-space),
+ * `**a**=1` and `**متن**،` are bold.
  * Anything left unpaired stays a literal character. A code span is never scanned, but a pair may wrap
  * one (`**\`shop-db\`**` is bold code).
  *
@@ -67,7 +68,7 @@ export function inline(line) {
   }
   if (at < line.length) scanPlain(line.slice(at), tokens);
 
-  // The character on either side of a marker; code counts as a backtick (solid, and not punctuation).
+  // The character on either side of a marker; code counts as a backtick (solid, and not a slash).
   const edge = (token, last) => (token.kind === 'code' ? '`' : last ? token.text.at(-1) : token.text[0]);
   const before = (i) => (i > 0 ? edge(tokens[i - 1], true) : undefined);
   const after = (i) => (i + 1 < tokens.length ? edge(tokens[i + 1], false) : undefined);
@@ -80,9 +81,9 @@ export function inline(line) {
     if (token.kind !== 'mark') return;
     const prev = before(i);
     const next = after(i);
-    const canOpen = solid(next) && (prev === undefined || SPACE.test(prev) || OPENING_PUNCTUATION.has(prev));
-    const canClose = solid(prev)
-      && (next === undefined || SPACE.test(next) || (PUNCTUATION.test(next) && next !== '/' && next !== '*'));
+    const canOpen = solid(next) && next !== '/'
+      && (prev === undefined || SPACE.test(prev) || OPENING_PUNCTUATION.has(prev));
+    const canClose = solid(prev) && prev !== '/' && next !== '/' && next !== '*';
     if (opener >= 0 && canClose) {
       pairs.push([opener, i]);
       opener = -1;

@@ -33,6 +33,12 @@ const STOP_REREAD_MS = 400;
 const STOP_RETRY_MS = 500;
 const STOP_MAX_TRIES = 6;
 
+// After the last of them the button is Stop again — it is not left on «stopping» for the rest of the turn.
+const STOP_NOT_TAKEN = {
+  messageEn: "Couldn't stop it — try again",
+  messageFa: 'توقف انجام نشد — دوباره امتحان کنید',
+};
+
 const MAYBE_UNSENT = {
   kind: 'restored',
   messageEn: 'Your last message may not have reached the assistant before the page changed. It is back in the box below — send it again if it is not in the conversation.',
@@ -141,11 +147,14 @@ export function createAssistantSession({
   let stopIntent = null;
   // Whether this tab's stream has delivered `started`: from then on the server knows the turn exists.
   let streamStarted = false;
+  // Whether it has delivered `done` or `error`: the turn is over, though the stream may not have closed yet.
+  let streamOver = false;
   timeline.stopping = false;
   const poller = createResumePoller({
     load: (id) => api.conversation(id),
     onUpdate: (view) => {
       loadConversation(timeline, view);
+      endStopIfMoved();
       timeline.resuming = view?.inProgress === true;
       onChange('resumed');
     },
@@ -179,6 +188,7 @@ export function createAssistantSession({
   }
 
   function resumeIfAnswering(view) {
+    endStopIfMoved();
     if (view?.inProgress === true && timeline.conversationId) {
       // A Stop that was told "nothing to stop" by a conversation that is still being answered has not
       // stopped anything (another tab began a new turn, say): the button is Stop again, not Stopping.
@@ -201,12 +211,24 @@ export function createAssistantSession({
   /** Ends the stopping state (and any retry that is waiting); `outcome` settles what stop() returned. */
   function endStop(outcome = { stopped: false }) {
     const intent = stopIntent;
-    if (!intent) return;
+    if (!intent) {
+      timeline.stopping = false; // nothing is stopping, whatever the flag says
+      return;
+    }
     stopIntent = null;
     timeline.stopping = false;
     if (intent.timer !== null) clock.clearTimeout(intent.timer);
     intent.timer = null;
     intent.settle(outcome);
+  }
+
+  /**
+   * A Stop is for one conversation. Whenever the timeline has taken in another one (open, a re-read, the
+   * poller), a stop that was meant for the old id has nothing left to stop and must not outlive it — it
+   * would show «stopping» for a conversation it never asked about.
+   */
+  function endStopIfMoved() {
+    if (stopIntent?.id && stopIntent.id !== timeline.conversationId) endStop();
   }
 
   /** The asking is over (answered, or given up): stop() resolves, the stopping state goes on. */
@@ -253,7 +275,11 @@ export function createAssistantSession({
 
     // This tab's stream is open, so the turn exists — the server has just not registered it yet.
     if (intent.tries >= STOP_MAX_TRIES) {
-      stopAsked(intent, { stopped: false });
+      // Given up. The button is Stop again, and the composer says so: stuck on «stopping» for however long
+      // the turn runs would be the worst of both.
+      if (timeline.conversationId === intent.id) timeline.notice = { kind: 'stop-failed', ...STOP_NOT_TAKEN };
+      onChange('stop-failed');
+      endStop({ stopped: false });
     } else if (!startedThen && streamStarted) {
       askToStop(intent); // `started` arrived while the request was out: ask again at once
     } else if (streamStarted) {
@@ -417,11 +443,14 @@ export function createAssistantSession({
       const message = String(text ?? '').trim();
       if (!message || timeline.streaming || timeline.resuming || timeline.loading || timeline.loadError) return { sent: false };
 
+      // Nothing is being answered here, so a stopping state still standing is stale.
+      endStop();
       poller.stop();
       timeline.notice = null;
       const userKey = addUserMessage(timeline, message);
       const turn = turns.begin();
       streamStarted = false;
+      streamOver = false;
       timeline.streaming = true;
       onChange('sent');
 
@@ -478,7 +507,10 @@ export function createAssistantSession({
               prefs.clearOutbox(conversationId);
               stopCanProceed();
             }
-            if (name === 'done' || name === 'error') endStop(); // the turn is over: nothing left to stop
+            if (name === 'done' || name === 'error') { // the turn is over: nothing left to stop
+              streamOver = true;
+              endStop();
+            }
             if (['tool', 'delta', 'message', 'plan', 'executed'].includes(name)) progressed = true;
             if (name === 'error' && started && !progressed) refusedAtGate = true;
             if ((name === 'started' || name === 'done') && timeline.conversationId) prefs.setConversationId(timeline.conversationId);
@@ -491,6 +523,7 @@ export function createAssistantSession({
           settleTurn(timeline);
           timeline.streaming = false;
           streamStarted = false;
+          streamOver = false;
           endStop();
         }
       }
@@ -592,13 +625,18 @@ export function createAssistantSession({
      *    (the create round trip of a first message, or a server without the create endpoint), the request
      *    waits for the id, or for `started`. `{ stopped: false }` here means the server has not registered
      *    the turn yet — not that it is over — so it is asked again: when `started` arrives, if it had not,
-     *    and then every ~500 ms, six requests at most.
+     *    and then every ~500 ms, six requests at most — after which the button is Stop again and the
+     *    composer says it did not take.
      *  - A conversation only being followed after a reload (`resuming`) has no stream here, just the
      *    poller. One request; then it is read again promptly instead of when the next poll comes round.
      *    `stopped: false` there is the truth — the turn had already finished — and says nothing.
      */
     stop() {
       if (stopIntent) return stopIntent.promise;
+      // While another conversation is being opened, `resuming` still belongs to the one being left: a Stop
+      // now would be for a turn that is no longer on screen. And once `done` or `error` has come, the turn is
+      // over although the stream has not quite closed.
+      if (timeline.loading || (timeline.streaming && streamOver)) return Promise.resolve({ stopped: false });
       if (!(timeline.streaming || timeline.resuming)) return Promise.resolve({ stopped: false });
       const intent = {
         id: timeline.conversationId,

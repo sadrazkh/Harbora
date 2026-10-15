@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, provide, reactive, ref, watch } from 'vue';
 import {
   ArrowUp, Check, CircleHelp, History, Info, LoaderCircle,
   Plus, Sparkles, TriangleAlert, Wrench, X, Lock, Eye, EyeOff,
@@ -24,7 +24,6 @@ import { checkPlanForm, buildApproveBody } from './assistantPlan.js';
 import { createAssistantSession } from './assistantSession.js';
 import { createSecretBook, createSecretForm, looksLikeSecret, withoutSecrets } from './assistantSecrets.js';
 import AssistantSecretText from './AssistantSecretText.vue';
-import { provide, watch } from 'vue';
 import { MoveHorizontal, Square } from 'lucide';
 import { ANNOUNCER, createAnnouncer } from './assistantAnnouncer.js';
 import { createAssistantPrefs, EVENT_TOGGLE_WIDE, EVENT_WIDTH } from '../assistantDrawer.js';

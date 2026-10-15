@@ -45,7 +45,7 @@ function fakeTimers() {
   };
 }
 
-const view = ({ inProgress = false, messages = [] } = {}) => ({ id: CONVO, title: 'shop', messages, pendingPlan: null, inProgress });
+const view = ({ id = CONVO, inProgress = false, messages = [] } = {}) => ({ id, title: 'shop', messages, pendingPlan: null, inProgress });
 const userMessage = (text) => ({ id: 'u1', role: 'user', text, toolName: null, createdAt: '2026-10-15T10:00:00Z' });
 const assistantMessage = (text) => ({ id: 'a1', role: 'assistant', text, toolName: null, createdAt: '2026-10-15T10:00:05Z' });
 
@@ -65,7 +65,8 @@ function setup({ views = [], stops = [], holdCreate = false, createFails = false
   const calls = [];
   const queue = [...views];
   const replies = [...stops];
-  const gate = { stop: null, create: null, emit: null, end: null };
+  const gate = { stop: null, create: null, emit: null, end: null, read: null };
+  const hold = { reads: false };
   const api = {
     createConversation() {
       calls.push({ op: 'create' });
@@ -80,7 +81,11 @@ function setup({ views = [], stops = [], holdCreate = false, createFails = false
       if (!holdStarted) args.onEvent('started', { conversationId: args.conversationId ?? CONVO });
       return new Promise((resolve) => { gate.end = () => resolve({ completed: true }); });
     },
-    async conversation(id) { calls.push({ op: 'get', id }); return queue.shift() ?? view(); },
+    conversation(id) {
+      calls.push({ op: 'get', id });
+      if (!hold.reads) return Promise.resolve(queue.shift() ?? view());
+      return new Promise((resolve) => { gate.read = (value) => resolve(value ?? queue.shift() ?? view()); });
+    },
     stop(id) {
       calls.push({ op: 'stop', id });
       if (stop) return stop(id);
@@ -93,7 +98,7 @@ function setup({ views = [], stops = [], holdCreate = false, createFails = false
   };
   const session = createAssistantSession({ api, prefs, timeline, timers, now: () => Date.parse('2026-10-15T10:00:00Z'), pollIntervalMs: 2500 });
   const stopCalls = () => calls.filter((c) => c.op === 'stop').length;
-  return { session, timeline, timers, calls, gate, prefs, stopCalls };
+  return { session, timeline, timers, calls, gate, hold, prefs, stopCalls };
 }
 
 /** A turn streaming in this tab, held open. */
@@ -294,8 +299,8 @@ test('after `started`, "nothing to stop" is retried about every 500 ms until it 
   assert.equal(s.timeline.stopping, true, 'and the stopping state waits for the turn to end');
 });
 
-test('a Stop that never takes asks six times at most, then waits for the turn to end by itself', async () => {
-  const s = setup({ stops: [false, false, false, false, false, false, false, false] });
+test('a Stop that never takes asks six times at most; then the button is Stop again and the composer says so', async () => {
+  const s = setup({ stops: [false, false, false, false, false, false, false, false, true] });
   await streaming(s);
   const pending = s.session.stop();
   await settle();
@@ -303,12 +308,64 @@ test('a Stop that never takes asks six times at most, then waits for the turn to
   assert.equal(s.stopCalls(), 6);
   assert.equal(s.timers.queue.length, 0, 'no seventh');
   assert.deepEqual(await pending, { stopped: false });
-  assert.equal(s.timeline.stopping, true, 'still «stopping»: only the end of the turn closes it');
-  assert.equal(s.timeline.notice, null);
+  assert.equal(s.timeline.stopping, false, 'not left on «stopping» for the rest of the turn');
+  assert.equal(s.timeline.notice.messageFa, 'توقف انجام نشد — دوباره امتحان کنید');
+  assert.equal(s.timeline.notice.messageEn, "Couldn't stop it — try again");
 
+  // pressable again: a new press is a new intent with its own six
+  const again = s.session.stop();
+  assert.equal(s.timeline.stopping, true);
+  await settle();
+  assert.equal(s.stopCalls(), 7);
   await finishTurn(s);
+  assert.deepEqual(await again, { stopped: false });
   assert.equal(s.timeline.stopping, false);
-  assert.equal(s.stopCalls(), 6);
+});
+
+test('an error on a retry request is shown like any other, and ends «stopping»', async () => {
+  const s = setup({ stops: [false, Object.assign(new Error('Could not reach the panel.'), { messageEn: 'Could not reach the panel.', messageFa: 'ارتباط با پنل برقرار نشد.' })] });
+  await streaming(s);
+  const pending = s.session.stop();
+  await settle();
+  assert.deepEqual(s.timers.queue.map((t) => t.ms), [500]);
+  await s.timers.fire(500);
+  const outcome = await pending;
+  assert.equal(outcome.stopped, false);
+  assert.ok(outcome.error);
+  assert.equal(s.timeline.stopping, false);
+  assert.equal(s.timeline.notice.messageFa, 'ارتباط با پنل برقرار نشد.');
+  assert.equal(s.timers.queue.length, 0, 'and nothing is retried after an error');
+  assert.equal(s.stopCalls(), 2);
+});
+
+test('a press in the gap between `done` and the stream closing asks nothing', async () => {
+  const s = setup();
+  await streaming(s);
+  s.gate.emit('done', { conversationId: CONVO, remainingToday: 5 });
+  assert.equal(s.timeline.streaming, true, 'the stream has not closed yet, so the Stop button is still on screen');
+  assert.deepEqual(await s.session.stop(), { stopped: false });
+  assert.equal(s.timeline.stopping, false);
+  assert.equal(s.stopCalls(), 0);
+  assert.equal(s.timers.queue.length, 0);
+  s.gate.end();
+  await settle();
+
+  // and the same after an error event
+  const failed = setup();
+  await streaming(failed);
+  failed.gate.emit('error', { messageEn: 'The assistant failed.', messageFa: 'دستیار ناموفق بود.' });
+  assert.deepEqual(await failed.session.stop(), { stopped: false });
+  assert.equal(failed.stopCalls(), 0);
+  failed.gate.end();
+  await settle();
+});
+
+test('the next turn is not affected by the gap of the last one', async () => {
+  const s = setup({ stops: [true] });
+  await streaming(s);
+  await finishTurn(s);
+  await streaming(s, 'again');
+  assert.deepEqual(await s.session.stop(), { stopped: true });
 });
 
 test('no second request goes out while a retry is in flight', async () => {
@@ -509,6 +566,49 @@ test('leaving a followed conversation — a new one, or another opened — ends 
   await other.session.stop();
   await other.session.open(OTHER);
   assert.equal(other.timeline.stopping, false);
+});
+
+test('a press while another conversation is still being opened leaves no intent, and Stop works once it has landed', async () => {
+  const s = setup({ views: [view({ inProgress: true })], stops: [true] });
+  await following(s); // CONVO is being followed: `resuming`, so the Stop button is on screen
+  s.hold.reads = true;
+  const opening = s.session.open(OTHER);
+  await settle();
+  assert.equal(s.timeline.loading, true);
+  assert.equal(s.timeline.resuming, true, 'still the old conversation\'s flag — which is why the button is there');
+
+  assert.deepEqual(await s.session.stop(), { stopped: false });
+  assert.equal(s.timeline.stopping, false, 'no dead «stopping» for a conversation that is being left');
+  assert.equal(s.stopCalls(), 0);
+
+  s.gate.read(view({ id: OTHER, inProgress: true })); // the one opened is itself being answered
+  await opening;
+  assert.equal(s.timeline.conversationId, OTHER);
+  assert.equal(s.timeline.resuming, true);
+  assert.equal(s.timeline.stopping, false);
+
+  const pending = s.session.stop();
+  assert.equal(s.timeline.stopping, true);
+  assert.deepEqual(await pending, { stopped: true });
+  assert.deepEqual(s.calls.filter((c) => c.op === 'stop'), [{ op: 'stop', id: OTHER }], 'the request is for the conversation that landed');
+});
+
+test('whatever puts another conversation in the timeline ends a stop that was meant for the old one', async () => {
+  // A poll that brings back a different conversation than the one the stop was pressed for.
+  const s = setup({ views: [view({ inProgress: true }), view({ id: OTHER, inProgress: true })], stops: [true] });
+  await following(s);
+  await s.session.stop();
+  assert.equal(s.timeline.stopping, true);
+  await s.timers.fire(2500);
+  assert.equal(s.timeline.conversationId, OTHER);
+  assert.equal(s.timeline.stopping, false);
+});
+
+test('a send that finds a stopping state still standing clears it', async () => {
+  const s = setup();
+  s.timeline.stopping = true; // stale: nothing is being answered
+  await streaming(s);
+  assert.equal(s.timeline.stopping, false);
 });
 
 test('a turn streaming in this tab is not re-read: its own stream carries the ending', async () => {

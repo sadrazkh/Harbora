@@ -106,31 +106,46 @@ test('an opening ** stands at the start of the line, or after a space or an open
   }
 });
 
-test('a closing ** stands at the end of the line, or before a space or punctuation other than / and *', () => {
+test('an opening ** is not followed by a space or a slash', () => {
+  for (const line of ['** x**', '**/x**', 'see **/x** and **/y**']) {
+    assert.deepEqual(inlineOf(line), [text(line)], line);
+  }
+});
+
+test('a closing ** is not preceded by a space or a slash, and not followed by a slash or an asterisk', () => {
+  for (const line of ['**x **', '**x/**', '**a**/b', '**a**/']) {
+    assert.deepEqual(inlineOf(line), [text(line)], line);
+  }
   assert.deepEqual(inlineOf('**x**.'), [bold('x'), text('.')]);
   assert.deepEqual(inlineOf('**x**, y'), [bold('x'), text(', y')]);
   assert.deepEqual(inlineOf('**x**: y'), [bold('x'), text(': y')]);
   assert.deepEqual(inlineOf('**x**)'), [bold('x'), text(')')]);
-  // Persian comma, full stop, semicolon and question mark, and the closing guillemet.
+  assert.deepEqual(inlineOf('**a**=1'), [bold('a'), text('=1')]);
+  assert.deepEqual(inlineOf('**a**1'), [bold('a'), text('1')]);
+});
+
+test('Persian text: a plural written straight on, with the half-space, and the Persian punctuation after a closing **', () => {
+  assert.deepEqual(inlineOf('**اپ**ها'), [bold('اپ'), text('ها')]);
+  assert.deepEqual(inlineOf('**اپ**‌ها'), [bold('اپ'), text('‌ها')]);
+  assert.deepEqual(inlineOf('**متن**،'), [bold('متن'), text('،')]);
   assert.deepEqual(inlineOf('**shop-db**، **old-db** و **web**.'), [bold('shop-db'), text('، '), bold('old-db'), text(' و '), bold('web'), text('.')]);
   assert.deepEqual(inlineOf('این **مهم** است؛ آیا **مهم** است؟'), [text('این '), bold('مهم'), text(' است؛ آیا '), bold('مهم'), text(' است؟')]);
   assert.deepEqual(inlineOf('«**مهم**»'), [text('«'), bold('مهم'), text('»')]);
   assert.deepEqual(inlineOf('**مهم**.'), [bold('مهم'), text('.')]);
-  // Not before a letter, a digit, a slash or another asterisk.
-  for (const line of ['**a**b', '**a**1', '**a**/b', '**a**ب']) {
-    assert.deepEqual(inlineOf(line), [text(line)], line);
-  }
 });
 
 test('globs with ** stay literal, even two of them in one line', () => {
   for (const line of [
     'src/**/a and lib/**/b',
     'use src/**/*.js and lib/**/*.ts',
+    'ignore **/node_modules/** please',
+    'see **/bin/** and **/obj/**',
     'ignore **/node_modules and **/dist',
+    'add **/*.log, **/*.tmp',
   ]) {
     const nodes = inlineOf(line);
     assert.equal(nodes.some((n) => n.bold), false, line);
-    assert.equal(nodes.filter((n) => n.type === 'text').map((n) => n.text).join(''), line.replace(/`\*\*`/, ''), line);
+    assert.deepEqual(nodes, [text(line)], line);
   }
 });
 

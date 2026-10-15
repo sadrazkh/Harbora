@@ -199,7 +199,7 @@ already finished"; while this tab's own stream is open, a Stop that did nothing 
 2. The heading pattern is linear: the closing `#`s are cut by scanning back from the end instead of a lazy
    `(.*?)(\s+#+)?\s*$` (the old pattern took 2.2 s for `# a` + 50,000 spaces + `x`, measured). A test formats seven
    50k-space lines in under 250 ms (they take a few ms); the other line patterns were measured and are linear.
-3. `__bold__` is gone (`__init__.py`, `__main__`, `snake__case__name` are text). `**bold**` has flanking rules: an
+3. (Flanking rules replaced in the second round below.) `__bold__` is gone (`__init__.py`, `__main__`, `snake__case__name` are text). `**bold**` has flanking rules: an
    opening `**` at the line start or after whitespace or `( [ { « " ' “ ‘`; a closing `**` at the line end or before
    whitespace or punctuation other than `/` and `*`. So `src/**/a and lib/**/b` and `a**b**c` stay literal, and
    `**x**،`, `**x**.`, `**x**؟`, `«**x**»` are bold. Tests updated and added (Persian comma and full stop included).
@@ -229,3 +229,47 @@ Commands (after the last source change):
 
 Still unverified: the real `…/stop` endpoint (the 500 ms / 6-request retry numbers are the coordinator's, tuned to no
 measured server latency).
+
+### Fix pass, second round (coordinator re-review)
+
+**Important — a Stop pressed while another conversation is still opening** (`assistantSession.js`): while the
+conversation being left was followed, `resuming` stays true during `open()`'s read, so the Stop button was on
+screen and a press made an intent for the old id that could survive into the conversation that landed (a dead
+«در حال توقف…», no request). Fixed both ways:
+
+- `stop()` ignores a press while `timeline.loading`.
+- `endStopIfMoved()` — at the top of `resumeIfAnswering` (open, re-read, send's read-back) and after the poller's
+  `loadConversation` — ends an intent whose `id` is not the conversation now in the timeline.
+- `send()` starts with a defensive `endStop()` (after its busy guard, so a legitimate intent is not touched);
+  `endStop()` also resets `timeline.stopping` when there is no intent.
+- Tests: a press during a held `open()` leaves no intent and no request, and Stop then works on the landed
+  conversation (the POST names the new id); a poll that brings back another conversation ends the old stop; a send
+  clears a stale `stopping`. Mutation-checked: removing the loading guard, the moved check, the `send()` call, each makes
+  a test fail.
+- Also found while writing the gap test: a press between `done` (or `error`) and the stream actually closing would have
+  started an intent for a turn that is already over (the button is still on screen for those few milliseconds). It is now
+  ignored (`streamOver`), with a test; the next turn is unaffected.
+
+**Minors**
+
+1. After the sixth `{ stopped: false }` the intent ends: the button is Stop again and the composer's notice says
+   «توقف انجام نشد — دوباره امتحان کنید» / "Couldn't stop it — try again". A new press is a new intent with its own six.
+2. Bold, final rules (`assistantInline.js`): an opening `**` at the line start or after whitespace or
+   `( [ { « " ' “ ‘`, and not followed by whitespace or `/`; a closing `**` not preceded by whitespace or `/` and not
+   followed by `/` or `*` (so what follows is otherwise free). Literal: `ignore **/node_modules/** please`,
+   `see **/bin/** and **/obj/**`, `src/**/a and lib/**/b`. Bold: `**اپ**‌ها` (ZWNJ), `**اپ**ها`, `**a**=1`, `**متن**،`.
+   The tests for the earlier rule were replaced (a closer followed by a letter or digit is now allowed); the opener
+   rule still keeps `a**b**c`, `src/**b**` and `Note:**b**` literal.
+3. Tests for an error on a retry request (notice, «stopping» ends, no further retry) and for a press in the gap
+   between `done` and the stream closing (after `done` and after `error`: no request, no intent).
+4. `AssistantPanel.vue` has one `import … from 'vue'` line again
+   (`computed, nextTick, onMounted, onUnmounted, provide, reactive, ref, watch`).
+5. The announcer says the same line again within the hold: it is emptied and set on the next tick (a timer of 0 ms),
+   then held again; disposing while one waits leaves nothing behind. Tests with fake timers.
+
+Commands (after the last source change):
+
+- `node --test src/Harbora.Web/Scripts/tests/*.test.mjs` → exit 0, `# tests 348 / # pass 348 / # fail 0`
+  (337 after the first fix pass).
+- `cd src/Harbora.Web && npm run build` → exit 0, `✓ built in 5.22s`.
+- The full dotnet suite was not re-run (no .NET, Razor or layout file changed in either fix pass).
