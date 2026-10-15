@@ -146,8 +146,10 @@ public sealed class AgentPlanService(
 
         if (await TryMoveAsync(actor, plan.Id, AgentPlanStatus.Rejected, now, requireUnexpired: true, ct) == 0)
         {
-            var current = await db.AgentPlans.IgnoreQueryFilters().AsNoTracking().FirstAsync(p => p.Id == plan.Id, ct);
-            return current.Status == AgentPlanStatus.Rejected ? null : await DiagnoseLostClaimAsync(actor, plan.Id, now, ct);
+            // Read, not assumed to be there: its conversation may have been deleted since it was loaded,
+            // and that is a plan not found, not a server error.
+            var current = await db.AgentPlans.IgnoreQueryFilters().AsNoTracking().FirstOrDefaultAsync(p => p.Id == plan.Id, ct);
+            return current?.Status == AgentPlanStatus.Rejected ? null : await DiagnoseLostClaimAsync(actor, plan.Id, now, ct);
         }
 
         var steps = StepsOf(plan);
