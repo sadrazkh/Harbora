@@ -169,7 +169,7 @@
 
                 <div>
                     <label class="block text-sm text-ink-muted mb-1">@(isFa ? "نگه‌داری گفت‌وگوها (روز)" : "Keep conversations (days)")</label>
-                    @* Text for the same reason as the limit above: Persian digits. The server checks 1–3650. *@
+                    @* Text for the same reason as the limit above: Persian digits. The server checks 0–3650 (0 = keep for ever). *@
                     <input name="agentConversationRetentionDays" value="@agent?.ConversationRetentionDaysText" inputmode="numeric" dir="ltr"
                            @(isProvider ? "" : "disabled")
                            class="w-full rounded-lg bg-surface-2 border border-line-strong px-3 py-2 text-sm disabled:opacity-60" />
