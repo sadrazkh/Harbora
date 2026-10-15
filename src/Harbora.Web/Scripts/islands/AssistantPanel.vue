@@ -515,7 +515,8 @@ const suggestions = fa
 
       <template v-for="row in rows" :key="row.key">
         <!-- A run of tool lines is one block: open while it works, then one line — "3 actions done · 2.4 s"
-             (assistantActivity.js, blockView). A failure keeps it open; the person's own toggle wins. -->
+             (assistantActivity.js, blockView). A failure keeps it open; the person's own toggle wins — unless
+             it was made before the failure, which opens the block again. -->
         <section v-if="row.type === 'activity'" class="overflow-hidden rounded-xl border bg-surface"
                  :class="row.view.tone === 'failed' ? 'border-danger/30' : 'border-line'"
                  data-assistant-activity :data-activity-tone="row.view.tone">
