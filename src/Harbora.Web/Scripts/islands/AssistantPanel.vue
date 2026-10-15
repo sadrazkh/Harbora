@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import {
   ArrowUp, Check, ChevronLeft, ChevronRight, CircleHelp, History, Info, LoaderCircle, MessageSquare,
   Plus, Sparkles, TriangleAlert, Wrench, X, Lock, Eye, EyeOff,
+  AppWindow, Boxes, CheckCheck, ChevronDown, Database, Folder, Gauge, Globe, HardDrive, KeyRound, LayoutGrid,
+  ListChecks, Rocket, SquareStop,
 } from 'lucide';
 import { AssistantIcon } from './assistantIcon';
 import AssistantText from './AssistantText.vue';
@@ -11,8 +13,12 @@ import AssistantResultCard from './AssistantResultCard.vue';
 import { createAssistantApi, buildPageContext, parseDeclaredContext } from './assistantApi.js';
 import { textDirection, firstStrongDirection } from './assistantFormat.js';
 import {
-  createTimeline, applyStreamEvent, applyPlanResult, applyApproveRefusal, markPlanRejected, isThinking,
+  createTimeline, applyStreamEvent, applyPlanResult, applyApproveRefusal, markPlanRejected,
 } from './assistantTimeline.js';
+import {
+  activityRows, blockView, categoryIcon, formatElapsed, formatSeconds, thinkingLine, thinkingShows, toolLineMark,
+  toolLineText, toolLineTitle, trackThinking,
+} from './assistantActivity.js';
 import { checkPlanForm, buildApproveBody } from './assistantPlan.js';
 import { createAssistantSession } from './assistantSession.js';
 import { createSecretBook, createSecretForm, looksLikeSecret, withoutSecrets } from './assistantSecrets.js';
@@ -54,7 +60,7 @@ const session = createAssistantSession({
     if (what === 'settled') refreshStatus();
   },
 });
-const thinking = computed(() => isThinking(timeline));
+const thinking = computed(() => thinkingShows(timeline));
 // The composer waits while a turn is streaming here or still being answered after a reload.
 const answering = computed(() => timeline.streaming || timeline.resuming);
 
@@ -274,21 +280,56 @@ async function cancelPlan(item: any) {
   }
 }
 
-// ---- tool lines --------------------------------------------------------------------------------
+// ---- tool lines, activity blocks and the thinking line --------------------------------------------
+// The words, counts and open/closed rules are assistantActivity.js's; this only maps them to glyphs.
 
-function toolText(item: any) {
-  const summary = fa ? item.summaryFa || item.summaryEn : item.summaryEn || item.summaryFa;
-  if (summary) return summary;
-  switch (item.state) {
-    case 'running': return t(`Running ${item.name}…`, `در حال اجرای ${item.name}…`);
-    case 'done': return t(`${item.name} finished`, `${item.name} انجام شد`);
-    case 'failed': return t(`${item.name} failed`, `${item.name} ناموفق بود`);
-    case 'interrupted': return t(`${item.name} — no result arrived`, `${item.name} — نتیجه‌ای نرسید`);
-    default: return t(`${item.name} — outcome unknown`, `${item.name} — نتیجه نامشخص`);
-  }
+const CATEGORY_GLYPHS: Record<string, any> = {
+  AppWindow, Rocket, Database, Folder, Globe, HardDrive, KeyRound, LayoutGrid, Gauge, Boxes, Wrench,
+};
+const categoryGlyph = (category: string | null | undefined) => CATEGORY_GLYPHS[categoryIcon(category)] ?? Wrench;
+
+const toolText = (item: any) => toolLineText(item, fa);
+const toolTitle = (item: any) => toolLineTitle(item, fa);
+// The state mark beside a line (spinner, check, cross, question mark), by toolLineMark's name for it.
+const toolIcon = (mark: string | null) => ({ running: LoaderCircle, done: Check, failed: X } as Record<string, any>)[mark ?? ''] ?? CircleHelp;
+const toolIconClass = (mark: string | null) => ({ running: 'text-accent-text', done: 'text-ok', failed: 'text-danger' } as Record<string, string>)[mark ?? ''] ?? 'text-ink-faint';
+// A running line the thinking line is naming does not spin a second spinner.
+const markOf = (item: any) => toolLineMark(item, { thinkingKey: line.value?.toolKey ?? null });
+
+// The person's own open/closed choice per block, by the block's first line's key: it holds while lines
+// are added to the block and after the turn, over what the rules would say.
+const blockChoices = reactive<Record<string, boolean>>({});
+const rows = computed(() => {
+  const list = activityRows(timeline.items);
+  return list.map((row: any, i: number) => (row.type !== 'activity' ? row : {
+    ...row,
+    view: blockView(row.block, { answering: answering.value, last: i === list.length - 1, choice: blockChoices[row.key], fa }),
+  }));
+});
+const toggleBlock = (row: any) => { blockChoices[row.key] = !row.view.open; };
+const activityId = (row: any) => `assistant-activity-${row.key}`;
+const blockIcon = (tone: string) => ({ working: LoaderCircle, failed: TriangleAlert, done: CheckCheck, ran: ListChecks } as Record<string, any>)[tone] ?? CircleHelp;
+const blockIconClass = (tone: string) => ({ working: 'text-accent-text', failed: 'text-danger', done: 'text-ok' } as Record<string, string>)[tone] ?? 'text-ink-faint';
+
+const stoppedText = (item: any) => say(item) || t('You stopped this answer.', 'این پاسخ را متوقف کردید.');
+
+// The thinking line's clock: `now` ticks once a second only while the line shows, for its "12 s"; the
+// timer goes with the line and with the island.
+const now = ref(Date.now());
+let ticker: ReturnType<typeof setInterval> | null = null;
+function stopTicker() {
+  if (ticker !== null) clearInterval(ticker);
+  ticker = null;
 }
-const toolIcon = (state: string) => ({ running: LoaderCircle, done: Check, failed: X } as Record<string, any>)[state] ?? CircleHelp;
-const toolIconClass = (state: string) => ({ running: 'text-accent-text', done: 'text-ok', failed: 'text-danger' } as Record<string, string>)[state] ?? 'text-ink-faint';
+watch(thinking, (showing) => {
+  now.value = Date.now();
+  trackThinking(timeline, now.value);
+  if (showing && ticker === null) ticker = setInterval(() => { now.value = Date.now(); }, 1000);
+  if (!showing) stopTicker();
+}, { immediate: true });
+onUnmounted(stopTicker);
+const line = computed(() => thinkingLine(timeline, now.value));
+const lineLabel = computed(() => (line.value ? (fa ? line.value.labelFa : line.value.labelEn) : ''));
 
 // ---- scrolling ---------------------------------------------------------------------------------
 
@@ -442,60 +483,89 @@ const Back = fa ? ChevronRight : ChevronLeft;
         </div>
       </div>
 
-      <template v-for="item in timeline.items" :key="item.key">
-        <div v-if="item.kind === 'user'" class="flex flex-col items-end gap-1" data-assistant-message="user" :data-unsent="item.unsent ? 'true' : undefined">
+      <template v-for="row in rows" :key="row.key">
+        <!-- A run of tool lines is one block: open while it works, then one line — "3 actions done · 2.4 s"
+             (assistantActivity.js, blockView). A failure keeps it open; the person's own toggle wins. -->
+        <section v-if="row.type === 'activity'" class="overflow-hidden rounded-xl border bg-surface"
+                 :class="row.view.tone === 'failed' ? 'border-danger/30' : 'border-line'"
+                 data-assistant-activity :data-activity-tone="row.view.tone">
+          <button type="button" class="flex w-full items-center gap-2 px-3 py-2 text-start text-sm hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+                  :aria-expanded="row.view.open ? 'true' : 'false'" :aria-controls="activityId(row)" data-activity-toggle @click="toggleBlock(row)">
+            <AssistantIcon :icon="blockIcon(row.view.tone)" :size="14" :spin="row.view.working" :class="blockIconClass(row.view.tone)" />
+            <span class="min-w-0 flex-1" :class="row.view.tone === 'failed' ? 'font-medium text-danger' : 'text-ink-muted'" data-activity-heading>{{ row.view.heading }}</span>
+            <AssistantIcon :icon="ChevronDown" :size="14" class="text-ink-faint motion-safe:transition-transform" :class="row.view.open ? 'rotate-180' : ''" />
+          </button>
+          <!-- Each line: its category's icon, the tool's name for people (a failed one: what failed),
+               its own duration, and a small mark for its state. A saved line has no mark — a stored tool
+               message does not say whether the tool succeeded — so it is never drawn as a check. -->
+          <ul v-show="row.view.open" :id="activityId(row)" class="space-y-1.5 border-t border-line px-3 py-2">
+            <li v-for="item in row.block.items" :key="item.key" class="flex items-start gap-2 text-sm text-ink-muted" data-tool-line
+                :data-tool-state="item.kind === 'tool' ? item.state : undefined" :data-tool-history="item.kind === 'tool-history' ? 'true' : undefined"
+                :data-tool-category="item.category || undefined" :title="toolTitle(item)">
+              <AssistantIcon :icon="categoryGlyph(item.category)" :size="14" class="mt-[3px] text-ink-faint" />
+              <span class="min-w-0 flex-1 break-words" :class="item.state === 'failed' ? 'text-danger' : ''" :dir="textDirection(toolText(item))">{{ toolText(item) }}</span>
+              <span v-if="formatSeconds(item.durationMs, fa)" class="mt-0.5 shrink-0 text-[11px] text-ink-muted" data-tool-duration>{{ formatSeconds(item.durationMs, fa) }}</span>
+              <AssistantIcon v-if="markOf(item)" :icon="toolIcon(markOf(item))" :size="14" :spin="markOf(item) === 'running'" class="mt-[3px]" :class="toolIconClass(markOf(item))" />
+            </li>
+          </ul>
+        </section>
+
+        <!-- A plan that ran with every step done: its card and its result as one compact card. -->
+        <AssistantResultCard v-else-if="row.type === 'ran'" :result="row.result.result" :plan="row.result.plan ?? row.plan?.plan ?? null" :fa="fa" compact />
+
+        <div v-else-if="row.item.kind === 'user'" class="flex flex-col items-end gap-1" data-assistant-message="user" :data-unsent="row.item.unsent ? 'true' : undefined">
           <div class="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-ee-md px-3 py-2 text-sm leading-6"
-               :class="item.unsent ? 'border border-dashed border-line-strong bg-surface-2 text-ink' : 'bg-accent text-white'"
-               :dir="textDirection(item.text)"><AssistantSecretText :text="item.text" :name-of="secrets.nameOf" :fa="fa" :inverse="!item.unsent" /></div>
-          <span v-if="item.unsent === 'unsure'" class="text-[11px] text-ink-muted">{{ t('May not have been sent', 'شاید فرستاده نشده باشد') }}</span>
-          <span v-else-if="item.unsent" class="text-[11px] text-ink-muted">{{ t('Not sent', 'فرستاده نشد') }}</span>
+               :class="row.item.unsent ? 'border border-dashed border-line-strong bg-surface-2 text-ink' : 'bg-accent text-white'"
+               :dir="textDirection(row.item.text)"><AssistantSecretText :text="row.item.text" :name-of="secrets.nameOf" :fa="fa" :inverse="!row.item.unsent" /></div>
+          <span v-if="row.item.unsent === 'unsure'" class="text-[11px] text-ink-muted">{{ t('May not have been sent', 'شاید فرستاده نشده باشد') }}</span>
+          <span v-else-if="row.item.unsent" class="text-[11px] text-ink-muted">{{ t('Not sent', 'فرستاده نشد') }}</span>
         </div>
 
         <!-- The model's text — the bubble being written while deltas arrive, then the whole answer. -->
-        <div v-else-if="item.kind === 'assistant'" class="text-sm text-ink" data-assistant-message="assistant" :data-live="item.live ? 'true' : undefined">
-          <AssistantText :text="item.text" :live="item.live === true" :streamed="item.streamed === true" :name-of="secrets.nameOf" :fa="fa" />
-          <p v-if="item.cut" class="mt-1 text-[11px] text-ink-muted" data-assistant-cut>{{ t('The rest of this answer did not arrive.', 'بقیهٔ این پاسخ نرسید.') }}</p>
+        <div v-else-if="row.item.kind === 'assistant'" class="text-sm text-ink" data-assistant-message="assistant" :data-live="row.item.live ? 'true' : undefined">
+          <AssistantText :text="row.item.text" :live="row.item.live === true" :streamed="row.item.streamed === true" :name-of="secrets.nameOf" :fa="fa" />
+          <p v-if="row.item.cut" class="mt-1 text-[11px] text-ink-muted" data-assistant-cut>{{ t('The rest of this answer did not arrive.', 'بقیهٔ این پاسخ نرسید.') }}</p>
         </div>
 
-        <div v-else-if="item.kind === 'tool'" class="flex items-center gap-2 text-sm text-ink-muted" :data-tool-state="item.state">
-          <AssistantIcon :icon="toolIcon(item.state)" :size="14" :spin="item.state === 'running'" :class="toolIconClass(item.state)" />
-          <span class="min-w-0 truncate" :dir="textDirection(toolText(item))">{{ toolText(item) }}</span>
-        </div>
+        <AssistantPlanCard v-else-if="row.item.kind === 'plan'" :item="row.item" :fa="fa" :locked="answering"
+                           @run="runPlan(row.item)" @cancel="cancelPlan(row.item)" />
 
-        <!-- A saved tool message: the server keeps the person-facing summary, in the panel's language
-             ("shop خوانده شد: در حال اجرا"), so it reads as the same status line it was when it ran —
-             neutral, never a check, since a saved summary does not say whether the tool succeeded. -->
-        <div v-else-if="item.kind === 'tool-history'" class="flex items-start gap-2 text-sm text-ink-muted" data-tool-history :title="item.toolName">
-          <AssistantIcon :icon="Wrench" :size="14" class="mt-1 text-ink-faint" />
-          <span class="min-w-0 break-words" :dir="textDirection(item.text)">{{ item.text || item.toolName }}</span>
-        </div>
+        <AssistantResultCard v-else-if="row.item.kind === 'result'" :result="row.item.result" :plan="row.item.plan" :fa="fa" />
 
-        <AssistantPlanCard v-else-if="item.kind === 'plan'" :item="item" :fa="fa" :locked="answering"
-                           @run="runPlan(item)" @cancel="cancelPlan(item)" />
+        <!-- The person pressed Stop: not a failure, one muted line in the server's words. -->
+        <p v-else-if="row.item.kind === 'stopped'" class="flex items-center gap-2 text-sm text-ink-muted" data-assistant-stopped>
+          <AssistantIcon :icon="SquareStop" :size="14" class="shrink-0 text-ink-faint" />
+          <span class="min-w-0" :dir="textDirection(stoppedText(row.item))">{{ stoppedText(row.item) }}</span>
+        </p>
 
-        <AssistantResultCard v-else-if="item.kind === 'result'" :result="item.result" :plan="item.plan" :fa="fa" />
-
-        <div v-else-if="item.kind === 'error'" class="flex items-start gap-2 rounded-xl border border-danger/20 bg-danger-soft px-3 py-2.5 text-sm leading-5 text-danger" role="alert" data-assistant-error>
+        <div v-else-if="row.item.kind === 'error'" class="flex items-start gap-2 rounded-xl border border-danger/20 bg-danger-soft px-3 py-2.5 text-sm leading-5 text-danger" role="alert" data-assistant-error>
           <AssistantIcon :icon="TriangleAlert" :size="14" class="mt-0.5" />
-          <span :dir="textDirection(fa ? item.messageFa || item.messageEn : item.messageEn || item.messageFa)">{{ fa ? item.messageFa || item.messageEn : item.messageEn || item.messageFa }}</span>
+          <span :dir="textDirection(say(row.item))">{{ say(row.item) }}</span>
         </div>
       </template>
 
-      <!-- Thinking: three dots, as a bubble of its own, from the send until the first text or tool line,
-           after a tool until the next output, and for a conversation opened mid-answer. The dots stand
-           still for anyone who asked for less motion; the words for screen readers are in the live
-           region below the log, which is not aria-busy. -->
-      <div v-if="thinking" class="flex" data-assistant-thinking>
-        <span class="assistant-dots inline-flex items-center gap-1 rounded-2xl rounded-es-md bg-surface-2 px-3 py-3" aria-hidden="true">
+      <!-- The thinking line: three dots as a bubble of their own, then what is happening — the running
+           tool's name ("Reading the deployment's logs…"), else "Thinking…" — and from five seconds on,
+           the seconds since it appeared. From the send until the first text, while a tool runs and after
+           it until the next output, and for a conversation opened mid-answer (assistantActivity.js,
+           thinkingLine). The dots stand still for anyone who asked for less motion; screen readers get
+           the words from the live region below the log, which is not aria-busy, without the ticking. -->
+      <div v-if="line" class="flex items-center gap-2" aria-hidden="true" data-assistant-thinking>
+        <span class="assistant-dots inline-flex shrink-0 items-center gap-1 rounded-2xl rounded-es-md bg-surface-2 px-3 py-3">
           <span></span><span></span><span></span>
+        </span>
+        <span class="flex min-w-0 items-center gap-1.5 text-sm text-ink-muted" data-thinking-label>
+          <AssistantIcon :icon="line.toolKey ? categoryGlyph(line.category) : Sparkles" :size="14" class="text-ink-faint" />
+          <span class="min-w-0 truncate" :dir="textDirection(lineLabel)">{{ lineLabel }}</span>
+          <span v-if="line.seconds !== null" class="shrink-0 text-[11px] text-ink-muted" data-thinking-seconds>{{ formatElapsed(line.seconds, fa) }}</span>
         </span>
       </div>
     </div>
 
     <!-- Always in the page, outside the log (which is aria-busy while a turn runs, and screen readers
-         hold back changes inside a busy region): only its text changes, so "Thinking…" is announced
-         when the dots appear. -->
-    <p class="sr-only" role="status" aria-live="polite" data-assistant-thinking-status>{{ thinking ? t('Thinking…', 'در حال فکر کردن…') : '' }}</p>
+         hold back changes inside a busy region): only its text changes, so what is happening —
+         "Thinking…", the running tool's name — is announced when it changes. -->
+    <p class="sr-only" role="status" aria-live="polite" data-assistant-thinking-status>{{ lineLabel }}</p>
 
     <!-- The lock button's form: a secret goes to the panel, and only a placeholder into the message.
          Deliberately not a login form to the browser: no <form> (Enter is handled here), no password

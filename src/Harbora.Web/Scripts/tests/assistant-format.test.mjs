@@ -205,10 +205,13 @@ test('settling keeps the side a long paragraph was already given while it was wr
 
 test('a saved tool message is drawn as a status line in its own direction, not as a monospace code block', () => {
   const source = readFileSync(new URL('../islands/AssistantPanel.vue', import.meta.url), 'utf8');
-  const start = source.indexOf("item.kind === 'tool-history'");
-  const end = source.indexOf('<AssistantPlanCard', start);
+  // Saved and live tool lines are one line in the activity block (round seven): the words shown are
+  // toolText's, so their direction is taken from those words.
+  const start = source.indexOf('data-tool-line');
+  const end = source.indexOf('</li>', start);
   assert.ok(start > 0 && end > start);
   const markup = source.slice(start, end);
+  assert.ok(markup.includes("item.kind === 'tool-history'"), 'saved tool lines are drawn here');
   assert.equal(/<pre\b|<details\b|font-mono|dir="ltr"/.test(markup), false, markup);
-  assert.ok(markup.includes('textDirection(item.text)'));
+  assert.ok(markup.includes('textDirection(toolText(item))'));
 });

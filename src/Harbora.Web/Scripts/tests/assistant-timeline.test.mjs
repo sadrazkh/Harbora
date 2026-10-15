@@ -523,3 +523,187 @@ test('a superseded card the server did withdraw stays withdrawn', () => {
   assert.equal(state.items[0].superseded, true);
   assert.equal(state.items[0].plan.status, 'expired');
 });
+
+// ---- round seven: people's words for tools, plans that stay, the stopped event ----------------------
+
+test('a tool line keeps the label, category and duration its events bring, updated in place', () => {
+  const state = createTimeline();
+  addUserMessage(state, 'how is shop?');
+  applyStreamEvent(state, 'tool', {
+    name: 'get_app', kind: 'read', state: 'running', summaryEn: null, summaryFa: null,
+    labelEn: 'Reading the app', labelFa: 'خواندن اپ', category: 'app', durationMs: null,
+  });
+  const line = state.items[1];
+  assert.deepEqual([line.labelEn, line.labelFa, line.category, line.durationMs], ['Reading the app', 'خواندن اپ', 'app', null]);
+  applyStreamEvent(state, 'tool', { name: 'get_app', kind: 'read', state: 'done', summaryEn: 'Read shop', summaryFa: 'shop خوانده شد', labelEn: 'Reading the app', labelFa: 'خواندن اپ', category: 'app', durationMs: 412 });
+  assert.deepEqual(kinds(state), ['user', 'tool']);
+  assert.deepEqual([line.state, line.durationMs, line.labelFa], ['done', 412, 'خواندن اپ']);
+  // An outcome event that leaves a field out does not erase what the running one said.
+  applyStreamEvent(state, 'tool', { name: 'get_usage', state: 'running', labelEn: 'Reading usage', category: 'usage' });
+  applyStreamEvent(state, 'tool', { name: 'get_usage', state: 'failed', summaryEn: 'No metrics yet' });
+  assert.deepEqual([state.items[2].labelEn, state.items[2].category, state.items[2].durationMs], ['Reading usage', 'usage', null]);
+});
+
+test('a tool event from an older server, with no label, still makes a line, labelled with nothing', () => {
+  const state = createTimeline();
+  addUserMessage(state, 'x');
+  applyStreamEvent(state, 'tool', { name: 'get_app', kind: 'read', state: 'done', summaryEn: 'Read shop', summaryFa: null });
+  const line = state.items[1];
+  assert.deepEqual([line.labelEn, line.labelFa, line.category, line.durationMs], [null, null, null, null]);
+  applyStreamEvent(state, 'tool', { name: 'get_usage', state: 'done', durationMs: -5 });
+  applyStreamEvent(state, 'tool', { name: 'get_db', state: 'done', durationMs: '30' });
+  assert.deepEqual([state.items[2].durationMs, state.items[3].durationMs], [null, null], 'not a duration');
+});
+
+test('a stored tool message keeps its label, category, duration and plan', () => {
+  const state = createTimeline();
+  loadConversation(state, {
+    id: 'c1', title: 't', pendingPlan: null,
+    messages: [
+      { id: 'm1', role: 'tool', text: 'shop خوانده شد', toolName: 'get_app', createdAt: '2026-10-15T10:00:00Z', toolLabel: 'خواندن اپ', toolCategory: 'app', durationMs: 412, planId: null },
+      { id: 'm2', role: 'tool', text: 'old', toolName: 'list_apps', createdAt: '2026-10-15T10:00:01Z' },
+    ],
+  });
+  const [labelled, older] = state.items;
+  assert.deepEqual({ ...labelled }, { key: 'msg-m1', kind: 'tool-history', toolName: 'get_app', text: 'shop خوانده شد', label: 'خواندن اپ', category: 'app', durationMs: 412, planId: null });
+  assert.deepEqual([older.label, older.category, older.durationMs, older.planId], [null, null, null, null], 'an older server: no label');
+});
+
+const HISTORY = '0199d0c4-6a1e-7000-8000-0000000000b1';
+const OTHER = '0199d0c4-6a1e-7000-8000-0000000000b2';
+const msg = (id, role, text, extra = {}) => ({ id, role, text, toolName: null, createdAt: '2026-10-15T10:00:00Z', ...extra });
+const decided = (id, status, { result = null, after = null } = {}) => ({ plan: { ...plan(status), id }, result, afterMessageId: after });
+const ran = (id) => ({ planId: id, status: 'executed', steps: [{ index: 0, state: 'done', summaryEn: 'Deleted old-db', summaryFa: 'old-db حذف شد', errorEn: null, errorFa: null, links: [] }] });
+
+test('a decided plan is drawn right after the message it names, with its result under it', () => {
+  const state = createTimeline();
+  loadConversation(state, {
+    id: 'c1', title: 't', pendingPlan: null,
+    messages: [msg('m1', 'user', 'delete old-db'), msg('m2', 'assistant', 'Here is the plan.'), msg('m3', 'user', 'thanks'), msg('m4', 'assistant', 'Anytime.')],
+    plans: [decided(HISTORY, 'executed', { result: ran(HISTORY), after: 'm2' })],
+  });
+  assert.deepEqual(state.items.map((i) => i.key), ['msg-m1', 'msg-m2', `plan-${HISTORY}`, `result-${HISTORY}`, 'msg-m3', 'msg-m4']);
+  const [card, outcome] = [state.items[2], state.items[3]];
+  assert.equal(card.plan.status, 'executed', "the server's status");
+  assert.equal(card.resulted, true);
+  assert.equal(outcome.kind, 'result');
+  assert.equal(outcome.result.planId, HISTORY);
+  assert.equal(outcome.plan.steps[0].titleEn, 'Delete old-db', 'the result card knows the step titles');
+});
+
+test('a decided plan goes first when it names no message, and last when the message it names is not in the view', () => {
+  const state = createTimeline();
+  loadConversation(state, {
+    id: 'c1', title: 't', pendingPlan: null,
+    messages: [msg('m1', 'user', 'one'), msg('m2', 'assistant', 'two')],
+    plans: [decided(HISTORY, 'rejected', { after: null }), decided(OTHER, 'expired', { after: 'older-than-the-view' })],
+  });
+  assert.deepEqual(state.items.map((i) => i.key), [`plan-${HISTORY}`, 'msg-m1', 'msg-m2', `plan-${OTHER}`]);
+  assert.deepEqual(state.items.filter((i) => i.kind === 'plan').map((i) => [i.plan.status, i.resulted]), [['rejected', false], ['expired', false]], 'no result: none drawn');
+});
+
+test('decided plans keep their order, and one placed after a text-less message goes where that message was', () => {
+  const state = createTimeline();
+  loadConversation(state, {
+    id: 'c1', title: 't', pendingPlan: null,
+    messages: [msg('m1', 'user', 'go'), msg('m2', 'assistant', null), msg('m3', 'assistant', 'done')],
+    plans: [decided(HISTORY, 'rejected', { after: 'm2' }), decided(OTHER, 'expired', { after: 'm2' })],
+  });
+  assert.deepEqual(state.items.map((i) => i.key), ['msg-m1', `plan-${HISTORY}`, `plan-${OTHER}`, 'msg-m3']);
+});
+
+test("the tool lines a drawn plan wrote are hidden; other lines, and the pending plan's, stay", () => {
+  const PENDING = '0199d0c4-6a1e-7000-8000-0000000000b3';
+  const state = createTimeline();
+  loadConversation(state, {
+    id: 'c1', title: 't',
+    messages: [
+      msg('m1', 'user', 'delete old-db'),
+      msg('m2', 'tool', 'Proposed a plan', { toolName: 'propose_plan', planId: HISTORY }),
+      msg('m3', 'tool', 'Read old-db', { toolName: 'get_database' }),
+      msg('m4', 'assistant', 'Here is the plan.'),
+      msg('m5', 'tool', 'Deleted old-db', { toolName: 'delete_database', planId: HISTORY }),
+      msg('m6', 'user', 'and new-db'),
+      msg('m7', 'tool', 'Proposed a plan', { toolName: 'propose_plan', planId: PENDING }),
+    ],
+    plans: [decided(HISTORY, 'executed', { result: ran(HISTORY), after: 'm4' })],
+    pendingPlan: { ...plan(), id: PENDING },
+  });
+  assert.deepEqual(state.items.map((i) => i.key), ['msg-m1', 'msg-m3', 'msg-m4', `plan-${HISTORY}`, `result-${HISTORY}`, 'msg-m6', 'msg-m7', `plan-${PENDING}`]);
+  const pending = state.items.at(-1);
+  assert.equal(pending.plan.status, 'pending', 'the pending plan is untouched: last, and actionable');
+  assert.equal(pending.resulted, false);
+});
+
+test('a decided plan keeps the status the server gave it, and the pending one is never drawn twice', () => {
+  const state = createTimeline();
+  loadConversation(state, {
+    id: 'c1', title: 't', messages: [msg('m1', 'user', 'x')],
+    plans: [decided(HISTORY, 'executing', { after: 'm1' }), decided(PLAN_ID, 'pending', { after: 'm1' })],
+    pendingPlan: plan(),
+  });
+  assert.deepEqual(state.items.filter((i) => i.kind === 'plan').map((i) => [i.plan.id, i.plan.status]), [[HISTORY, 'executing'], [PLAN_ID, 'pending']]);
+  assert.equal(state.items.at(-1).plan.id, PLAN_ID);
+});
+
+test('a re-read of the conversation keeps the same keys for its decided plans and results', () => {
+  const view = {
+    id: 'c1', title: 't', pendingPlan: null, messages: [msg('m1', 'user', 'x')],
+    plans: [decided(HISTORY, 'executed', { result: ran(HISTORY), after: 'm1' })],
+  };
+  const state = createTimeline();
+  loadConversation(state, view);
+  const first = state.items.map((i) => i.key);
+  loadConversation(state, view);
+  assert.deepEqual(state.items.map((i) => i.key), first);
+});
+
+test('stopped closes the bubble without calling it cut, settles running tools as interrupted and adds its line', () => {
+  const state = createTimeline();
+  addUserMessage(state, 'list everything');
+  applyStreamEvent(state, 'delta', { text: 'Looking at ' });
+  applyStreamEvent(state, 'tool', { name: 'list_apps', state: 'running', labelEn: 'Listing the apps' });
+  applyStreamEvent(state, 'delta', { text: 'shop and' });
+  applyStreamEvent(state, 'stopped', { messageEn: 'Stopped. What was written so far is kept.', messageFa: 'متوقف شد. آنچه تا این‌جا نوشته شد نگه داشته شد.' });
+  assert.deepEqual(kinds(state), ['user', 'assistant', 'tool', 'assistant', 'stopped']);
+  const bubble = state.items[3];
+  assert.deepEqual([bubble.text, bubble.live, bubble.cut], ['shop and', false, undefined], 'the person stopped it: not "the rest did not arrive"');
+  assert.equal(state.items[2].state, 'interrupted');
+  assert.deepEqual([state.items[4].messageEn, state.items[4].messageFa], ['Stopped. What was written so far is kept.', 'متوقف شد. آنچه تا این‌جا نوشته شد نگه داشته شد.']);
+});
+
+test('the done after stopped still settles the turn, and changes nothing the stop decided', () => {
+  const state = createTimeline();
+  addUserMessage(state, 'x');
+  state.streaming = true;
+  applyStreamEvent(state, 'delta', { text: 'Half' });
+  applyStreamEvent(state, 'message', { id: 'm1', role: 'assistant', text: 'Half' });
+  applyStreamEvent(state, 'tool', { name: 'get_app', state: 'running' });
+  applyStreamEvent(state, 'stopped', { messageEn: 'Stopped.', messageFa: 'متوقف شد.' });
+  assert.equal(isThinking(state), false, 'nothing is being worked on any more');
+  applyStreamEvent(state, 'done', { conversationId: 'c1', remainingToday: 7 });
+  settleTurn(state); // the session settles once more when the stream closes
+  assert.deepEqual(kinds(state), ['user', 'assistant', 'tool', 'stopped']);
+  assert.equal(state.items[1].cut, undefined);
+  assert.equal(state.items[2].state, 'interrupted');
+  assert.equal(state.remainingToday, 7);
+  assert.equal(state.conversationId, 'c1');
+});
+
+test('stopped before anything was written adds only its line; a stop with no words still makes one', () => {
+  const state = createTimeline();
+  addUserMessage(state, 'x');
+  applyStreamEvent(state, 'started', { conversationId: 'c1' });
+  applyStreamEvent(state, 'stopped', {});
+  assert.deepEqual(kinds(state), ['user', 'stopped']);
+  assert.deepEqual([state.items[1].messageEn, state.items[1].messageFa], ['', '']);
+});
+
+test("stopping leaves an earlier turn's lines alone", () => {
+  const state = createTimeline();
+  addUserMessage(state, 'one');
+  applyStreamEvent(state, 'tool', { name: 'get_app', state: 'running' });
+  addUserMessage(state, 'two');
+  applyStreamEvent(state, 'stopped', { messageEn: 'Stopped.', messageFa: 'x' });
+  assert.equal(state.items[1].state, 'running', 'not this turn');
+});

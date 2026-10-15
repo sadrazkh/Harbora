@@ -4,8 +4,12 @@
 // the island hands in a `reactive()` proxy and Vue tracks the same mutations.
 //
 // Item kinds: user, assistant, tool (a live `tool` event), tool-history (a stored tool message),
-// plan, result, error, notice. An assistant item with `live: true` is the bubble being written by
-// `delta` events; the `message` event that follows replaces its text with the whole answer.
+// plan, result, error, stopped, notice. An assistant item with `live: true` is the bubble being written
+// by `delta` events; the `message` event that follows replaces its text with the whole answer.
+//
+// Tool items carry the tool's name for people and its icon group (AgentToolLabels): `tool` keeps
+// labelEn/labelFa, category and durationMs from its events; `tool-history` keeps label, category,
+// durationMs and planId from the stored message. assistantActivity.js turns them into what is drawn.
 
 import { createPlanForm } from './assistantPlan.js';
 
@@ -33,6 +37,9 @@ export function createTimeline() {
     // messageEn, messageFa }`. The pane offers to try again and does not pretend to be a fresh
     // conversation meanwhile, or the next message would start a new one and orphan the old.
     loadError: null,
+    // When the thinking line appeared (a Date.now() value), for its "12 s"; kept by trackThinking in
+    // assistantActivity.js, null while it is not showing.
+    thinkingSince: null,
   };
 }
 
@@ -53,6 +60,28 @@ function toolState(state) {
   return state === 'running' || state === 'done' || state === 'failed' ? state : 'unknown';
 }
 
+const duration = (ms) => (typeof ms === 'number' && Number.isFinite(ms) && ms >= 0 ? ms : null);
+
+/** The labels, icon group and duration an event brings; what it leaves out stays as the line had it. */
+function describeTool(item, data) {
+  if (data.labelEn != null) item.labelEn = data.labelEn;
+  if (data.labelFa != null) item.labelFa = data.labelFa;
+  if (data.category != null) item.category = data.category;
+  if (duration(data.durationMs) !== null) item.durationMs = data.durationMs;
+}
+
+/**
+ * A decided plan from the conversation view (AgentPlanHistoryView): its card, with the server's status
+ * — so it is not actionable unless that says pending — and its result card directly under it when it
+ * ran. Keys are the plan's id, so a re-read of the conversation keeps the same cards.
+ */
+function decidedPlanItems(entry) {
+  const card = planItem(entry.plan);
+  if (!entry.result) return [card];
+  card.resulted = true;
+  return [card, { key: `result-${entry.plan.id}`, kind: 'result', result: entry.result, plan: entry.plan }];
+}
+
 function currentTurnStart(state) {
   for (let i = state.items.length - 1; i >= 0; i--) if (state.items[i].kind === 'user') return i;
   return -1;
@@ -61,21 +90,54 @@ function currentTurnStart(state) {
 /**
  * Replaces whatever is shown with a stored conversation. Each `loadConversation` is the server's
  * whole account of it, so items that existed only on screen (a live bubble, an error line) go.
+ *
+ * Decided plans (`view.plans`, oldest first) stay where they were proposed: each card goes right after
+ * the message its `afterMessageId` names — at the start when that is null, at the end when the id is not
+ * among the messages (older than the ones the view returns) — followed by its result. The tool lines a
+ * drawn plan wrote (its proposal, its execution) go: the cards say the same thing. The pending plan is
+ * last, as before.
  */
 export function loadConversation(state, view) {
   state.conversationId = view?.id ?? null;
   state.title = view?.title ?? '';
+  const messages = view?.messages ?? [];
+  const pendingId = view?.pendingPlan?.id ?? null;
+  // The pending plan is never in `plans` as well (AgentConversationView); if it were, it is drawn once.
+  const decided = (view?.plans ?? []).filter((p) => p?.plan?.id && p.plan.id !== pendingId);
+  const drawn = new Set(decided.map((p) => p.plan.id));
+  const ids = new Set(messages.map((m) => m.id));
+  const leading = [];
+  const trailing = [];
+  const after = new Map();
+  for (const entry of decided) {
+    const at = entry.afterMessageId ?? null;
+    if (at === null) leading.push(entry);
+    else if (!ids.has(at)) trailing.push(entry);
+    else after.set(at, [...(after.get(at) ?? []), entry]);
+  }
+
   const items = [];
-  for (const m of view?.messages ?? []) {
+  const place = (entries) => { for (const entry of entries) items.push(...decidedPlanItems(entry)); };
+  place(leading);
+  for (const m of messages) {
     if (m.role === 'tool') {
       // A stored tool message carries what the tool returned to the model, not whether it worked;
       // it is drawn neutral, never as a check.
-      items.push({ key: `msg-${m.id}`, kind: 'tool-history', toolName: m.toolName ?? '', text: m.text ?? '' });
+      if (!(m.planId && drawn.has(m.planId))) {
+        items.push({
+          key: `msg-${m.id}`, kind: 'tool-history', toolName: m.toolName ?? '', text: m.text ?? '',
+          label: m.toolLabel ?? null, category: m.toolCategory ?? null, durationMs: duration(m.durationMs), planId: m.planId ?? null,
+        });
+      }
     } else if (m.text) {
       // An assistant message without text only carried tool calls — there is nothing to show.
       items.push({ key: `msg-${m.id}`, kind: m.role === 'user' ? 'user' : 'assistant', text: m.text });
     }
+    // After the message whether or not it was drawn: a card placed after a text-less message goes
+    // where that message would have been.
+    place(after.get(m.id) ?? []);
   }
+  place(trailing);
   if (view?.pendingPlan) items.push(planItem(view.pendingPlan));
   state.items = items;
 }
@@ -151,7 +213,10 @@ function closeLive(state, { cut }) {
  * Whether the three-dot indicator shows: a turn has been sent and nothing is being shown for it yet —
  * after the person's message, after a tool has finished (until the next output) — or a conversation
  * opened mid-answer is still being answered. Not while text is being written (the text is the sign of
- * life) and not while a tool line is running (it has its own spinner).
+ * life) and not while a tool line is running (that is something else being shown).
+ *
+ * This is "Thinking…". The line the pane draws beside the dots (assistantActivity.js, thinkingLine)
+ * also shows for a running tool, named by its label — and that tool's own line then does not spin.
  */
 export function isThinking(state) {
   if (state.resuming) return true;
@@ -208,12 +273,15 @@ export function applyStreamEvent(state, name, data) {
           item.state = next;
           if (data.summaryEn != null) item.summaryEn = data.summaryEn;
           if (data.summaryFa != null) item.summaryFa = data.summaryFa;
+          describeTool(item, data);
           return;
         }
       }
       state.items.push({
         key: nextKey('tool'), kind: 'tool', name: data.name ?? '', toolKind: data.kind ?? '',
         state: next, summaryEn: data.summaryEn ?? null, summaryFa: data.summaryFa ?? null,
+        labelEn: data.labelEn ?? null, labelFa: data.labelFa ?? null, category: data.category ?? null,
+        durationMs: duration(data.durationMs),
       });
       return;
     }
@@ -254,6 +322,21 @@ export function applyStreamEvent(state, name, data) {
       closeLive(state, { cut: true });
       state.items.push({ key: nextKey('error'), kind: 'error', messageEn: data.messageEn ?? '', messageFa: data.messageFa ?? '' });
       return;
+
+    case 'stopped': {
+      // The person pressed Stop and the turn ended there — not a failure. The bubble being written keeps
+      // what it has and is not marked cut (the server saved that text, in the `message` just before);
+      // a tool still running gets no outcome and says so; and one muted line says it was stopped, in the
+      // server's words. `done` still follows and settles the rest.
+      closeLive(state, { cut: false });
+      const from = currentTurnStart(state);
+      for (let i = from + 1; i < state.items.length; i++) {
+        const item = state.items[i];
+        if (item.kind === 'tool' && item.state === 'running') item.state = 'interrupted';
+      }
+      state.items.push({ key: nextKey('stopped'), kind: 'stopped', messageEn: data.messageEn ?? '', messageFa: data.messageFa ?? '' });
+      return;
+    }
 
     case 'done':
       if (data.conversationId) state.conversationId = data.conversationId;

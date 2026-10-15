@@ -147,7 +147,16 @@ test('parseAssistantFrame returns the parsed JSON for every event the contract n
     const parsed = parseAssistantFrame({ event: name, data: '{"a":1}', id: '' });
     assert.deepEqual(parsed, { name, data: { a: 1 } });
   }
-  assert.deepEqual(ASSISTANT_EVENTS, ['started', 'tool', 'delta', 'message', 'plan', 'executed', 'error', 'done']);
+  assert.deepEqual(ASSISTANT_EVENTS, ['started', 'tool', 'delta', 'message', 'plan', 'executed', 'error', 'stopped', 'done']);
+});
+
+test('a stopped frame is read as the stopped event, with the server\'s words', () => {
+  const { frames, parser } = collect();
+  parser.push('event: stopped\ndata: {"messageEn":"Stopped.","messageFa":"متوقف شد."}\n\nevent: done\ndata: {"remainingToday":3}\n\n');
+  assert.deepEqual(frames.map(parseAssistantFrame), [
+    { name: 'stopped', data: { messageEn: 'Stopped.', messageFa: 'متوقف شد.' } },
+    { name: 'done', data: { remainingToday: 3 } },
+  ]);
 });
 
 test('unknown events are ignored rather than guessed at', () => {
