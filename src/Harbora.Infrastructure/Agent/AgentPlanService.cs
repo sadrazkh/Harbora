@@ -245,8 +245,38 @@ public sealed class AgentPlanService(
             .FirstOrDefaultAsync(ct);
     }
 
+    /// <summary>
+    /// Every plan of this person's conversation, oldest first — pending, decided and expired alike. The
+    /// conversation view picks the ones whose proposal it shows (<see cref="AgentConversationService.GetAsync"/>).
+    /// </summary>
+    public async Task<IReadOnlyList<AgentPlan>> PlansOfAsync(AgentActor actor, Guid conversationId, CancellationToken ct) =>
+        await db.AgentPlans.IgnoreQueryFilters().AsNoTracking()
+            .Where(p => p.ConversationId == conversationId && p.WorkspaceId == actor.WorkspaceId && p.UserId == actor.UserId)
+            .OrderBy(p => p.CreatedAt).ThenBy(p => p.Id)
+            .ToListAsync(ct);
+
     public AgentPlanView ViewOf(AgentPlan plan) =>
         new(plan.Id, StatusName(EffectiveStatus(plan)), plan.ExpiresAt, StepsOf(plan).Select(StepView).ToList());
+
+    /// <summary>
+    /// What a stored plan did, in the shape the approve response carries (<see cref="ResultView"/> over the
+    /// steps <see cref="FinishAsync"/> wrote into <c>ResultsJson</c> — scrubbed of held values already). Null
+    /// when nothing ran: the plan is still waiting or executing, was rejected or expired, or re-validation
+    /// refused a step at approval and left the rest unrun (<c>ExecutedAt</c> stays empty then, and the
+    /// approval was answered with a refusal, not a result).
+    /// </summary>
+    public static AgentPlanResultView? ResultOf(AgentPlan plan)
+    {
+        if (plan.ResultsJson is null || plan.ExecutedAt is null) return null;
+        return AgentJson.Deserialize<List<AgentPlanStepResultView>>(plan.ResultsJson) is { } steps
+            ? ResultView(plan, plan.Status, steps)
+            : null;
+    }
+
+    /// <summary>The one place a plan's result is put together — the approve response and the stored
+    /// conversation both end here, so they cannot name the plan or its status differently.</summary>
+    private static AgentPlanResultView ResultView(AgentPlan plan, AgentPlanStatus status, IReadOnlyList<AgentPlanStepResultView> steps) =>
+        new(plan.Id, StatusName(status), steps);
 
     public static AgentPlanStepView StepView(AgentPlanStep step) => new(
         step.Index, step.Tool, AgentConsentPolicy.KindLabel(step.Kind), step.TitleEn, step.TitleFa,
@@ -380,7 +410,7 @@ public sealed class AgentPlanService(
 
             // A refused approval remembers nothing: like every other refusal it changes nothing but the
             // plan's own state, and "don't ask again" was consent to an approval that did not go ahead.
-            return new ClaimedRun(new AgentPlanResultView(plan.Id, StatusName(plan.Status), results), ledger.Refusal);
+            return new ClaimedRun(ResultView(plan, plan.Status, results), ledger.Refusal);
         }
 
         // The approval is going ahead, so its "don't ask again" ticks are recorded now.
@@ -452,7 +482,7 @@ public sealed class AgentPlanService(
 
         var finished = await FinishAsync(plan, stopped ? AgentPlanStatus.Failed : AgentPlanStatus.Executed, ledger,
             executedAt: clock.UtcNow, ct);
-        return new ClaimedRun(new AgentPlanResultView(plan.Id, StatusName(plan.Status), finished));
+        return new ClaimedRun(ResultView(plan, plan.Status, finished));
     }
 
     /// <summary>One <c>assistant.step_executed</c> entry: conversation, plan, step, tool and whether it worked.</summary>
@@ -513,13 +543,13 @@ public sealed class AgentPlanService(
             if (ledger.Running is { } running && !ledger.RunningAudited)
                 await AuditStepAsync(actor, plan, steps[running], ok: false);
 
-            return new ClaimedRun(new AgentPlanResultView(plan.Id, StatusName(status), results), ledger.Refusal);
+            return new ClaimedRun(ResultView(plan, status, results), ledger.Refusal);
         }
         catch (Exception again)
         {
             logger.LogError(again, "Plan {Plan} could not be recorded either; it stays executing.", plan.Id);
             db.ChangeTracker.Clear();
-            return new ClaimedRun(new AgentPlanResultView(plan.Id, StatusName(status),
+            return new ClaimedRun(ResultView(plan, status,
                 ledger.Results.Select(x => Scrub(x!, KnownSecrets(plan, ledger))).ToList()), ledger.Refusal);
         }
     }

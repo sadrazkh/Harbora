@@ -65,6 +65,9 @@ namespace Harbora.Data.Migrations
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<int?>("DurationMs")
+                        .HasColumnType("integer");
+
                     b.Property<long>("InputTokens")
                         .HasColumnType("bigint");
 

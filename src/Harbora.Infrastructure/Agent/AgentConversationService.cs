@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Harbora.Application.Abstractions;
@@ -67,6 +68,9 @@ public sealed class AgentConversationService(
     /// <summary>How many messages the conversation view returns (the newest).</summary>
     public const int ConversationViewMessages = 200;
 
+    /// <summary>The most decided plans the conversation view returns (the newest of those it can place).</summary>
+    public const int PlanHistorySize = 50;
+
     private const int MaxTitleLength = 60;
 
     /// <summary>
@@ -129,6 +133,13 @@ public sealed class AgentConversationService(
     /// is not this person's in this workspace. Only what a person should read is returned: their
     /// messages, the model's text, and the tool messages that carry a summary — not the raw replies
     /// the model got to a malformed call.
+    ///
+    /// <para>
+    /// A tool message carries the tool's name for people, its icon group, how long a read took and the
+    /// plan it belongs to. The conversation's other plans — decided, executing or expired, whose proposal
+    /// is among the messages — come back in <see cref="AgentConversationView.Plans"/> with what they did
+    /// and where they are drawn, so a conversation opened later shows what the live one did.
+    /// </para>
     /// </summary>
     public async Task<AgentConversationView?> GetAsync(AgentActor actor, Guid conversationId, bool persian, CancellationToken ct)
     {
@@ -143,28 +154,117 @@ public sealed class AgentConversationService(
             .ToListAsync(ct);
         rows.Reverse();
 
+        var storedPlans = await plans.PlansOfAsync(actor, conversationId, ct);
+        var planOfLine = ProposalLines(rows, storedPlans);
+
         var messages = new List<AgentMessageView>();
+        // The visible messages a turn wrote itself — not the lines a plan's execution wrote after it was
+        // decided — in order: the places a plan's card can be drawn after.
+        var turnMessages = new List<(int Sequence, Guid Id)>();
         foreach (var row in rows)
         {
+            AgentMessageView? view = null;
             switch (row.Role)
             {
                 case AgentMessageRole.User:
-                    messages.Add(new(row.Id, "user", row.Text, null, row.CreatedAt));
+                    view = new(row.Id, "user", row.Text, null, row.CreatedAt);
                     break;
                 case AgentMessageRole.Assistant when !string.IsNullOrWhiteSpace(row.Text):
-                    messages.Add(new(row.Id, "assistant", row.Text, null, row.CreatedAt));
+                    view = new(row.Id, "assistant", row.Text, null, row.CreatedAt);
                     break;
                 case AgentMessageRole.Tool when row.SummaryEn is not null:
-                    messages.Add(new(row.Id, "tool", persian ? row.SummaryFa ?? row.SummaryEn : row.SummaryEn,
-                        row.ToolName, row.CreatedAt));
+                    var label = row.ToolName is null ? null : AgentToolLabels.For(row.ToolName);
+                    view = new(row.Id, "tool", persian ? row.SummaryFa ?? row.SummaryEn : row.SummaryEn,
+                        row.ToolName, row.CreatedAt,
+                        ToolLabel: persian ? label?.Fa : label?.En,
+                        ToolCategory: label?.Category,
+                        DurationMs: row.DurationMs,
+                        PlanId: row.PlanId ?? (planOfLine.TryGetValue(row.Id, out var proposed) ? proposed.Id : null));
                     break;
             }
+
+            if (view is null) continue;
+            messages.Add(view);
+            if (row.PlanId is null) turnMessages.Add((row.Sequence, row.Id));
         }
 
         var pending = await plans.PendingPlanAsync(actor, conversationId, ct);
+
+        // The last proposal line of each plan that has any in this window; a plan without one was
+        // proposed before the window began and has nowhere to be drawn.
+        var lastProposalLine = new Dictionary<Guid, int>();
+        foreach (var row in rows)
+            if (planOfLine.TryGetValue(row.Id, out var plan)) lastProposalLine[plan.Id] = row.Sequence;
+
+        var history = storedPlans
+            .Where(p => p.Id != pending?.Id && lastProposalLine.ContainsKey(p.Id))
+            .OrderBy(p => lastProposalLine[p.Id])
+            .TakeLast(PlanHistorySize)
+            .Select(p => new AgentPlanHistoryView(plans.ViewOf(p), AgentPlanService.ResultOf(p),
+                AfterTurnOf(lastProposalLine[p.Id], rows, turnMessages)))
+            .ToList();
+
         return new AgentConversationView(conversation.Id, conversation.Title, messages,
             pending is null ? null : plans.ViewOf(pending),
-            InProgress: IsTurnLive(conversation.TurnStartedAt));
+            InProgress: IsTurnLive(conversation.TurnStartedAt),
+            Plans: history);
+    }
+
+    /// <summary>
+    /// Which plan each proposal line ("Proposed as step 1: …") belongs to. The row carries no plan — it was
+    /// written during the turn, before the plan existed — but the plan's steps keep the model's call id and
+    /// the tool, and that is what the line was written for.
+    ///
+    /// <para>
+    /// A call id is only unique within one reply: a provider that numbers its calls from zero, or the
+    /// <c>call_r1_1</c> that <see cref="NormalizeCalls"/> gives a blank one, repeats in the next turn. So
+    /// lines and plans sharing an id and a tool are paired in order, newest to newest — the window drops the
+    /// oldest lines, never the newest — and a line with no plan left over is simply not claimed.
+    /// </para>
+    /// </summary>
+    private static Dictionary<Guid, AgentPlan> ProposalLines(IReadOnlyList<AgentMessage> rows, IReadOnlyList<AgentPlan> storedPlans)
+    {
+        // One entry per step, oldest plan first, so a plan whose steps share a key is listed once for each.
+        var plansByCall = new Dictionary<(string Call, string Tool), List<AgentPlan>>();
+        foreach (var plan in storedPlans)
+            foreach (var step in AgentPlanService.StepsOf(plan))
+            {
+                if (step.ToolCallId is null) continue;
+                var key = (step.ToolCallId, step.Tool);
+                if (!plansByCall.TryGetValue(key, out var list)) plansByCall[key] = list = [];
+                list.Add(plan);
+            }
+
+        var lines = rows
+            .Where(r => r.Role == AgentMessageRole.Tool && r.PlanId is null && r.SummaryEn is not null
+                        && r.ToolCallId is not null && r.ToolName is not null)
+            .GroupBy(r => (Call: r.ToolCallId!, Tool: r.ToolName!));
+
+        var result = new Dictionary<Guid, AgentPlan>();
+        foreach (var group in lines)
+        {
+            if (!plansByCall.TryGetValue(group.Key, out var candidates)) continue;
+            var ofCall = group.ToList();
+            for (var i = 1; i <= Math.Min(ofCall.Count, candidates.Count); i++)
+                result[ofCall[^i].Id] = candidates[^i];
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// The message a plan's card is drawn after: the last one the proposing turn itself wrote — which
+    /// ends where the person's next message begins. The lines a plan's execution wrote come after the
+    /// turn's closing words and say what the card says, so they never anchor it. Null: nothing visible
+    /// of that turn is in the window.
+    /// </summary>
+    private static Guid? AfterTurnOf(
+        int lastProposalLine, IReadOnlyList<AgentMessage> rows, IReadOnlyList<(int Sequence, Guid Id)> turnMessages)
+    {
+        var nextUser = rows.Where(r => r.Role == AgentMessageRole.User && r.Sequence > lastProposalLine)
+            .Select(r => (int?)r.Sequence).Min();
+        for (var i = turnMessages.Count - 1; i >= 0; i--)
+            if (nextUser is null || turnMessages[i].Sequence < nextUser) return turnMessages[i].Id;
+        return null;
     }
 
     /// <summary>Whether a turn mark still means a turn is being answered — see <see cref="TurnMarkGrace"/>.</summary>
@@ -564,7 +664,8 @@ public sealed class AgentConversationService(
                     ToolCallId = toolCall.Id,
                     ToolName = Truncate(toolCall.Name, AgentMessage.MaxToolNameLength),
                     SummaryEn = AgentConversationLog.Bound(answer.SummaryEn),
-                    SummaryFa = AgentConversationLog.Bound(answer.SummaryFa)
+                    SummaryFa = AgentConversationLog.Bound(answer.SummaryFa),
+                    DurationMs = answer.DurationMs
                 }, ct);
                 messages.Add(new AgentChatMessage(AgentRole.Tool, answer.Content, ToolCallId: toolCall.Id));
             }
@@ -663,7 +764,8 @@ public sealed class AgentConversationService(
     }
 
     /// <summary>What goes back to the model for one call, and what the person may be shown instead.</summary>
-    private sealed record ToolAnswer(string Content, string? SummaryEn = null, string? SummaryFa = null);
+    /// <param name="DurationMs">How long the tool took, for a read that ran; null for a proposal or a refused call.</param>
+    private sealed record ToolAnswer(string Content, string? SummaryEn = null, string? SummaryFa = null, int? DurationMs = null);
 
     /// <summary>A tool answer for the model: redacted by the person's held values and by shape, then cut
     /// to size — <see cref="AgentJson.ForModel"/> with the turn's <see cref="Turn.Known"/>.</summary>
@@ -699,10 +801,15 @@ public sealed class AgentConversationService(
         IAgentTool tool, JsonElement args, Turn turn, Func<AgentStreamEvent, CancellationToken, Task> emit, CancellationToken ct)
     {
         var kind = AgentConsentPolicy.KindLabel(tool.Kind);
-        await emit(new AgentStreamEvent(AgentStreamEvents.Tool, new AgentToolEventData(tool.Name, kind, "running", null, null)), ct);
+        // The person reads what the tool is doing, not its identifier — on the running line, the finished
+        // one, and every sentence below that names the tool.
+        var label = AgentToolLabels.For(tool.Name);
+        await emit(new AgentStreamEvent(AgentStreamEvents.Tool, new AgentToolEventData(
+            tool.Name, kind, "running", null, null, label.En, label.Fa, label.Category)), ct);
 
         var before = AgentTracker.ForeignChanges(db);
         AgentToolResult result;
+        var started = Stopwatch.GetTimestamp();
         try
         {
             result = await tool.ExecuteAsync(args, turn.Context, ct);
@@ -712,8 +819,10 @@ public sealed class AgentConversationService(
             // Includes the tool's own timeout: that is a failed read for the model to hear about, not
             // the end of the turn.
             logger.LogError(ex, "Agent read tool {Tool} threw.", tool.Name);
-            result = AgentToolResult.Failed($"The tool '{tool.Name}' failed on the server.", $"ابزار «{tool.Name}» در سرور ناموفق بود.");
+            result = AgentToolResult.Failed($"{label.En} failed on the server.", $"{label.Fa} در سرور ناموفق بود.");
         }
+        // Stopped before the clean-up below: the time is the tool's own, whether it answered or threw.
+        var durationMs = (int)Math.Min(int.MaxValue, Math.Round(Stopwatch.GetElapsedTime(started).TotalMilliseconds));
 
         // A read must not leave anything to save; whatever it did leave would be written by the next
         // message this loop stores.
@@ -721,12 +830,13 @@ public sealed class AgentConversationService(
         if (dropped.Count > 0)
             logger.LogWarning("Agent read tool {Tool} left unsaved changes ({Types}); they were dropped.", tool.Name, string.Join(", ", dropped));
 
-        var summaryEn = Scrub(turn, result.Ok ? result.SummaryEn ?? $"Looked up: {tool.Name}" : result.Error ?? $"{tool.Name} failed");
-        var summaryFa = Scrub(turn, result.Ok ? result.SummaryFa ?? $"بررسی شد: {tool.Name}" : result.ErrorFa ?? $"{tool.Name} ناموفق بود");
-        await emit(new AgentStreamEvent(AgentStreamEvents.Tool,
-            new AgentToolEventData(tool.Name, kind, result.Ok ? "done" : "failed", summaryEn, summaryFa)), ct);
+        var summaryEn = Scrub(turn, result.Ok ? result.SummaryEn ?? $"Looked up: {label.En}" : result.Error ?? $"{label.En} failed");
+        var summaryFa = Scrub(turn, result.Ok ? result.SummaryFa ?? $"بررسی شد: {label.Fa}" : result.ErrorFa ?? $"{label.Fa} ناموفق بود");
+        await emit(new AgentStreamEvent(AgentStreamEvents.Tool, new AgentToolEventData(
+            tool.Name, kind, result.Ok ? "done" : "failed", summaryEn, summaryFa,
+            label.En, label.Fa, label.Category, durationMs)), ct);
 
-        return new(ForModel(turn, result.ResultJson), summaryEn, summaryFa);
+        return new(ForModel(turn, result.ResultJson), summaryEn, summaryFa, durationMs);
     }
 
     private async Task<ToolAnswer> ProposeWriteAsync(

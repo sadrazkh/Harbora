@@ -90,6 +90,11 @@ public class AgentMessage : BaseEntity
     /// <summary>For a tool message written by plan execution: the plan it reports on.</summary>
     public Guid? PlanId { get; set; }
 
+    /// <summary>For the tool message of a read that ran: how long the tool took, in whole milliseconds.
+    /// Null for every other row — proposals did not run anything, and rows from before this was kept have
+    /// no measurement, which is not the same as zero.</summary>
+    public int? DurationMs { get; set; }
+
     /// <summary>For an assistant message: the model that actually answered (fallbacks can differ).</summary>
     public string? Model { get; set; }
 
