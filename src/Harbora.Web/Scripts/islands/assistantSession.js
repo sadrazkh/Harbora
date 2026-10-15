@@ -27,17 +27,30 @@ const OUTBOX_LIFETIME_MS = 60 * 60 * 1000;
 // enough for the server to have saved what was written and ended the turn, far shorter than a poll.
 const STOP_REREAD_MS = 400;
 
-// A Stop that finds nothing to stop while this tab's own stream is still open reached the server before
-// the turn was registered there. It is asked again — at once when `started` arrives, otherwise this often —
-// for at most this many requests in all; the turn's end (`done`) closes the stopping state either way.
-const STOP_RETRY_MS = 500;
+// What "nothing to stop" means for a Stop sent from a tab whose own stream is open depends on whether
+// `started` had reached the tab:
+//  - before it, the server may not have had the turn yet: ask again the moment `started` arrives (a bound of
+//    this many requests in all is kept as a guard, with the words below);
+//  - after it, the turn is registered (the server does that before it emits `started`), so "nothing to stop"
+//    means it is already finishing — from the model's last word on, and during a plan that runs without
+//    asking, the turn is deliberately released, and no `stopped` event will follow. Asking again could never
+//    succeed, so the stopping state ends at once with a gentle notice (below), not an error.
 const STOP_MAX_TRIES = 6;
 
-// After the last of them the button is Stop again — it is not left on «stopping» for the rest of the turn.
+// The guard's words: the button is Stop again — it is not left on «stopping» for the rest of the turn.
 const STOP_NOT_TAKEN = {
   messageEn: "Couldn't stop it — try again",
   messageFa: 'توقف انجام نشد — دوباره امتحان کنید',
 };
+
+// Information, not a failure: it went on to finish before it could be stopped. Gone with that turn's `done`.
+const STOP_FINISHING = {
+  messageEn: "It can't be stopped now — it's finishing.",
+  messageFa: 'دیگر قابل توقف نیست — پاسخ در حال تمام شدن است.',
+};
+
+/** The notices Stop puts in the composer; each belongs to one turn and goes when that turn ends. */
+const isStopNotice = (notice) => notice?.kind === 'stop-failed' || notice?.kind === 'stop-finishing';
 
 const MAYBE_UNSENT = {
   kind: 'restored',
@@ -161,7 +174,7 @@ export function createAssistantSession({
     onSettled: () => {
       timeline.resuming = false;
       endStop();
-      if (timeline.notice?.kind === 'busy' || timeline.notice?.kind === 'stop-failed') timeline.notice = null; // the answer it waited for is in
+      if (timeline.notice?.kind === 'busy' || isStopNotice(timeline.notice)) timeline.notice = null; // the answer it waited for is in
       onChange('settled');
     },
     onGone: () => {
@@ -208,7 +221,7 @@ export function createAssistantSession({
   // it stays true after the request has been answered and goes false only when the turn is over (or the
   // asking failed, or the person moved to another conversation).
 
-  /** Ends the stopping state (and any retry that is waiting); `outcome` settles what stop() returned. */
+  /** Ends the stopping state; `outcome` settles what stop() returned. */
   function endStop(outcome = { stopped: false }) {
     const intent = stopIntent;
     if (!intent) {
@@ -217,8 +230,6 @@ export function createAssistantSession({
     }
     stopIntent = null;
     timeline.stopping = false;
-    if (intent.timer !== null) clock.clearTimeout(intent.timer);
-    intent.timer = null;
     intent.settle(outcome);
   }
 
@@ -273,19 +284,26 @@ export function createAssistantSession({
       return;
     }
 
-    // This tab's stream is open, so the turn exists — the server has just not registered it yet.
+    // This tab's stream is open.
+    if (startedThen) {
+      // `started` had arrived when this was sent, so the server had the turn: "nothing to stop" means it is
+      // already finishing and can no longer be stopped. No retry could succeed — say so, and end «stopping».
+      if (timeline.conversationId === intent.id) timeline.notice = { kind: 'stop-finishing', ...STOP_FINISHING };
+      onChange('stop-finishing');
+      endStop({ stopped: false });
+      return;
+    }
+
+    // Sent before `started` reached this tab: the turn may not have been registered yet. Ask again when
+    // `started` arrives — at once, if it arrived while this request was out. The bound is a guard.
     if (intent.tries >= STOP_MAX_TRIES) {
-      // Given up. The button is Stop again, and the composer says so: stuck on «stopping» for however long
-      // the turn runs would be the worst of both.
       if (timeline.conversationId === intent.id) timeline.notice = { kind: 'stop-failed', ...STOP_NOT_TAKEN };
       onChange('stop-failed');
       endStop({ stopped: false });
-    } else if (!startedThen && streamStarted) {
-      askToStop(intent); // `started` arrived while the request was out: ask again at once
     } else if (streamStarted) {
-      intent.timer = clock.setTimeout(() => { intent.timer = null; askToStop(intent); }, STOP_RETRY_MS);
+      askToStop(intent);
     }
-    // else: `started` has not arrived; the stream's `started` (see send) asks again.
+    // else: the stream's `started` (see send) asks again.
   }
 
   /** The conversation's id became known, or `started` arrived: a Stop that was waiting for it can go. */
@@ -511,7 +529,7 @@ export function createAssistantSession({
               streamOver = true;
               endStop();
             }
-            if (name === 'done' && timeline.notice?.kind === 'stop-failed') timeline.notice = null; // "try again" is moot
+            if (name === 'done' && isStopNotice(timeline.notice)) timeline.notice = null; // "try again" and "finishing" are moot
             if (['tool', 'delta', 'message', 'plan', 'executed'].includes(name)) progressed = true;
             if (name === 'error' && started && !progressed) refusedAtGate = true;
             if ((name === 'started' || name === 'done') && timeline.conversationId) prefs.setConversationId(timeline.conversationId);
@@ -615,19 +633,18 @@ export function createAssistantSession({
     },
 
     /**
-     * The Stop button: asks the server to end the turn in progress (`POST …/{id}/stop`), and keeps
-     * asking for as long as that takes to be true. Resolves to `{ stopped }` once the asking is over —
-     * or `{ stopped: false, error }`, the error also being the composer's notice. Pressed again while
-     * the intent stands, it is the same intent, never a second request. `timeline.stopping` is true from
-     * the press until the turn has ended.
+     * The Stop button: asks the server to end the turn in progress (`POST …/{id}/stop`). Resolves to
+     * `{ stopped }` once the asking is over — or `{ stopped: false, error }`, the error also being the
+     * composer's notice. Pressed again while the intent stands, it is the same intent, never a second
+     * request. `timeline.stopping` is true from the press until the turn has ended.
      *
      *  - A turn streaming in this tab ends by itself: its `stopped` and `done` events arrive on the
      *    stream that is open, and drawing them is the timeline's job. If the conversation has no id yet
      *    (the create round trip of a first message, or a server without the create endpoint), the request
-     *    waits for the id, or for `started`. `{ stopped: false }` here means the server has not registered
-     *    the turn yet — not that it is over — so it is asked again: when `started` arrives, if it had not,
-     *    and then every ~500 ms, six requests at most — after which the button is Stop again and the
-     *    composer says it did not take.
+     *    waits for the id, or for `started`. `{ stopped: false }` before `started` has reached this tab
+     *    means the server may not have had the turn yet, so it is asked again when `started` arrives;
+     *    after `started` it means the turn is already finishing and can no longer be stopped — the
+     *    stopping state ends at once with a gentle notice (STOP_FINISHING), and nothing is retried.
      *  - A conversation only being followed after a reload (`resuming`) has no stream here, just the
      *    poller. One request; then it is read again promptly instead of when the next poll comes round.
      *    `stopped: false` there is the truth — the turn had already finished — and says nothing.
@@ -642,11 +659,12 @@ export function createAssistantSession({
       const intent = {
         id: timeline.conversationId,
         following: !timeline.streaming,
-        tries: 0, asking: false, asked: false, sawNothing: false, timer: null,
+        tries: 0, asking: false, asked: false, sawNothing: false,
       };
       intent.promise = new Promise((resolve) => { intent.settle = resolve; });
       stopIntent = intent;
       timeline.stopping = true;
+      if (isStopNotice(timeline.notice)) timeline.notice = null; // a new press retires what the last one said
       askToStop(intent); // does nothing yet when the conversation has no id
       return intent.promise;
     },

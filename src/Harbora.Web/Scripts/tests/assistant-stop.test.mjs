@@ -281,65 +281,63 @@ test('`started` arriving while the first request is out makes the answer "false"
   assert.deepEqual(await pending, { stopped: true });
 });
 
-test('after `started`, "nothing to stop" is retried about every 500 ms until it stops', async () => {
-  const s = setup({ stops: [false, false, true] });
-  await streaming(s);
+test('after `started`, "nothing to stop" means it is already finishing: a gentle notice at once, and nothing is retried', async () => {
+  const s = setup({ stops: [false, true] });
+  await streaming(s); // `started` has arrived in this tab
+  const pending = s.session.stop();
+  assert.equal(s.timeline.stopping, true);
+  assert.deepEqual(await pending, { stopped: false });
+  assert.equal(s.timeline.stopping, false, 'the stopping state ends at once: the button is Stop again');
+  assert.equal(s.stopCalls(), 1);
+  assert.equal(s.timers.queue.length, 0, 'no retry: it could never succeed');
+  assert.equal(s.timeline.notice.messageEn, "It can't be stopped now — it's finishing.");
+  assert.equal(s.timeline.notice.messageFa, 'دیگر قابل توقف نیست — پاسخ در حال تمام شدن است.');
+  assert.equal(s.timeline.notice.kind, 'stop-finishing', 'information, not an error');
+  await settle();
+  assert.equal(s.stopCalls(), 1, 'and still nothing more');
+
+  // A later press is a fresh ask (and retires the old notice).
+  const again = s.session.stop();
+  assert.equal(s.timeline.notice, null);
+  assert.deepEqual(await again, { stopped: true });
+  assert.equal(s.stopCalls(), 2);
+});
+
+test('a retry sent after `started` that is answered "false" gives the notice too', async () => {
+  const s = setup({ holdStarted: true, stops: [false, false] });
+  s.session.send('hi');
+  await settle();
   const pending = s.session.stop();
   await settle();
   assert.equal(s.stopCalls(), 1);
-  assert.deepEqual(s.timers.queue.map((t) => t.ms), [500]);
+  assert.equal(s.timeline.stopping, true, 'before `started`: still waiting, not finishing');
+  assert.equal(s.timeline.notice, null);
 
-  await s.timers.fire(500);
-  assert.equal(s.stopCalls(), 2);
-  assert.deepEqual(s.timers.queue.map((t) => t.ms), [500]);
-  await s.timers.fire(500);
-  assert.equal(s.stopCalls(), 3);
-  assert.deepEqual(await pending, { stopped: true });
-  assert.equal(s.timers.queue.length, 0, 'stopped: nothing more to ask');
-  assert.equal(s.timeline.stopping, true, 'and the stopping state waits for the turn to end');
-});
-
-test('a Stop that never takes asks six times at most; then the button is Stop again and the composer says so', async () => {
-  const s = setup({ stops: [false, false, false, false, false, false, false, false, true] });
-  await streaming(s);
-  const pending = s.session.stop();
-  await settle();
-  for (let i = 0; i < 5; i++) await s.timers.fire(500);
-  assert.equal(s.stopCalls(), 6);
-  assert.equal(s.timers.queue.length, 0, 'no seventh');
+  s.gate.emit('started', { conversationId: CONVO });
   assert.deepEqual(await pending, { stopped: false });
-  assert.equal(s.timeline.stopping, false, 'not left on «stopping» for the rest of the turn');
-  assert.equal(s.timeline.notice.messageFa, 'توقف انجام نشد — دوباره امتحان کنید');
-  assert.equal(s.timeline.notice.messageEn, "Couldn't stop it — try again");
-
-  // pressable again: a new press is a new intent with its own six
-  const again = s.session.stop();
-  assert.equal(s.timeline.stopping, true);
-  await settle();
-  assert.equal(s.stopCalls(), 7);
-  await finishTurn(s);
-  assert.deepEqual(await again, { stopped: false });
+  assert.equal(s.stopCalls(), 2, 'the retry that `started` triggered');
   assert.equal(s.timeline.stopping, false);
+  assert.equal(s.timeline.notice.kind, 'stop-finishing');
+  assert.equal(s.timers.queue.length, 0);
+  s.gate.end();
+  await settle();
 });
 
-test('the "try again" notice does not outlive its turn: `done` clears it, other notices stay', async () => {
-  const s = setup({ stops: [false, false, false, false, false, false] });
-  await streaming(s);
-  s.session.stop();
-  await settle();
-  for (let i = 0; i < 5; i++) await s.timers.fire(500);
-  assert.equal(s.timeline.notice.kind, 'stop-failed');
-  assert.ok(s.timeline.notice.messageEn.startsWith("Couldn't stop it"));
-  await finishTurn(s);
-  assert.equal(s.timeline.notice, null, 'the turn is over: "try again" would be a lie');
+test("Stop's notices do not outlive their turn: `done` clears them, other notices stay", async () => {
+  const finishing = setup({ stops: [false] });
+  await streaming(finishing);
+  await finishing.session.stop();
+  assert.equal(finishing.timeline.notice.kind, 'stop-finishing');
+  await finishTurn(finishing);
+  assert.equal(finishing.timeline.notice, null, 'the turn is over: "it\'s finishing" is moot');
 
   const kept = setup({ stops: [true] });
   await streaming(kept);
   kept.timeline.notice = { kind: 'restored', messageEn: 'something else', messageFa: 'چیز دیگری' };
   await finishTurn(kept);
-  assert.equal(kept.timeline.notice.kind, 'restored', 'only the stop notice is cleared');
+  assert.equal(kept.timeline.notice.kind, 'restored', 'only Stop\'s own notices are cleared');
 
-  // a request error is a stop-failed notice too
+  // a request error is a stop-failed notice, and goes with the turn too
   const failed = setup({ stops: [new Error('Could not reach the panel.')] });
   await streaming(failed);
   await failed.session.stop();
@@ -358,20 +356,26 @@ test('and when only following, the notice goes when the poll finds the turn over
   assert.equal(s.timeline.notice, null);
 });
 
-test('an error on a retry request is shown like any other, and ends «stopping»', async () => {
-  const s = setup({ stops: [false, Object.assign(new Error('Could not reach the panel.'), { messageEn: 'Could not reach the panel.', messageFa: 'ارتباط با پنل برقرار نشد.' })] });
-  await streaming(s);
+test('an error on the retry that `started` triggers is shown like any other, and ends «stopping»', async () => {
+  const s = setup({
+    holdStarted: true,
+    stops: [false, Object.assign(new Error('Could not reach the panel.'), { messageEn: 'Could not reach the panel.', messageFa: 'ارتباط با پنل برقرار نشد.' })],
+  });
+  s.session.send('hi');
+  await settle();
   const pending = s.session.stop();
   await settle();
-  assert.deepEqual(s.timers.queue.map((t) => t.ms), [500]);
-  await s.timers.fire(500);
+  s.gate.emit('started', { conversationId: CONVO });
   const outcome = await pending;
   assert.equal(outcome.stopped, false);
   assert.ok(outcome.error);
   assert.equal(s.timeline.stopping, false);
+  assert.equal(s.timeline.notice.kind, 'stop-failed');
   assert.equal(s.timeline.notice.messageFa, 'ارتباط با پنل برقرار نشد.');
   assert.equal(s.timers.queue.length, 0, 'and nothing is retried after an error');
   assert.equal(s.stopCalls(), 2);
+  s.gate.end();
+  await settle();
 });
 
 test('a press in the gap between `done` and the stream closing asks nothing', async () => {
@@ -404,12 +408,14 @@ test('the next turn is not affected by the gap of the last one', async () => {
   assert.deepEqual(await s.session.stop(), { stopped: true });
 });
 
-test('no second request goes out while a retry is in flight', async () => {
-  const s = setup({ stops: [false] }); // the first answer is "false"; the retry then stays pending
-  await streaming(s);
+test('no second request goes out while the retry that `started` triggers is in flight', async () => {
+  const s = setup({ holdStarted: true, stops: [false] }); // the first answer is "false"; the retry then stays pending
+  s.session.send('hi');
+  await settle();
   const pending = s.session.stop();
   await settle();
-  await s.timers.fire(500);
+  s.gate.emit('started', { conversationId: CONVO });
+  await settle();
   assert.equal(s.stopCalls(), 2);
   s.session.stop();
   s.session.stop();
@@ -419,15 +425,19 @@ test('no second request goes out while a retry is in flight', async () => {
   assert.deepEqual(await pending, { stopped: true });
 });
 
-test('no retry once the turn has ended — a waiting timer is cancelled, a late answer is ignored', async () => {
-  const waiting = setup({ stops: [false] });
-  await streaming(waiting);
-  waiting.session.stop();
+test('a Stop waiting for `started` goes with the turn when it ends, and a late answer is ignored', async () => {
+  const waiting = setup({ holdStarted: true, stops: [false] });
+  waiting.session.send('hi');
   await settle();
-  assert.deepEqual(waiting.timers.queue.map((t) => t.ms), [500]);
-  await finishTurn(waiting);
-  assert.equal(waiting.timers.queue.length, 0, 'the retry timer went with the turn');
+  const pending = waiting.session.stop();
+  await settle();
   assert.equal(waiting.stopCalls(), 1);
+  assert.equal(waiting.timeline.stopping, true);
+  await finishTurn(waiting); // the turn ends without `started` ever arriving
+  assert.deepEqual(await pending, { stopped: false });
+  assert.equal(waiting.timeline.stopping, false);
+  assert.equal(waiting.stopCalls(), 1);
+  assert.equal(waiting.timers.queue.length, 0);
 
   const late = setup();
   await streaming(late);
@@ -437,19 +447,22 @@ test('no retry once the turn has ended — a waiting timer is cancelled, a late 
   late.gate.stop.resolve({ stopped: false });
   await settle();
   assert.equal(late.stopCalls(), 1);
+  assert.equal(late.timeline.notice, null, 'a "finishing" notice for a turn that has already ended would be noise');
   assert.equal(late.timers.queue.length, 0);
 });
 
 test('no retry once the person has moved to another conversation', async () => {
-  const startedNew = setup({ stops: [false] });
-  await streaming(startedNew);
-  const pending = startedNew.session.stop();
+  const startedNew = setup({ holdStarted: true, stops: [false] });
+  startedNew.session.send('hi');
   await settle();
-  assert.deepEqual(startedNew.timers.queue.map((t) => t.ms), [500]);
+  const pending = startedNew.session.stop();
+  await settle(); // asked before `started`: waiting for it
+  assert.equal(startedNew.stopCalls(), 1);
   startedNew.session.startNew();
   assert.equal(startedNew.timeline.stopping, false);
-  assert.equal(startedNew.timers.queue.length, 0);
   assert.deepEqual(await pending, { stopped: false });
+  startedNew.gate.emit('started', { conversationId: CONVO }); // the abandoned turn's stream is ignored
+  await settle();
   assert.equal(startedNew.stopCalls(), 1);
 
   const opened = setup({ views: [view({ messages: [userMessage('hi')] })] });
@@ -458,7 +471,6 @@ test('no retry once the person has moved to another conversation', async () => {
   await settle();
   await opened.session.open(OTHER);
   assert.equal(opened.timeline.stopping, false);
-  assert.equal(opened.timers.queue.filter((t) => t.ms === 500).length, 0);
   assert.equal(opened.stopCalls(), 1);
 });
 
