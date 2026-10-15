@@ -484,4 +484,85 @@ public class AgentProcessDisplayTests
         using var colleague = h.Another();
         (await colleague.Service.GetAsync(colleague.Actor, id, persian: false, default)).Should().BeNull();
     }
+
+    // ---- what the view reads: bounded by the window --------------------------------------------
+
+    private static AgentPlan SeededPlan(AgentHarness h, Guid conversationId, AgentPlanStatus status, DateTimeOffset createdAt,
+        DateTimeOffset expiresAt, string? stepsJson = null) => new()
+    {
+        WorkspaceId = h.WorkspaceId, UserId = h.UserId, ConversationId = conversationId, Status = status,
+        StepsJson = stepsJson ?? AgentJson.Serialize(new[]
+        {
+            new AgentPlanStep(0, "create_database", AgentToolKind.SafeWrite, "{}", "seeded", "Seeded", "کاشته‌شده", null, null, [], [], null, false)
+        }),
+        CreatedAt = createdAt, UpdatedAt = createdAt, ExpiresAt = expiresAt
+    };
+
+    [Fact]
+    public async Task Plans_dated_before_the_window_are_not_read_at_all_but_a_pending_one_always_is()
+    {
+        using var h = Harness(out _);
+        var (id, proposed, _) = await ProposeAsync(h);
+        var now = h.Clock.UtcNow;
+
+        var longAgo = SeededPlan(h, id, AgentPlanStatus.Rejected, now.AddDays(-2), now.AddDays(-2).AddMinutes(15));
+        var justInside = SeededPlan(h, id, AgentPlanStatus.Rejected, now.AddSeconds(-30), now.AddMinutes(10));
+        var oldButPending = SeededPlan(h, id, AgentPlanStatus.Pending, now.AddDays(-2), now.AddMinutes(10));
+        var oldAndLapsed = SeededPlan(h, id, AgentPlanStatus.Pending, now.AddDays(-2), now.AddDays(-2).AddMinutes(15));
+        h.Db.AgentPlans.AddRange(longAgo, justInside, oldButPending, oldAndLapsed);
+        await h.Db.SaveChangesAsync();
+
+        var inWindow = await h.Plans.PlansOfAsync(h.Actor, id, now.AddMinutes(-1), default);
+        inWindow.Select(p => p.Id).Should().BeEquivalentTo([oldButPending.Id, justInside.Id, proposed],
+            "the plans made inside the window, and the one that can still be decided");
+        inWindow.Select(p => p.CreatedAt).Should().BeInAscendingOrder("oldest first");
+
+        var noWindow = await h.Plans.PlansOfAsync(h.Actor, id, since: null, default);
+        noWindow.Select(p => p.Id).Should().BeEquivalentTo([oldButPending.Id, proposed],
+            "with no window only what is waiting for a decision is read");
+    }
+
+    [Fact]
+    public async Task A_plan_older_than_the_view_is_never_deserialized_so_even_a_broken_one_cannot_fail_it()
+    {
+        using var h = Harness(out _);
+        var (id, planId, _) = await ProposeAsync(h);
+        (await h.Plans.RejectAsync(h.Actor, planId, default)).Should().BeNull();
+        var now = h.Clock.UtcNow;
+
+        // Steps nobody can read: loaded, they would throw while the view looked for proposal lines.
+        h.Db.AgentPlans.Add(SeededPlan(h, id, AgentPlanStatus.Executed, now.AddDays(-2), now.AddDays(-2).AddMinutes(15),
+            stepsJson: "this is not json"));
+        await h.Db.SaveChangesAsync();
+
+        var view = await h.Service.GetAsync(h.Actor, id, persian: false, default);
+
+        view!.Plans!.Select(p => p.Plan.Id).Should().Equal(planId);
+    }
+
+    [Fact]
+    public async Task A_pending_plan_is_still_the_pending_plan_when_two_hundred_later_messages_have_pushed_it_out_of_the_window()
+    {
+        using var h = Harness(out _);
+        var (id, planId, _) = await ProposeAsync(h);
+        var now = h.Clock.UtcNow;
+
+        // Lines written by other plans' executions after the card, all dated later; the card is still open.
+        var next = await h.Db.AgentMessages.IgnoreQueryFilters().Where(m => m.ConversationId == id).MaxAsync(m => m.Sequence) + 1;
+        for (var i = 0; i < AgentConversationService.ConversationViewMessages; i++)
+            h.Db.AgentMessages.Add(new AgentMessage
+            {
+                WorkspaceId = h.WorkspaceId, ConversationId = id, Sequence = next + i, Role = AgentMessageRole.Tool,
+                ToolCallId = $"other_{i}", ToolName = "create_database", PlanId = Guid.CreateVersion7(),
+                SummaryEn = "Done.", SummaryFa = "انجام شد.", CreatedAt = now.AddMinutes(5)
+            });
+        await h.Db.SaveChangesAsync();
+        h.Clock.UtcNow = now.AddMinutes(5);
+
+        var view = await h.Service.GetAsync(h.Actor, id, persian: false, default);
+
+        view!.Messages.Should().HaveCount(AgentConversationService.ConversationViewMessages);
+        view.PendingPlan!.Id.Should().Be(planId, "it is waiting for a decision whatever the window shows");
+        view.Plans.Should().BeEmpty();
+    }
 }

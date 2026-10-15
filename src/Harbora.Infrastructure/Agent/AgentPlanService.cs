@@ -234,7 +234,8 @@ public sealed class AgentPlanService(
     public AgentPlanStatus EffectiveStatus(AgentPlan plan) =>
         plan.Status == AgentPlanStatus.Pending && clock.UtcNow >= plan.ExpiresAt ? AgentPlanStatus.Expired : plan.Status;
 
-    /// <summary>The conversation's plan still waiting for a decision, if any.</summary>
+    /// <summary>The conversation's plan still waiting for a decision, if any. <see cref="PendingAmong"/> is
+    /// the same rule over plans already in hand.</summary>
     public async Task<AgentPlan?> PendingPlanAsync(AgentActor actor, Guid conversationId, CancellationToken ct)
     {
         var now = clock.UtcNow;
@@ -246,14 +247,29 @@ public sealed class AgentPlanService(
     }
 
     /// <summary>
-    /// Every plan of this person's conversation, oldest first — pending, decided and expired alike. The
-    /// conversation view picks the ones whose proposal it shows (<see cref="AgentConversationService.GetAsync"/>).
+    /// The plans of this person's conversation that the conversation view may need, oldest first — pending,
+    /// decided and expired alike: those made at or after <paramref name="since"/>, and the plan still
+    /// waiting for a decision whatever its age. The view is re-read every few seconds while an answer is
+    /// awaited, and a long conversation has far more plans than the window of messages it shows; each row
+    /// carries its steps and results as JSON, so the older ones are not read at all. A null
+    /// <paramref name="since"/> leaves only the pending plan.
     /// </summary>
-    public async Task<IReadOnlyList<AgentPlan>> PlansOfAsync(AgentActor actor, Guid conversationId, CancellationToken ct) =>
-        await db.AgentPlans.IgnoreQueryFilters().AsNoTracking()
-            .Where(p => p.ConversationId == conversationId && p.WorkspaceId == actor.WorkspaceId && p.UserId == actor.UserId)
+    public async Task<IReadOnlyList<AgentPlan>> PlansOfAsync(
+        AgentActor actor, Guid conversationId, DateTimeOffset? since, CancellationToken ct)
+    {
+        var now = clock.UtcNow;
+        return await db.AgentPlans.IgnoreQueryFilters().AsNoTracking()
+            .Where(p => p.ConversationId == conversationId && p.WorkspaceId == actor.WorkspaceId && p.UserId == actor.UserId
+                        && ((since != null && p.CreatedAt >= since)
+                            || (p.Status == AgentPlanStatus.Pending && p.ExpiresAt > now)))
             .OrderBy(p => p.CreatedAt).ThenBy(p => p.Id)
             .ToListAsync(ct);
+    }
+
+    /// <summary>The newest of these plans still waiting for a decision — <see cref="EffectiveStatus"/>
+    /// pending, so one past its expiry is not — or null. What <see cref="PendingPlanAsync"/> asks the database.</summary>
+    public AgentPlan? PendingAmong(IEnumerable<AgentPlan> candidates) =>
+        candidates.Where(p => EffectiveStatus(p) == AgentPlanStatus.Pending).MaxBy(p => p.CreatedAt);
 
     public AgentPlanView ViewOf(AgentPlan plan) =>
         new(plan.Id, StatusName(EffectiveStatus(plan)), plan.ExpiresAt, StepsOf(plan).Select(StepView).ToList());

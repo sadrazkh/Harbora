@@ -71,6 +71,11 @@ public sealed class AgentConversationService(
     /// <summary>The most decided plans the conversation view returns (the newest of those it can place).</summary>
     public const int PlanHistorySize = 50;
 
+    /// <summary>How much earlier than the oldest message of the view a plan may be dated and still be read
+    /// for it — see <see cref="GetAsync"/>. A plan can only be younger than its lines, so this is slack for
+    /// servers whose clocks differ, not part of the rule.</summary>
+    private static readonly TimeSpan PlanClockMargin = TimeSpan.FromMinutes(1);
+
     private const int MaxTitleLength = 60;
 
     /// <summary>
@@ -154,8 +159,13 @@ public sealed class AgentConversationService(
             .ToListAsync(ct);
         rows.Reverse();
 
-        var storedPlans = await plans.PlansOfAsync(actor, conversationId, ct);
-        var planOfLine = ProposalLines(rows, storedPlans);
+        // Only the plans made since the window began can have a proposal line in it (a plan is made after its
+        // lines are written, by the same clock); the margin is for clocks that are not quite the same. The
+        // pending plan is added by the query whatever its age.
+        var since = rows.Count == 0 ? (DateTimeOffset?)null : rows.Min(r => r.CreatedAt) - PlanClockMargin;
+        var storedPlans = await plans.PlansOfAsync(actor, conversationId, since, ct);
+        var pending = plans.PendingAmong(storedPlans);
+        var proposals = ProposalLines(rows, storedPlans);
 
         var messages = new List<AgentMessageView>();
         // The visible messages a turn wrote itself — not the lines a plan's execution wrote after it was
@@ -179,7 +189,7 @@ public sealed class AgentConversationService(
                         ToolLabel: persian ? label?.Fa : label?.En,
                         ToolCategory: label?.Category,
                         DurationMs: row.DurationMs,
-                        PlanId: row.PlanId ?? (planOfLine.TryGetValue(row.Id, out var proposed) ? proposed.Id : null));
+                        PlanId: row.PlanId ?? (proposals.PlanOfLine.TryGetValue(row.Id, out var proposed) ? proposed.Id : null));
                     break;
             }
 
@@ -188,20 +198,13 @@ public sealed class AgentConversationService(
             if (row.PlanId is null) turnMessages.Add((row.Sequence, row.Id));
         }
 
-        var pending = await plans.PendingPlanAsync(actor, conversationId, ct);
-
-        // The last proposal line of each plan that has any in this window; a plan without one was
-        // proposed before the window began and has nowhere to be drawn.
-        var lastProposalLine = new Dictionary<Guid, int>();
-        foreach (var row in rows)
-            if (planOfLine.TryGetValue(row.Id, out var plan)) lastProposalLine[plan.Id] = row.Sequence;
-
+        // A plan with no proposal line in this window was proposed before it began and has nowhere to be drawn.
         var history = storedPlans
-            .Where(p => p.Id != pending?.Id && lastProposalLine.ContainsKey(p.Id))
-            .OrderBy(p => lastProposalLine[p.Id])
+            .Where(p => p.Id != pending?.Id && proposals.LastLineOfPlan.ContainsKey(p.Id))
+            .OrderBy(p => proposals.LastLineOfPlan[p.Id].Sequence)
             .TakeLast(PlanHistorySize)
             .Select(p => new AgentPlanHistoryView(plans.ViewOf(p), AgentPlanService.ResultOf(p),
-                AfterTurnOf(lastProposalLine[p.Id], rows, turnMessages)))
+                AfterTurnOf(proposals.LastLineOfPlan[p.Id], rows, turnMessages)))
             .ToList();
 
         return new AgentConversationView(conversation.Id, conversation.Title, messages,
@@ -222,7 +225,7 @@ public sealed class AgentConversationService(
     /// oldest lines, never the newest — and a line with no plan left over is simply not claimed.
     /// </para>
     /// </summary>
-    private static Dictionary<Guid, AgentPlan> ProposalLines(IReadOnlyList<AgentMessage> rows, IReadOnlyList<AgentPlan> storedPlans)
+    private static ProposalIndex ProposalLines(IReadOnlyList<AgentMessage> rows, IReadOnlyList<AgentPlan> storedPlans)
     {
         // One entry per step, oldest plan first, so a plan whose steps share a key is listed once for each.
         var plansByCall = new Dictionary<(string Call, string Tool), List<AgentPlan>>();
@@ -240,31 +243,43 @@ public sealed class AgentConversationService(
                         && r.ToolCallId is not null && r.ToolName is not null)
             .GroupBy(r => (Call: r.ToolCallId!, Tool: r.ToolName!));
 
-        var result = new Dictionary<Guid, AgentPlan>();
+        var index = new ProposalIndex([], []);
         foreach (var group in lines)
         {
             if (!plansByCall.TryGetValue(group.Key, out var candidates)) continue;
             var ofCall = group.ToList();
             for (var i = 1; i <= Math.Min(ofCall.Count, candidates.Count); i++)
-                result[ofCall[^i].Id] = candidates[^i];
+            {
+                var line = ofCall[^i];
+                var plan = candidates[^i];
+                index.PlanOfLine[line.Id] = plan;
+                if (!index.LastLineOfPlan.TryGetValue(plan.Id, out var last) || line.Sequence > last.Sequence)
+                    index.LastLineOfPlan[plan.Id] = (line.Sequence, line.Id);
+            }
         }
-        return result;
+        return index;
     }
+
+    /// <summary>The proposal lines of a window: the plan each belongs to, and each plan's last one.</summary>
+    private sealed record ProposalIndex(
+        Dictionary<Guid, AgentPlan> PlanOfLine, Dictionary<Guid, (int Sequence, Guid Id)> LastLineOfPlan);
 
     /// <summary>
     /// The message a plan's card is drawn after: the last one the proposing turn itself wrote — which
     /// ends where the person's next message begins. The lines a plan's execution wrote come after the
-    /// turn's closing words and say what the card says, so they never anchor it. Null: nothing visible
-    /// of that turn is in the window.
+    /// turn's closing words and say what the card says, so they never anchor it. Never empty: the plan's
+    /// own last proposal line is one of the turn's messages, and the search starts from it.
     /// </summary>
-    private static Guid? AfterTurnOf(
-        int lastProposalLine, IReadOnlyList<AgentMessage> rows, IReadOnlyList<(int Sequence, Guid Id)> turnMessages)
+    private static Guid AfterTurnOf(
+        (int Sequence, Guid Id) lastProposalLine, IReadOnlyList<AgentMessage> rows,
+        IReadOnlyList<(int Sequence, Guid Id)> turnMessages)
     {
-        var nextUser = rows.Where(r => r.Role == AgentMessageRole.User && r.Sequence > lastProposalLine)
+        var nextUser = rows.Where(r => r.Role == AgentMessageRole.User && r.Sequence > lastProposalLine.Sequence)
             .Select(r => (int?)r.Sequence).Min();
-        for (var i = turnMessages.Count - 1; i >= 0; i--)
-            if (nextUser is null || turnMessages[i].Sequence < nextUser) return turnMessages[i].Id;
-        return null;
+        var after = lastProposalLine.Id;
+        foreach (var (sequence, id) in turnMessages)
+            if (sequence > lastProposalLine.Sequence && (nextUser is null || sequence < nextUser)) after = id;
+        return after;
     }
 
     /// <summary>Whether a turn mark still means a turn is being answered — see <see cref="TurnMarkGrace"/>.</summary>

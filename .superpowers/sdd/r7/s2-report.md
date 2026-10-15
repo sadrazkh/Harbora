@@ -188,3 +188,58 @@ grep -c "Harbora.Tests.dll" /tmp/test-r7-s2.log  ->  2   (present)
    already did; the stream events carry both languages.
 8. Contracts on master (`AgentViews.cs`, `AgentCoreModels.cs`, `AgentToolLabels.cs`) were used as they are; I did
    not change any shape. The only edit inside `AgentToolLabels.cs` is filling `All`.
+
+## Fix pass (review: bound what `GetAsync` reads, tidy the walk)
+
+`GetAsync` is re-read every 2-3 seconds while a reloaded pane waits for an answer, and it loaded every plan
+of the conversation (with `StepsJson` and `ResultsJson`) and deserialized every plan's steps each time.
+
+**Bound.** `AgentPlanService.PlansOfAsync(actor, conversationId, DateTimeOffset? since, ct)` now reads only plans
+with `CreatedAt >= since`, plus the plan still waiting for a decision whatever its age
+(`Status == Pending && ExpiresAt > now`); a null `since` leaves only that pending plan. `GetAsync` passes
+`since = oldest CreatedAt among the returned rows - 1 minute` (`PlanClockMargin`, slack for servers whose clocks
+differ; a plan is created after its proposal lines by the same clock, so it cannot be dated before the
+window's oldest message). With no rows, only the pending plan is read. Everything downstream (`ProposalLines`,
+`ViewOf`) now works on that bounded set; the 50-plan cap and the "proposal line inside the window" rule are
+unchanged.
+
+**Tidy-ups.**
+- One pass over the rows: `ProposalLines` now returns a `ProposalIndex` (line -> plan, and each plan's last
+  proposal line as sequence + id), so the second `foreach` that recomputed the same walk is gone.
+- No separate pending query: `GetAsync` takes the pending plan from the plans already read with
+  `AgentPlanService.PendingAmong(...)`, which applies `EffectiveStatus == Pending` (so a plan past its expiry is
+  still shown as expired and goes to `Plans`, as before). `PendingPlanAsync` stays, unchanged in behaviour, as
+  the query form of the same rule. The bounded query always includes the pending plan, so an open card is never
+  dropped by the window.
+- `AfterTurnOf` returns a non-null `Guid`: it starts from the plan's own last proposal line (always one of the
+  turn's messages) and moves forward to the last turn message before the next user message, so the "nothing
+  visible" branch that could not be reached is gone. `AgentPlanHistoryView.AfterMessageId` is still `Guid?` on the
+  wire (contract unchanged).
+- Left as asked: the `Looked up: <label>` fallback.
+
+**Tests (3 new, 26 in all for this task).** In `AgentProcessDisplayTests.cs`:
+`Plans_dated_before_the_window_are_not_read_at_all_but_a_pending_one_always_is` calls `PlansOfAsync` directly
+(plan from 2 days ago: not returned; one 30 s old: returned; an old plan still pending: returned; an old
+plan that lapsed: not returned; null `since`: only pending ones, oldest first);
+`A_plan_older_than_the_view_is_never_deserialized_so_even_a_broken_one_cannot_fail_it` seeds a 2-day-old plan whose
+`StepsJson` is `this is not json` and shows `GetAsync` still returns (if that row were loaded,
+`ProposalLines` would throw); `A_pending_plan_is_still_the_pending_plan_when_two_hundred_later_messages_...`
+pins that the open card is returned as `PendingPlan` though 200 later lines pushed its own out of the window.
+Mutation check (reverted): making the bound ignore `since` fails the first two (`Failed: 2, Passed: 18` in
+`AgentProcessDisplayTests`).
+
+**What I ran** (`export MSBUILDDISABLENODEREUSE=1`, from the worktree):
+
+```
+dotnet build tests/Harbora.Tests/Harbora.Tests.csproj --nologo -v q --no-restore -p:UseSharedCompilation=false
+  -> BUILD_EXIT=0, no CS warnings or errors (only NU1900)
+dotnet test tests/Harbora.Tests --no-build --nologo -v q --filter "FullyQualifiedName~AgentProcessDisplayTests|FullyQualifiedName~AgentToolLabelsTests|FullyQualifiedName~AssistantProcessHttpTests|FullyQualifiedName~MigrationConsistency"
+  -> Passed!  - Failed: 0, Passed: 28, Skipped: 0, Total: 28 - Harbora.Tests.dll (net10.0)
+dotnet test tests/Harbora.Tests --no-build --nologo -v q --filter "FullyQualifiedName~Agent|FullyQualifiedName~Assistant|FullyQualifiedName~MigrationConsistency|FullyQualifiedName~ToolsHttp"
+  -> Passed!  - Failed: 0, Passed: 848, Skipped: 0, Total: 848 - Harbora.Tests.dll (net10.0)
+```
+
+Only these classes were run for the fix pass, not the full solution suite (the last full run, before the fix
+pass, is above: 7327 in `Harbora.Tests.dll`). A first run of the new first test failed on my own use of FluentAssertions'
+`BeInAscendingOrder` with a lambda over a closure (a test bug, fixed), not on the code.
+Still unverified: the bound against a real Postgres (`since` is a `timestamptz` comparison; EF InMemory was used).
