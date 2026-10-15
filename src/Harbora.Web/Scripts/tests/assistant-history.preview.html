@@ -1,0 +1,139 @@
+<!doctype html>
+<!--
+  A browser harness for the pane's conversation list (AssistantHistory.vue), for looking at it and using it
+  without the server: `npx vite --port 5184` in src/Harbora.Web, then open
+  /Scripts/tests/assistant-history.preview.html. Same idea as assistant-panel.preview.html — fetch is faked,
+  here with a *stateful* list that keeps its own rows, so searching, "show more" and deleting really change
+  what the next request answers. What this shows is the island's real code against the contract
+  (AgentViews.cs), not the server.
+
+  The drawer opens by itself with the list showing (the first conversation is the "open" one).
+  Query string:
+    ?lang=en            English / LTR instead of Persian / RTL
+    ?dark               dark theme
+    ?count=75           how many conversations there are (default 75: three pages)
+    ?scenario=slow      deleting takes 3 s (to see the spinner)
+    ?scenario=busy      the 4th conversation answers DELETE with 409 busy
+    ?scenario=gone      the 5th conversation answers DELETE with 404 (already deleted elsewhere)
+    ?scenario=flaky     the first DELETE of anything fails with 502; the second works
+    ?scenario=kept      "delete all" keeps one (the first, the open one) as still running (skipped: 1)
+    ?scenario=loadfail  the first list request fails with 502
+    ?scenario=morefail  the second page fails once
+-->
+<html lang="fa" dir="rtl" class="h-full">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Conversation list preview</title></head>
+<body class="h-full bg-canvas text-ink antialiased">
+<div class="flex h-full">
+  <div class="flex-1 flex flex-col min-w-0">
+    <div class="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+      <main class="min-w-0 flex-1 p-4 md:p-6">
+        <h1 class="text-2xl font-bold tracking-tight text-ink">shop</h1>
+        <p class="mt-2 text-sm text-ink-muted">Page content. The drawer overlays it.</p>
+        <button type="button" data-assistant-toggle aria-controls="assistant-panel" aria-expanded="false" class="btn-secondary mt-4">assistant</button>
+      </main>
+      <aside id="assistant-panel" class="assistant-drawer" aria-hidden="true" data-csrf="preview-token" data-lang="fa" data-assistant-context="{}">
+        <div data-assistant-host class="flex h-full min-h-0 flex-col">
+          <div class="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-sm text-ink-faint">
+            <p data-assistant-loading>Loading…</p>
+            <p data-assistant-load-failed hidden class="text-danger">Failed.</p>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+</div>
+<script type="module">
+import '../app.css';
+import { createApp } from 'vue';
+import { initAssistantDrawer } from '../assistantDrawer.js';
+
+const params = new URLSearchParams(location.search);
+const lang = params.get('lang') === 'en' ? 'en' : 'fa';
+const scenario = params.get('scenario') ?? '';
+const count = Number(params.get('count') ?? 75);
+document.documentElement.lang = lang;
+document.documentElement.dir = lang === 'fa' ? 'rtl' : 'ltr';
+document.documentElement.classList.toggle('dark', params.has('dark'));
+document.getElementById('assistant-panel').dataset.lang = lang;
+const fa = lang === 'fa';
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
+const id = (n) => `0199d0c4-6a1e-7000-8000-${String(n).padStart(12, '0')}`;
+
+// Rows, newest first: a few today, some yesterday, a week of them, then older — relative to *now*, so the
+// groups look right whenever the harness is opened.
+const titlesFa = ['دیتابیس برای shop', 'چرا استقرار ناموفق بود؟', 'متغیرهای محیطی را بررسی کن', 'ساخت Postgres 16', 'دامنهٔ جدید برای وبلاگ', 'حجم دیسک پر شده', 'ریدیس را اضافه کن'];
+const titlesEn = ['A database for shop', 'Why did the deploy fail?', 'Check the environment variables', 'Create Postgres 16', 'A new domain for the blog', 'The disk is full', 'Add Redis'];
+const DAY = 86_400_000;
+const offsets = [5, 40, 180, 400, 26 * 60, 30 * 60, 44 * 60, 2 * 1440 + 30, 3 * 1440, 4 * 1440 + 200, 5 * 1440, 6 * 1440, 7 * 1440 - 10, 9 * 1440];
+let conversations = Array.from({ length: count }, (_, i) => {
+  const minutes = i < offsets.length ? offsets[i] : offsets.at(-1) + (i - offsets.length + 1) * 1440 * 2;
+  const base = (fa ? titlesFa : titlesEn)[i % 7];
+  return { id: id(i + 1), title: i === 9 ? (fa ? 'یک عنوان خیلی خیلی طولانی که باید با سه‌نقطه کوتاه شود و از کادر بیرون نزند' : 'A very very long title that has to be cut with an ellipsis and must not push the row sideways') : `${base}${i >= 7 ? ' ' + (Math.floor(i / 7) + 1) : ''}`, updatedAt: new Date(Date.now() - minutes * 60_000).toISOString() };
+});
+window.__fake = { get conversations() { return conversations; } };
+
+const OPEN_ID = id(1);
+let deletes = 0;
+let pages = 0;
+let listCalls = 0;
+
+window.fetch = async (url, init = {}) => {
+  const u = new URL(String(url), location.origin);
+  const path = u.pathname;
+  const method = init.method ?? 'GET';
+  console.log('[preview fetch]', method, path + u.search);
+  await sleep(250);
+
+  if (path === '/assistant/status') return json({ available: true, model: 'preview-model', remainingToday: 100 });
+
+  if (path === '/assistant/conversations' && method === 'GET') {
+    listCalls++;
+    if (scenario === 'loadfail' && listCalls === 1) return new Response('', { status: 502 });
+    const q = (u.searchParams.get('q') ?? '').toLowerCase();
+    const skip = Number(u.searchParams.get('skip') ?? 0);
+    if (scenario === 'morefail' && skip > 0 && pages++ === 0) return new Response('', { status: 502 });
+    const matches = conversations.filter((c) => !q || c.title.toLowerCase().includes(q));
+    return json(matches.slice(skip, skip + 30));
+  }
+
+  if (path === '/assistant/conversations' && method === 'DELETE') {
+    if (scenario === 'slow') await sleep(3000);
+    const keep = scenario === 'kept' ? conversations.filter((c) => c.id === OPEN_ID) : [];
+    const removed = conversations.length - keep.length;
+    conversations = keep;
+    return json({ deleted: removed, skipped: keep.length });
+  }
+
+  const one = path.match(/^\/assistant\/conversations\/([^/]+)$/);
+  if (one && method === 'DELETE') {
+    if (scenario === 'slow') await sleep(3000);
+    const target = conversations.findIndex((c) => c.id === one[1]);
+    if (scenario === 'busy' && one[1] === id(4)) return json({ error: 'busy', messageEn: 'It is still answering or running something. Try again when it has finished.', messageFa: 'هنوز در حال پاسخ یا اجراست. وقتی تمام شد دوباره امتحان کنید.' }, 409);
+    if (scenario === 'gone' && one[1] === id(5)) { if (target >= 0) conversations.splice(target, 1); return json({ error: 'not_found', messageEn: 'There is no such conversation.', messageFa: 'چنین گفت‌وگویی وجود ندارد.' }, 404); }
+    if (scenario === 'flaky' && deletes++ === 0) return new Response('', { status: 502 });
+    if (target < 0) return json({ error: 'not_found', messageEn: 'There is no such conversation.', messageFa: 'چنین گفت‌وگویی وجود ندارد.' }, 404);
+    conversations.splice(target, 1);
+    return new Response(null, { status: 204 });
+  }
+  if (one && method === 'GET') {
+    const found = conversations.find((c) => c.id === one[1]);
+    if (!found) return json({ error: 'not_found', messageEn: 'There is no such conversation.', messageFa: 'چنین گفت‌وگویی وجود ندارد.' }, 404);
+    return json({ id: found.id, title: found.title, messages: [{ id: 'm1', role: 'user', text: found.title, toolName: null, createdAt: found.updatedAt }], pendingPlan: null, inProgress: false });
+  }
+  return json({}, 404);
+};
+
+if (!params.has('keep')) { localStorage.clear(); }
+localStorage.setItem('harbora-assistant-open', '1');
+localStorage.setItem('harbora-assistant-conversation', OPEN_ID);
+
+const panel = document.getElementById('assistant-panel');
+initAssistantDrawer(panel, (host, { close, focus }) =>
+  import('../islands/AssistantPanel.vue').then(({ default: AssistantPanel }) => {
+    createApp(AssistantPanel, { csrf: panel.dataset.csrf, lang, context: panel.dataset.assistantContext, autofocus: focus, onClose: close }).mount(host);
+  }));
+</script>
+</body>
+</html>

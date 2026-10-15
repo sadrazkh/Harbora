@@ -886,3 +886,15 @@ html.dark .auth-card { box-shadow: 0 20px 60px rgb(0 0 0 / 0.4); }
 @media (prefers-reduced-motion: reduce) {
   .catalog-disclosure summary i:last-child { transition: none; }
 }
+
+/* ---- Round seven P1: the assistant pane's conversation list (AssistantHistory.vue) ----
+   The trash button at the end of a row is faint until the row is hovered or has the focus, and always
+   plain on a screen that cannot hover (a phone), where there is no hover to find it by. Outside @layer on
+   purpose: these have to beat the app-wide `button:disabled` opacity, which is in the base layer. */
+.assistant-row-trash { opacity: .5; }
+.assistant-row:hover .assistant-row-trash,
+.assistant-row:focus-within .assistant-row-trash,
+.assistant-row-trash:focus-visible { opacity: 1; }
+@media (hover: none) { .assistant-row-trash { opacity: 1; } }
+/* While another row's delete is out, the others cannot be asked about. */
+.assistant-row .assistant-row-trash:disabled { opacity: .3; }
