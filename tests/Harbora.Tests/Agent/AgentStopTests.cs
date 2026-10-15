@@ -100,7 +100,7 @@ public class AgentStopTests
     }
 
     [Fact]
-    public async Task Stop_after_nothing_but_whitespace_closes_the_bubble_and_stores_no_message()
+    public async Task Stop_after_nothing_but_whitespace_stores_nothing_and_sends_no_message_with_an_unstored_id()
     {
         using var h = new AgentHarness();
         h.Chat.ThenStreamed(new AgentChatResponse(true, new AgentChatMessage(AgentRole.Assistant, "never"), "m", null, "stop", null, null),
@@ -116,8 +116,8 @@ public class AgentStopTests
 
         await h.ServiceOver(turnDeadline: Guard).SendAsync(h.Actor, null, new AgentSendMessageRequest("hm?", null), false, Sink, default);
 
-        events.Names().Should().Equal("started", "delta", "delta", "message", "stopped", "done");
-        events.Single<AgentMessageView>("message").Text.Should().BeNull("the bubble is closed with nothing in it");
+        events.Names().Should().Equal(["started", "delta", "delta", "stopped", "done"],
+            "a message would carry an id nothing stores; `stopped` closes the bubble");
         using var other = h.NewContext();
         (await other.AgentMessages.CountAsync(m => m.Role == AgentMessageRole.Assistant))
             .Should().Be(0, "whitespace was never anything to read, so no row is written for it");
@@ -227,7 +227,7 @@ public class AgentStopTests
     }
 
     [Fact]
-    public async Task Stop_during_an_auto_approved_plan_lets_the_plan_finish_and_its_result_is_saved()
+    public async Task Stop_during_an_auto_approved_plan_is_false_and_the_plan_finishes_with_its_result_saved()
     {
         var tag = new FakeTool("tag_app", AgentToolKind.SafeWrite);
         using var h = new AgentHarness([tag]);
@@ -237,7 +237,8 @@ public class AgentStopTests
         AgentStopView? stop = null;
         tag.OnExecuteAsync = async (_, _) =>
         {
-            // Pressed while the step runs; by the time it returns the stop has long landed on the turn.
+            // Pressed while the step runs: the turn released itself before its plan was stored and claimed,
+            // so there is nothing left that a Stop could stop.
             stop = await StopFromAnotherRequest(h, conversationId);
             await Task.Delay(100);
             return new AgentToolResult(true, """{"tagged":"shop"}""", "Tagged shop", "shop برچسب خورد");
@@ -252,8 +253,8 @@ public class AgentStopTests
                 return Task.CompletedTask;
             }, default);
 
-        stop!.Stopped.Should().BeTrue();
-        events.Names().Should().Equal("started", "message", "executed", "stopped", "done");
+        stop!.Stopped.Should().BeFalse("nothing stopped: the plan was already running, and runs to its end");
+        events.Names().Should().Equal(["started", "message", "executed", "done"], "no \"You stopped this answer\" under a plan that ran");
         var result = events.Single<AgentPlanResultView>("executed");
         result.Status.Should().Be("executed");
         result.Steps.Single().State.Should().Be("done");
@@ -267,5 +268,157 @@ public class AgentStopTests
             .Should().Be(1, "the conversation is told what the plan did");
         (await other.AgentConversations.SingleAsync()).TurnStartedAt.Should().BeNull();
         h.Audit.Entries.Should().ContainSingle(e => e.Action == AgentPlanService.StepExecutedAction);
+    }
+
+    // ---- fixes after review --------------------------------------------------------------------
+
+    [Fact]
+    public async Task Stop_pressed_over_a_complete_answer_is_false_and_nothing_says_stopped()
+    {
+        using var h = new AgentHarness();
+        h.Chat.ThenStreamedText("All ", "of it.");
+        AgentStopView? stop = null;
+        var events = new List<AgentStreamEvent>();
+
+        async Task Sink(AgentStreamEvent e, CancellationToken _)
+        {
+            events.Add(e);
+            // The answer is complete and shown: the person presses Stop before `done` arrives.
+            if (e.Name == AgentStreamEvents.Message) stop = await StopFromAnotherRequest(h, ConversationOf(events));
+        }
+
+        await h.ServiceOver(turnDeadline: Guard).SendAsync(h.Actor, null, new AgentSendMessageRequest("everything", null), false, Sink, default);
+
+        stop!.Stopped.Should().BeFalse("the model had already given its last word; there was nothing to stop");
+        events.Names().Should().Equal("started", "delta", "delta", "message", "done");
+        events.Single<AgentMessageView>("message").Text.Should().Be("All of it.");
+    }
+
+    [Fact]
+    public async Task A_stop_the_model_call_did_not_notice_is_still_honoured_and_keeps_what_was_shown()
+    {
+        using var h = new AgentHarness();
+        Guid conversationId = default;
+        AgentStopView? stop = null;
+        // A client that writes its whole answer and returns normally although the Stop landed meanwhile.
+        h.Chat.ThenStreamed(new AgentChatResponse(true, new AgentChatMessage(AgentRole.Assistant, "Half and the rest."), "m",
+                new AgentChatUsage(1, 1), "stop", null, null),
+            ["Half ", "and the rest."], after: async _ => stop = await StopFromAnotherRequest(h, conversationId));
+        var events = new List<AgentStreamEvent>();
+
+        await h.ServiceOver(turnDeadline: Guard).SendAsync(h.Actor, null, new AgentSendMessageRequest("go", null), false,
+            (e, _) =>
+            {
+                events.Add(e);
+                if (e.Name == AgentStreamEvents.Started) conversationId = ((AgentStartedData)e.Data).ConversationId;
+                return Task.CompletedTask;
+            }, default);
+
+        stop!.Stopped.Should().BeTrue();
+        events.Names().Should().Equal(["started", "delta", "delta", "message", "stopped", "done"],
+            "a Stop that answered true is always followed by `stopped`");
+        events.Single<AgentMessageView>("message").Text.Should().Be("Half and the rest.", "what was shown is kept");
+        using var other = h.NewContext();
+        (await other.AgentMessages.CountAsync(m => m.Role == AgentMessageRole.Assistant && m.Text == "Half and the rest.")).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Stop_after_steps_were_proposed_records_them_as_expired_so_the_next_turn_hears_they_did_not_run()
+    {
+        var create = new FakeTool("create_database", AgentToolKind.SafeWrite);
+        using var h = new AgentHarness([create]);
+        h.Chat.ThenCall("create_database", """{"name":"shop-db"}""")
+            .ThenStreamed(new AgentChatResponse(true, new AgentChatMessage(AgentRole.Assistant, "never"), "m", null, "stop", null, null),
+                ["I have prepared "], after: ct => Task.Delay(Timeout.Infinite, ct));
+        var events = new List<AgentStreamEvent>();
+
+        async Task Sink(AgentStreamEvent e, CancellationToken _)
+        {
+            events.Add(e);
+            if (e.Name == AgentStreamEvents.Delta) await StopFromAnotherRequest(h, ConversationOf(events));
+        }
+
+        await h.ServiceOver(turnDeadline: Guard).SendAsync(h.Actor, null, new AgentSendMessageRequest("make a database", null), false, Sink, default);
+
+        events.Names().Should().Equal("started", "delta", "message", "stopped", "done");
+        events.Names().Should().NotContain("plan", "no card is offered for an answer the person stopped");
+        var id = ConversationOf(events);
+        using (var other = h.NewContext())
+        {
+            var plan = await other.AgentPlans.SingleAsync();
+            plan.Status.Should().Be(AgentPlanStatus.Expired, "the steps the model was told were \"added\" are recorded as not run");
+            create.Executions.Should().Be(0);
+
+            var view = await h.ServiceOver(other).GetAsync(h.Actor, id, persian: false, default);
+            view!.PendingPlan.Should().BeNull();
+            view.Plans.Should().ContainSingle().Which.Plan.Status.Should().Be("expired");
+        }
+
+        h.Chat.ThenText("Understood.");
+        await h.SendAsync("so, what now?", id);
+        var request = h.Chat.Requests.Last().Messages;
+        request.Should().Contain(m => m.Role == AgentRole.Tool && m.Content!.Contains("\"state\":\"expired\"") && m.Content.Contains("nothing ran"),
+            "the model hears that the step it proposed did not run, rather than that the user will approve it");
+        ShouldBeAValidRequest(request);
+    }
+
+    [Fact]
+    public async Task A_turn_out_of_time_after_proposing_steps_also_records_them_as_expired()
+    {
+        var create = new FakeTool("create_database", AgentToolKind.SafeWrite);
+        using var h = new AgentHarness([create]);
+        h.Chat.ThenCall("create_database", """{"name":"shop-db"}""")
+            .ThenText("never", before: ct => Task.Delay(Timeout.Infinite, ct));
+
+        var (outcome, events) = await SendWith(h.ServiceOver(turnDeadline: TimeSpan.FromSeconds(2)), h, "make a database");
+
+        outcome.Status.Should().Be(AgentSendStatus.Streamed);
+        events.Names().Should().Equal("started", "error", "done");
+        using var other = h.NewContext();
+        (await other.AgentPlans.SingleAsync()).Status.Should().Be(AgentPlanStatus.Expired);
+        (await other.AgentMessages.CountAsync(m => m.Role == AgentMessageRole.Tool && m.PlanId != null && m.Text!.Contains("\"state\":\"expired\"")))
+            .Should().Be(1);
+        create.Executions.Should().Be(0);
+    }
+
+    private static async Task<(AgentSendOutcome Outcome, List<AgentStreamEvent> Events)> SendWith(
+        AgentConversationService service, AgentHarness h, string text)
+    {
+        var events = new List<AgentStreamEvent>();
+        var outcome = await service.SendAsync(h.Actor, null, new AgentSendMessageRequest(text, null), false,
+            (e, _) => { events.Add(e); return Task.CompletedTask; }, default);
+        return (outcome, events);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_stream_the_stop_cut_off_is_never_reported_as_a_provider_failure(bool clientThrows)
+    {
+        // The real client turns a cut connection into a "dropped" failure; a client may also throw the
+        // IOException itself. Either way, after a Stop the person is told it stopped — not that the provider failed.
+        using var h = new AgentHarness();
+        Guid conversationId = default;
+        AgentStopView? stop = null;
+        var dropped = AgentChatResponse.Failed("Dropped: the provider closed the stream.", "قطع شد: ارائه‌دهنده جریان را بست.");
+        h.Chat.ThenStreamed(dropped, ["Half "], after: async _ =>
+        {
+            stop = await StopFromAnotherRequest(h, conversationId);
+            if (clientThrows) throw new IOException("The response ended prematurely.");
+        });
+        var events = new List<AgentStreamEvent>();
+
+        await h.ServiceOver(turnDeadline: Guard).SendAsync(h.Actor, null, new AgentSendMessageRequest("go", null), false,
+            (e, _) =>
+            {
+                events.Add(e);
+                if (e.Name == AgentStreamEvents.Started) conversationId = ((AgentStartedData)e.Data).ConversationId;
+                return Task.CompletedTask;
+            }, default);
+
+        stop!.Stopped.Should().BeTrue();
+        events.Names().Should().Equal("started", "delta", "message", "stopped", "done");
+        events.Names().Should().NotContain("error");
+        events.Single<AgentMessageView>("message").Text.Should().Be("Half ");
     }
 }

@@ -28,6 +28,7 @@ public sealed class AgentConversationRetentionTests : IDisposable
     private readonly string _database = "agent-retention-" + Guid.NewGuid();
     private readonly MutableClock _clock = new(Now);
     private readonly ListLogger<AgentConversationRetentionSweeper> _log = new();
+    private readonly RecordingAuditLogger _audit = new();
     private readonly ServiceProvider _provider;
 
     public AgentConversationRetentionTests()
@@ -37,6 +38,7 @@ public sealed class AgentConversationRetentionTests : IDisposable
             .AddSingleton<IWorkspaceScope>(new FixedWorkspaceScope(Guid.CreateVersion7()))
             .AddDbContext<HarboraDbContext>(o => o.UseInMemoryDatabase(_database))
             .AddScoped<AgentSettingsService>()
+            .AddSingleton<IAuditLogger>(_audit)
             .BuildServiceProvider();
     }
 
@@ -64,7 +66,8 @@ public sealed class AgentConversationRetentionTests : IDisposable
         db.Settings.Add(new Setting { Key = AgentSettingKeys.ConversationRetentionDays, Value = value }));
 
     private Guid Conversation(
-        Guid workspaceId, TimeSpan unusedFor, string title = "a chat", DateTimeOffset? turnStartedAt = null, AgentPlanStatus? plan = null)
+        Guid workspaceId, TimeSpan unusedFor, string title = "a chat", DateTimeOffset? turnStartedAt = null, AgentPlanStatus? plan = null,
+        DateTimeOffset? claimedAt = null)
     {
         var conversation = new AgentConversation
         {
@@ -82,7 +85,7 @@ public sealed class AgentConversationRetentionTests : IDisposable
                 db.AgentPlans.Add(new AgentPlan
                 {
                     WorkspaceId = workspaceId, UserId = conversation.UserId, ConversationId = conversation.Id, Status = status,
-                    StepsJson = "[]", ExpiresAt = Now
+                    StepsJson = "[]", ExpiresAt = Now, DecidedAt = claimedAt ?? Now - TimeSpan.FromMinutes(5)
                 });
         });
         return conversation.Id;
@@ -106,13 +109,14 @@ public sealed class AgentConversationRetentionTests : IDisposable
         var answering = Conversation(shop, TimeSpan.FromDays(60), turnStartedAt: Now - TimeSpan.FromSeconds(10));
         var executing = Conversation(blog, TimeSpan.FromDays(60), plan: AgentPlanStatus.Executing);
         var deadMark = Conversation(shop, TimeSpan.FromDays(60), turnStartedAt: Now - TimeSpan.FromHours(1));
+        var brokenRun = Conversation(blog, TimeSpan.FromDays(60), plan: AgentPlanStatus.Executing, claimedAt: Now - TimeSpan.FromHours(2));
 
         Read(db => db.AgentConversations.Count()).Should().Be(0, "the filter this context carries hides every row");
 
         var result = await Sweeper().RunOnceAsync(default);
 
-        result.Should().Be(new AgentRetentionSweepResult(Days: 30, Deleted: 4, Kept: 2));
-        foreach (var gone in new[] { old, oldElsewhere, oldReserved, deadMark }) Exists(gone).Should().BeFalse();
+        result.Should().Be(new AgentRetentionSweepResult(Days: 30, Deleted: 5, Kept: 2));
+        foreach (var gone in new[] { old, oldElsewhere, oldReserved, deadMark, brokenRun }) Exists(gone).Should().BeFalse();
         foreach (var kept in new[] { recent, answering, executing }) Exists(kept).Should().BeTrue();
         Read(db => db.AgentMessages.IgnoreQueryFilters().Count()).Should().Be(3, "the messages went with their conversations");
         Read(db => db.AgentPlans.IgnoreQueryFilters().Select(p => p.ConversationId).ToList()).Should().Equal(executing);
@@ -120,8 +124,54 @@ public sealed class AgentConversationRetentionTests : IDisposable
         var line = _log.Entries.Should().ContainSingle().Subject;
         line.Level.Should().Be(LogLevel.Information);
         line.Text.Should().StartWith(AgentConversationRetentionSweeper.LogPrefix)
-            .And.Contain("deleted 4 conversation(s) not used for 30 day(s)")
+            .And.Contain("deleted 5 conversation(s) not used for 30 day(s)")
             .And.Contain("kept 2");
+        _audit.Entries.Should().ContainSingle().Which.Should().Match<RecordingAuditLogger.Entry>(e =>
+            e.Action == AgentConversationRetentionSweeper.AuditAction && e.WorkspaceId == null
+            && e.MetadataJson == "{\"deleted\":5,\"kept\":2,\"days\":30,\"interrupted\":false}");
+    }
+
+    [Fact]
+    public async Task A_sweep_stopped_part_way_still_logs_and_audits_what_it_had_deleted()
+    {
+        SetRetention("30");
+        // One more than a batch: the shutdown lands after the first batch is saved.
+        Seed(db =>
+        {
+            for (var i = 0; i <= AgentConversationDeletion.BatchSize; i++)
+                db.AgentConversations.Add(new AgentConversation
+                {
+                    WorkspaceId = Guid.CreateVersion7(), UserId = Guid.CreateVersion7(), Title = $"c{i}", UpdatedAt = Now - TimeSpan.FromDays(90)
+                });
+        });
+        using var stopping = new CancellationTokenSource();
+        using var provider = new ServiceCollection()
+            .AddSingleton<IWorkspaceScope>(new FixedWorkspaceScope(Guid.CreateVersion7()))
+            .AddDbContext<HarboraDbContext>(o => o.UseInMemoryDatabase(_database).AddInterceptors(new CancelAfterFirstDelete(stopping)))
+            .AddScoped<AgentSettingsService>()
+            .AddSingleton<IAuditLogger>(_audit)
+            .BuildServiceProvider();
+        var sweeper = new AgentConversationRetentionSweeper(provider.GetRequiredService<IServiceScopeFactory>(), _clock, _log,
+            TimeSpan.Zero, TimeSpan.FromDays(1));
+
+        (await sweeper.RunOnceAsync(stopping.Token)).Should().BeNull("the pass did not finish");
+
+        Read(db => db.AgentConversations.IgnoreQueryFilters().Count()).Should().Be(1, "the first batch is deleted and stays deleted");
+        _log.Entries.Should().ContainSingle().Which.Text.Should().StartWith(AgentConversationRetentionSweeper.LogPrefix)
+            .And.Contain($"after deleting {AgentConversationDeletion.BatchSize} conversation(s)");
+        _audit.Entries.Should().ContainSingle().Which.MetadataJson.Should()
+            .Be($"{{\"deleted\":{AgentConversationDeletion.BatchSize},\"kept\":null,\"days\":30,\"interrupted\":true}}");
+    }
+
+    /// <summary>Lets the first save that deletes conversations through, then starts the host's shutdown.</summary>
+    private sealed class CancelAfterFirstDelete(CancellationTokenSource stopping) : Microsoft.EntityFrameworkCore.Diagnostics.SaveChangesInterceptor
+    {
+        public override ValueTask<int> SavedChangesAsync(
+            Microsoft.EntityFrameworkCore.Diagnostics.SaveChangesCompletedEventData eventData, int result, CancellationToken cancellationToken = default)
+        {
+            if (!stopping.IsCancellationRequested) stopping.Cancel();
+            return base.SavedChangesAsync(eventData, result, cancellationToken);
+        }
     }
 
     [Theory]
@@ -149,6 +199,7 @@ public sealed class AgentConversationRetentionTests : IDisposable
 
         (await Sweeper().RunOnceAsync(default)).Should().Be(new AgentRetentionSweepResult(7, 0, 0));
         _log.Entries.Should().ContainSingle().Which.Text.Should().Contain("deleted 0 conversation(s)");
+        _audit.Entries.Should().BeEmpty("a pass that deleted nothing has nothing to put on the record");
     }
 
     [Fact]

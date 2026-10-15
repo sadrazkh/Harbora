@@ -21,7 +21,8 @@ public class AgentConversationDeletionTests
     /// <summary>A conversation with two messages and, optionally, a plan in the given state.</summary>
     private static async Task<AgentConversation> SeedAsync(
         AgentHarness h, string title = "deploy the shop", Guid? workspaceId = null, Guid? userId = null,
-        DateTimeOffset? turnStartedAt = null, AgentPlanStatus? plan = null, DateTimeOffset? updatedAt = null)
+        DateTimeOffset? turnStartedAt = null, AgentPlanStatus? plan = null, DateTimeOffset? updatedAt = null,
+        DateTimeOffset? decidedAt = null)
     {
         var conversation = new AgentConversation
         {
@@ -44,7 +45,7 @@ public class AgentConversationDeletionTests
             h.Db.AgentPlans.Add(new AgentPlan
             {
                 WorkspaceId = conversation.WorkspaceId, UserId = conversation.UserId, ConversationId = conversation.Id,
-                Status = status, StepsJson = "[]", ExpiresAt = Start + AgentPlan.Lifetime
+                Status = status, StepsJson = "[]", ExpiresAt = Start + AgentPlan.Lifetime, DecidedAt = decidedAt ?? Start
             });
         await h.Db.SaveChangesAsync();
         return conversation;
@@ -144,6 +145,22 @@ public class AgentConversationDeletionTests
 
         (await h.Service.DeleteAsync(h.Actor, conversation.Id, default)).Status.Should().Be(AgentDeleteStatus.Deleted);
         (await LeftOfAsync(h, conversation.Id)).Should().Be((0, 0, 0));
+    }
+
+    [Fact]
+    public async Task A_plan_executing_under_a_claim_older_than_30_minutes_no_longer_keeps_its_conversation()
+    {
+        using var h = new AgentHarness();
+        var broken = await SeedAsync(h, plan: AgentPlanStatus.Executing,
+            decidedAt: Start - AgentConversationDeletion.ExecutingPlanAbandonedAfter - TimeSpan.FromSeconds(1));
+        var running = await SeedAsync(h, plan: AgentPlanStatus.Executing,
+            decidedAt: Start - AgentConversationDeletion.ExecutingPlanAbandonedAfter + TimeSpan.FromMinutes(1));
+
+        (await h.Service.DeleteAsync(h.Actor, broken.Id, default)).Status
+            .Should().Be(AgentDeleteStatus.Deleted, "a run that broke while the process lived on must not block a delete for ever");
+        (await LeftOfAsync(h, broken.Id)).Should().Be((0, 0, 0));
+        (await h.Service.DeleteAsync(h.Actor, running.Id, default)).Status.Should().Be(AgentDeleteStatus.Busy);
+        (await LeftOfAsync(h, running.Id)).Should().Be((1, 2, 1));
     }
 
     [Fact]
@@ -311,6 +328,46 @@ public class AgentConversationDeletionTests
         (await h.Service.DeleteAllAsync(h.Actor, default)).Should().Be(new AgentDeleteAllView(0, 0));
     }
 
+    [Fact]
+    public async Task Delete_all_whose_later_batch_fails_still_audits_and_logs_what_the_earlier_batches_deleted()
+    {
+        using var h = new AgentHarness();
+        // One more than a batch, so there are two batches; no messages, to keep the seed small.
+        for (var i = 0; i <= AgentConversationDeletion.BatchSize; i++)
+            h.Db.AgentConversations.Add(new AgentConversation { WorkspaceId = h.WorkspaceId, UserId = h.UserId, Title = $"c{i}", UpdatedAt = Start });
+        await h.Db.SaveChangesAsync();
+        var logger = new ListLogger<AgentConversationService>();
+        using var failing = new HarboraDbContext(
+            new DbContextOptionsBuilder<HarboraDbContext>().UseInMemoryDatabase(h.DatabaseName)
+                .AddInterceptors(new FailTheSecondDelete()).Options,
+            new Harbora.Application.Abstractions.FixedWorkspaceScope(h.WorkspaceId));
+
+        var act = () => h.ServiceOver(failing, logger: logger).DeleteAllAsync(h.Actor, default);
+
+        await act.Should().ThrowAsync<DbUpdateException>("the failure still reaches the request");
+        using var db = h.NewContext();
+        (await db.AgentConversations.CountAsync()).Should().Be(1, "the first batch was deleted and stays deleted");
+        h.Audit.Entries.Should().ContainSingle(e => e.Action == AgentConversationService.ConversationsDeletedAction)
+            .Which.MetadataJson.Should().Be($$"""{"deleted":{{AgentConversationDeletion.BatchSize}},"interrupted":true}""");
+        logger.Entries.Should().ContainSingle(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Error)
+            .Which.Text.Should().Contain($"{AgentConversationDeletion.BatchSize} had been deleted");
+    }
+
+    /// <summary>Lets the first save that deletes conversations through and refuses the second.</summary>
+    private sealed class FailTheSecondDelete : SaveChangesInterceptor
+    {
+        private int _deletes;
+
+        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        {
+            if (eventData.Context!.ChangeTracker.Entries<AgentConversation>().Any(e => e.State == EntityState.Deleted)
+                && ++_deletes == 2)
+                throw new DbUpdateException("The database refused the second batch.");
+            return base.SavingChangesAsync(eventData, result, cancellationToken);
+        }
+    }
+
     // ---- the list ------------------------------------------------------------------------------
 
     [Fact]
@@ -404,10 +461,11 @@ public class AgentConversationDeletionTests
 
         var locks = AgentConversationDeletion.LockPlans(db, [Guid.NewGuid()]).ToQueryString();
         var idle = db.AgentConversations.IgnoreQueryFilters()
-            .Where(AgentConversationDeletion.Idle(db, DateTimeOffset.UtcNow)).ToQueryString();
+            .Where(AgentConversationDeletion.Idle(db, AgentBusyCut.At(DateTimeOffset.UtcNow, TimeSpan.FromMinutes(3)))).ToQueryString();
 
         locks.Should().Contain("FOR UPDATE").And.Contain("ANY(").And.Contain("ORDER BY");
-        idle.Should().Contain("EXISTS").And.Contain("\"AgentPlans\"").And.Contain("TurnStartedAt");
+        idle.Should().Contain("EXISTS").And.Contain("\"AgentPlans\"").And.Contain("TurnStartedAt")
+            .And.Contain("COALESCE", "a claim's age is DecidedAt, falling back to UpdatedAt, worked out by the database");
     }
 
     // ---- the registry --------------------------------------------------------------------------
@@ -429,12 +487,13 @@ public class AgentConversationDeletionTests
         // A turn that took over a stale mark replaces the old registration; the old turn's release must not
         // remove the new one.
         var second = registry.Register(conversation, workspace, owner);
-        registry.Release(first);
+        registry.Release(first).Should().BeFalse("nobody asked the old turn to stop");
         registry.Stop(conversation, workspace, owner).Should().BeTrue();
         second.StopRequested.Should().BeTrue();
         first.StopRequested.Should().BeFalse();
 
-        registry.Release(second);
+        registry.Release(second).Should().BeTrue("the release reports the Stop that reached the turn first, which the turn must honour");
+        registry.Release(second).Should().BeTrue("and keeps reporting it: a release is idempotent");
         registry.Stop(conversation, workspace, owner).Should().BeFalse("a turn whose work is over has nothing to stop");
         registry.Stop(Guid.NewGuid(), workspace, owner).Should().BeFalse();
     }

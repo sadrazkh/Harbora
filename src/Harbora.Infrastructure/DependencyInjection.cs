@@ -443,6 +443,9 @@ public static class DependencyInjection
         // owner's conversation retention, a once-a-day timer like the sweepers above it.
         services.AddSingleton<Agent.AgentTurnRegistry>();
         services.AddHostedService<Maintenance.AgentConversationRetentionSweeper>();
+        // A plan a restart cut off is still "executing" in the table; nothing runs it any more (one process),
+        // so it is settled as the panel starts — or its conversation could never be deleted.
+        services.AddHostedService<Agent.AgentPlanStartupReconciler>();
         // The lock-button vault (2026-10-12 owner decision, "secrets as black boxes"): one in-memory store
         // for the whole process — a singleton because it is the store, and a restart forgetting every
         // handle is the safe failure. The same instance answers both the contract and the redaction view.

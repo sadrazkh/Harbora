@@ -79,7 +79,7 @@ public sealed class AgentTurnClaimTests(PostgresLane lane)
         return new AgentConversationService(db, chat, registry,
             new AgentPlanService(db, registry, new NoAudit(), clock, NullLogger<AgentPlanService>.Instance, new NoSecrets()),
             new AgentUsageMeter(db, clock), new AgentWorkspaceSnapshot(db, new AgentResourceResolver(db, access), access),
-            new FeatureGate(db), new Everyone(), clock, NullLogger<AgentConversationService>.Instance, new NoSecrets());
+            new FeatureGate(db), new Everyone(), clock, NullLogger<AgentConversationService>.Instance, new NoSecrets(), new NoAudit());
     }
 
     [PostgresFact]

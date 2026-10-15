@@ -365,8 +365,8 @@ public sealed class AgentHarness : IDisposable
         return new AgentConversationService(
             db, chat ?? Chat, registry, new AgentPlanService(db, registry, Audit, Clock, NullLogger<AgentPlanService>.Instance, Vault),
             new AgentUsageMeter(db, Clock), new AgentWorkspaceSnapshot(db, new AgentResourceResolver(db, access), access),
-            new FeatureGate(db), Capabilities, Clock, logger ?? NullLogger<AgentConversationService>.Instance, Vault, lifetime,
-            Audit, Turns)
+            new FeatureGate(db), Capabilities, Clock, logger ?? NullLogger<AgentConversationService>.Instance, Vault, Audit,
+            lifetime, Turns)
         {
             TurnDeadline = turnDeadline ?? AgentConversationService.DefaultTurnDeadline
         };

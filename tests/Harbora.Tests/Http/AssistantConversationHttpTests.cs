@@ -66,7 +66,7 @@ public class AssistantConversationHttpTests(AssistantPanelFixture fixture) : ICl
                 db.AgentPlans.Add(new AgentPlan
                 {
                     WorkspaceId = fixture.WorkspaceId, UserId = userId, ConversationId = id, Status = status, StepsJson = "[]",
-                    ExpiresAt = DateTimeOffset.UtcNow + AgentPlan.Lifetime
+                    ExpiresAt = DateTimeOffset.UtcNow + AgentPlan.Lifetime, DecidedAt = DateTimeOffset.UtcNow
                 });
         });
         return id;

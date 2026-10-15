@@ -132,7 +132,7 @@ public sealed class AgentSettingsService(HarboraDbContext db)
                 || days > MaxConversationRetentionDays)
                 return Refuse(
                     $"Keep conversations must be a whole number of days from 1 to {MaxConversationRetentionDays} — or blank or 0 to keep them for ever.",
-                    "نگه‌داری گفت‌وگوها باید عددی صحیح از ۱ تا ۳۶۵۰ روز باشد — یا خالی یا ۰ برای نگه‌داشتن برای همیشه.");
+                    $"نگه‌داری گفت‌وگوها باید عددی صحیح از {PersianDigits(1)} تا {PersianDigits(MaxConversationRetentionDays)} روز باشد — یا خالی یا {PersianDigits(0)} برای نگه‌داشتن برای همیشه.");
 
             storedRetention = days.ToString(CultureInfo.InvariantCulture);
         }
@@ -203,6 +203,10 @@ public sealed class AgentSettingsService(HarboraDbContext db)
             }
         });
     }
+
+    /// <summary>A number written in Persian digits (۰-۹), for a Persian sentence built from a constant.</summary>
+    private static string PersianDigits(int value) =>
+        string.Concat(value.ToString(CultureInfo.InvariantCulture).Select(c => (char)('۰' + (c - '0'))));
 
     private static AgentSettingsValidation Refuse(string error, string errorFa) => new(null, error, errorFa);
 

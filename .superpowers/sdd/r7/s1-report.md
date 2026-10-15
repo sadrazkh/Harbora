@@ -342,3 +342,133 @@ new files.
     deleting/stopping region after `CreateAsync`, `SendAsync`'s claim-failure branch and token wiring, the
     InMemory branch of `TryClaimTurnAsync`, the post-loop plan section of `RunTurnAsync` (≈10 lines),
     `FinalizePartialAsync` (one line) and the constructor tail. `GetAsync` and `RunReadAsync` are untouched.
+
+
+## Fix pass (after review: three Important, six minor)
+
+**Step 0 — rebase.** `r7/s1` rebased onto master `25ebfa3` (S2: labels, timings, `ToolSucceeded`/`ToolState`,
+migration `20261015035200_AgentToolDuration`). The only textual conflict was the `using` block of
+`AgentConversationService.cs` (`System.Diagnostics` vs `System.Linq.Expressions` — both kept); git merged S2's
+`GetAsync`, `RunReadAsync`, `ToolAnswer` and the tool-row initializer (`DurationMs`, `ToolSucceeded`) around my
+changes without conflict, and the merged file builds and passes both sides' tests. `git rebase` stamped the
+committer from this machine's global config (a hotmail address), so the three commits were rewritten once more
+with `git -c user.name=… -c user.email=1986.aandrii@gmail.com rebase --force-rebase master`; author and
+committer are now the owner identity on every commit (checked with `git log --format="%an <%ae> %cn <%ce>"`).
+Rebased commits: `63beb0d`, `6459b1d`, `3055d9a`.
+
+**Important 1 — a stop is never reported when nothing stopped.** `AgentTurnRegistry.Release` now returns, under
+the lock, whether a Stop reached the turn first. The turn releases itself at the moment nothing left can be
+stopped, at two points in the model loop (now its own method, `AnswerAsync`):
+- at the model's last word (a reply with no calls), **before** that answer is saved or shown — so a Stop pressed
+  over a complete answer answers `{stopped:false}`;
+- as the loop ends, before the closing error, storing the plan and claiming it — so a Stop during an
+  auto-approved plan answers `{stopped:false}`.
+If a Stop got in first at either point, it is honoured: the turn throws into the Stop branch (what was shown is
+kept, nothing is stored as a live plan). `SendAsync` emits `stopped` exactly when its final `Release` reports a
+Stop, so `stopped:true` ⇔ a `stopped` event. Tests: the auto-approved test now expects `stopped:false` and
+`started, message, executed, done`; new `Stop_pressed_over_a_complete_answer_is_false_and_nothing_says_stopped`
+(`started, delta, delta, message, done`); new `A_stop_the_model_call_did_not_notice_is_still_honoured_…`
+(a client that finishes normally although the Stop landed → `…, message, stopped, done`, the shown text kept).
+
+**Important 2 — no history promising a card that does not exist.** `RunTurnAsync` wraps `AnswerAsync`; when any
+exception leaves a turn whose draft was not stored (`Turn.DraftStored`), `RecordDraftNotRunAsync` stores the steps
+with `CreatePendingAsync` and expires them at once through `SupersedePendingAsync` — the path a card the person
+moved past takes. The conversation then holds the plan's outcome lines (`"state":"expired"`, "Not approved — the
+plan expired and nothing ran.") and the reopened conversation lists the plan as `expired`. Never throws (logs).
+Applied to every way a turn ends with an unstored draft — Stop, deadline, shutdown, and an unexpected error —
+not only the three cut-short ones, because the lie in the history is the same. Tests:
+`Stop_after_steps_were_proposed_records_them_as_expired_so_the_next_turn_hears_they_did_not_run` (no `plan` event;
+plan `Expired`; `GetAsync` → `PendingPlan` null and `Plans` = one `expired`; the next turn's real request contains
+the tool line with `"state":"expired"` and "nothing ran", and is a valid request) and
+`A_turn_out_of_time_after_proposing_steps_also_records_them_as_expired`.
+
+**Important 3 — an executing plan never blocks deleting for ever.**
+- (a) `AgentPlanStartupReconciler` (new, `IHostedService` shaped like `JobReconciler`, registered beside the agent
+  services) runs `AgentPlanService.FailInterruptedAsync` at startup: every plan still `Executing` is settled,
+  all reads `IgnoreQueryFilters()`. Per step, what was recorded as it happened is kept: results already in the
+  plan, else the step's `assistant.step_executed` audit entry (matched with `EndsWith`, so `support.`/`token.`
+  prefixed entries count) — a successful entry is `done` ("Done before the panel restarted."). The first step
+  without one is `failed` and the rest `skipped`, both with «پنل هنگام اجرای این برنامه دوباره راه‌اندازی شد — پیش
+  از تلاش دوباره، منبع را بررسی کنید.» / "The panel restarted while this plan was running — check the resource
+  before trying again." (constants `PanelRestartedEn/Fa`). The plan becomes `Failed` — **one deviation, said
+  plainly:** if every step has a successful entry it becomes `Executed`, the rule `FinishBrokenRunAsync` already
+  keeps ("only the record failed"). `ExecutedAt` is set so the result card shows the error. The conversation gets
+  the usual outcome lines, so the next turn knows. A plan that cannot be settled is logged and left for the next
+  start; startup is never blocked. Tests: `AgentPlanStartupReconcilerTests` (6) — busy before, settled
+  `done/failed/skipped` with the exact bilingual text, outcome lines in the conversation, then deletable; all
+  steps done (one entry `support.`-prefixed) → `Executed`; a step that failed before the restart and a plan with
+  no entries; non-executing plans untouched and no log line; an unreachable database logged, not thrown; the
+  container builds it and registers it once. All over a context whose filter hides every row.
+- (b) `AgentBusyCut` (new) carries both cuts: the turn-mark one and `ClaimBefore = now − 30 min`
+  (`AgentConversationDeletion.ExecutingPlanAbandonedAfter`). A plan `Executing` whose claim
+  (`DecidedAt ?? UpdatedAt`) is at or before it no longer counts as busy — in delete, delete-all and retention
+  alike (the one `Idle` predicate, translated as `COALESCE(...)` in SQL — asserted on the Npgsql SQL). Tests:
+  `A_plan_executing_under_a_claim_older_than_30_minutes_no_longer_keeps_its_conversation` (and 29 minutes still
+  busy); the retention sweep now also deletes an old conversation with a plan claimed two hours ago. Seeded plans
+  in the existing tests, the HTTP tests and the Postgres lane now set `DecidedAt` explicitly, so none depends on
+  the machine's clock being later than the fake one.
+
+**Minors.**
+1. The 409 reason is read **before** the delete (`BusyReasonAsync`: not found / live turn / running plan, with the
+   same cut); a busy conversation is refused without a delete attempt. If it was idle when read and the delete
+   still found it busy, the same read is made again and names what started; if that too finds nothing, the answer
+   is "This conversation became busy just now — try again in a moment." / «این گفت‌وگو همین الان مشغول شد — کمی بعد
+   دوباره امتحان کنید.»
+2. `AgentDeletionTally` counts committed batches. Delete-all that fails part-way logs the partial count, writes its
+   audit row `{"deleted":n,"interrupted":true}`, and rethrows. The sweep logs the partial count when it fails or
+   the panel stops it, and now writes one platform audit row `assistant.conversations_expired`
+   (`{deleted, kept, days, interrupted}`, actor `system`, no workspace) for every pass that deleted anything —
+   complete or not. The InMemory batch that failed is detached, so the audit save cannot retry it. Tests:
+   `Delete_all_whose_later_batch_fails_still_audits_and_logs_what_the_earlier_batches_deleted` (501 rows, the
+   second batch refused) and `A_sweep_stopped_part_way_still_logs_and_audits_what_it_had_deleted` (the host's token
+   cancelled after the first batch); the full sweep test asserts the audit row; a pass that deleted nothing writes
+   none.
+3. A whitespace-only partial (any cut-short call, Stop included) stores nothing **and emits no `message`** — no id
+   that nothing stores; the turn's closing event ends the bubble. Test updated: `started, delta, delta, stopped, done`.
+4. `IAuditLogger` is now a required constructor parameter of `AgentConversationService` (after `secretValues`); the
+   null branch is gone. The three construction sites pass one (`AgentTestKit` its `RecordingAuditLogger`, the two
+   Postgres-lane classes their `NoAudit`).
+5. The Persian retention refusal is built from the constant, in Persian digits like the rest of the sentence
+   (`PersianDigits(MaxConversationRetentionDays)` → ۳۶۵۰). Every sweeper line is built on `LogPrefix`.
+6. The Stop branch is now `catch (Exception) when (stop.StopRequested)`, first in order, so it wins whatever
+   the interruption looks like on its way out; and a failed model response after the turn was cut short
+   (`ThrowIfCutShort`: Stop, deadline, shutdown) ends the turn as that cut, never as a provider error. Test: a
+   theory with a client that throws `IOException` after the Stop and one that returns a "Dropped" failure —
+   both `started, delta, message, stopped, done`, no `error`.
+
+Kept as it was: delete-all skips untitled reserved conversations.
+
+**Mutation check.** Four deliberate breaks at once — no release at the last word, no draft recording, no
+`ThrowIfCutShort`, no claim-age cut — made 7 tests fail (the complete-answer Stop, both expired-draft tests, the
+"Dropped" theory case, the 30-minute delete test, the SQL test, the retention sweep); restored from a copy and green.
+
+**Runs (this pass).**
+
+```
+dotnet build Harbora.slnx --nologo -v q --no-restore -p:UseSharedCompilation=false   → BUILD_EXIT=0, compiler warnings 0
+# after the rebase, before any fix
+dotnet test tests/Harbora.Tests --no-build --filter "…Agent|…Assistant|…AgentSettingsPage|…AgentModelSettings|…DependencyInjection|…MigrationConsistency"
+                                                                → EXIT=0  Passed! 900/900
+# my classes after the fixes
+dotnet test tests/Harbora.Tests --no-build --filter "…AgentConversationDeletionTests|…AgentStopTests|…AgentConversationRetentionTests|…AssistantConversationHttpTests|…AgentPlanStartupReconcilerTests|…AgentSettingsPageHttpTests"
+                                                                → EXIT=0  Passed! 99/99
+# mutation run                                                  → EXIT=1  Failed! 7 of 75
+# every agent/assistant class, DI and pipeline smoke            → EXIT=0  Passed! 916/916
+# full suite, once, at the end of the pass (CONSTRAINTS recipe, log /tmp/test-r7-s1.log)
+dotnet test Harbora.slnx --nologo -v q --no-build > "$LOG" 2>&1; echo "EXIT=$?"   → EXIT=0
+  Skipped! - Failed: 0, Passed:    0, Skipped: 115, Total:  115 - Harbora.Postgres.Tests.dll   (no Docker)
+  Passed!  - Failed: 0, Passed:  500, Skipped:  17, Total:  517 - Harbora.NodeAgent.Tests.dll
+  Passed!  - Failed: 0, Passed:   15, Skipped:   0, Total:   15 - Harbora.NodeIngress.Tests.dll
+  Passed!  - Failed: 0, Passed: 7420, Skipped:   0, Total: 7420 - Harbora.Tests.dll
+grep -c "Harbora.Tests.dll" "$LOG"                              → 2 (present)
+```
+
+This pass adds 15 tests to `Harbora.Tests` (Stop 6, deletion 2, retention 1, reconciler 6), so this branch adds 87
+in all: 7420 = master's own tests (7333 by subtraction — not run separately) + 87. Above the 7304 baseline; none
+lost.
+
+Earlier concerns 2 (draft lost on a cut-short turn), 3 (a plan stuck executing), 5 (`stopped` under a complete
+result) and 8 (optional audit logger) are resolved by this pass; the others stand.
+
+**Still unverified here:** the Postgres lane (now 6 facts in `AgentConversationDeleteRaceTests`, adjusted for the
+claim time) — compiled, skipped, no Docker.

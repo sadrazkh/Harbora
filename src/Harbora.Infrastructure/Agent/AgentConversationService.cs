@@ -52,8 +52,8 @@ public sealed class AgentConversationService(
     ISystemClock clock,
     ILogger<AgentConversationService> logger,
     IAgentSecretValues secretValues,
+    IAuditLogger audit,
     IHostApplicationLifetime? lifetime = null,
-    IAuditLogger? audit = null,
     AgentTurnRegistry? turns = null)
 {
     /// <summary>
@@ -376,13 +376,21 @@ public sealed class AgentConversationService(
     /// </summary>
     public async Task<AgentDeleteOutcome> DeleteAsync(AgentActor actor, Guid conversationId, CancellationToken ct)
     {
-        if (!await db.AgentConversations.IgnoreQueryFilters().AsNoTracking()
-                .AnyAsync(c => c.Id == conversationId && c.WorkspaceId == actor.WorkspaceId && c.UserId == actor.UserId, ct))
-            return NoSuchConversation;
+        var cut = BusyCut();
+
+        // The reason is read before the delete is tried, so a refusal names what was in the way when the
+        // person asked — not whatever is true a moment later, once a turn has ended or a plan has finished.
+        var why = await BusyReasonAsync(actor, conversationId, cut, ct);
+        if (why is not null) return why;
 
         var deleted = await AgentConversationDeletion.DeleteIdleAsync(db, [conversationId],
-            c => c.WorkspaceId == actor.WorkspaceId && c.UserId == actor.UserId, clock.UtcNow - TurnMarkLifetime, ct);
-        if (deleted == 0) return await WhyNotDeletedAsync(actor, conversationId);
+            c => c.WorkspaceId == actor.WorkspaceId && c.UserId == actor.UserId, cut, tally: null, ct);
+        if (deleted == 0)
+            // Idle when read and busy at the delete: something started in between, and the same read names it.
+            return await BusyReasonAsync(actor, conversationId, cut, CancellationToken.None)
+                   ?? new AgentDeleteOutcome(AgentDeleteStatus.Busy,
+                       "This conversation became busy just now — try again in a moment.",
+                       "این گفت‌وگو همین الان مشغول شد — کمی بعد دوباره امتحان کنید.");
 
         await AuditAsync(actor, ConversationDeletedAction, conversationId.ToString(), metadataJson: null);
         return AgentDeleteOutcome.Deleted;
@@ -392,7 +400,7 @@ public sealed class AgentConversationService(
     /// Deletes every conversation of this person in this workspace that is not busy; the busy ones are kept
     /// and counted. "Every" is every one the list shows: a conversation the pane reserved and never used has
     /// nothing in it to delete, and it may be the one the pane has open right now. One audit row, with the
-    /// counts.
+    /// counts — written for the batches that were deleted even when a later one fails.
     /// </summary>
     public async Task<AgentDeleteAllView> DeleteAllAsync(AgentActor actor, CancellationToken ct)
     {
@@ -400,22 +408,36 @@ public sealed class AgentConversationService(
             c => c.WorkspaceId == actor.WorkspaceId && c.UserId == actor.UserId && c.Title != "";
 
         var ids = await db.AgentConversations.IgnoreQueryFilters().AsNoTracking().Where(listed).Select(c => c.Id).ToListAsync(ct);
-        var deleted = ids.Count == 0 ? 0
-            : await AgentConversationDeletion.DeleteIdleAsync(db, ids, listed, clock.UtcNow - TurnMarkLifetime, ct);
+        var tally = new AgentDeletionTally();
+        try
+        {
+            if (ids.Count > 0)
+                await AgentConversationDeletion.DeleteIdleAsync(db, ids, listed, BusyCut(), tally, ct);
+        }
+        catch (Exception ex)
+        {
+            // The batches before the one that failed are deleted and stay deleted: they are recorded as such,
+            // and the failure goes on to the request.
+            logger.LogError(ex, "Deleting every assistant conversation stopped part-way; {Deleted} had been deleted.", tally.Deleted);
+            await AuditAsync(actor, ConversationsDeletedAction, targetId: null,
+                JsonSerializer.Serialize(new { deleted = tally.Deleted, interrupted = true }));
+            throw;
+        }
 
         // Those of them still here are the ones that were busy. (One a concurrent delete took is neither.)
-        var skipped = deleted == ids.Count ? 0
+        var skipped = tally.Deleted == ids.Count ? 0
             : await db.AgentConversations.IgnoreQueryFilters().CountAsync(c => ids.Contains(c.Id), CancellationToken.None);
 
         await AuditAsync(actor, ConversationsDeletedAction, targetId: null,
-            JsonSerializer.Serialize(new { deleted, skipped }));
-        return new AgentDeleteAllView(deleted, skipped);
+            JsonSerializer.Serialize(new { deleted = tally.Deleted, skipped }));
+        return new AgentDeleteAllView(tally.Deleted, skipped);
     }
 
     /// <summary>
     /// Asks the turn running in this conversation to stop (<see cref="AgentTurnRegistry"/>). Null when the
-    /// conversation is not this person's in this workspace; <c>Stopped</c> false when nothing is running —
-    /// the answer had already ended. What the turn does on being stopped is <see cref="SendAsync"/>'s.
+    /// conversation is not this person's in this workspace; <c>Stopped</c> false when there is nothing left to
+    /// stop — the answer has ended, or what remains of it (storing and running its plan) cannot be stopped.
+    /// What the turn does on being stopped is <see cref="SendAsync"/>'s.
     /// </summary>
     public async Task<AgentStopView?> StopAsync(AgentActor actor, Guid conversationId, CancellationToken ct)
     {
@@ -426,23 +448,33 @@ public sealed class AgentConversationService(
         return new AgentStopView(_turns.Stop(conversationId, actor.WorkspaceId, actor.UserId));
     }
 
+    /// <summary>What counts as busy right now, by this service's turn-mark lifetime.</summary>
+    private AgentBusyCut BusyCut() => AgentBusyCut.At(clock.UtcNow, TurnMarkLifetime);
+
     /// <summary>
-    /// Why a delete of a conversation that was there a moment ago deleted nothing, read after it: gone (a
-    /// concurrent delete took it), a live turn, or — what is left — a plan executing.
+    /// Why this conversation cannot be deleted right now, or null when it can: not this person's (or gone), a
+    /// live turn, or a plan executing under a live claim — the same cut <see cref="AgentConversationDeletion"/>
+    /// applies.
     /// </summary>
-    private async Task<AgentDeleteOutcome> WhyNotDeletedAsync(AgentActor actor, Guid conversationId)
+    private async Task<AgentDeleteOutcome?> BusyReasonAsync(AgentActor actor, Guid conversationId, AgentBusyCut cut, CancellationToken ct)
     {
         var current = await db.AgentConversations.IgnoreQueryFilters().AsNoTracking()
-            .FirstOrDefaultAsync(c => c.Id == conversationId && c.WorkspaceId == actor.WorkspaceId && c.UserId == actor.UserId);
+            .Where(c => c.Id == conversationId && c.WorkspaceId == actor.WorkspaceId && c.UserId == actor.UserId)
+            .Select(c => new { c.TurnStartedAt })
+            .FirstOrDefaultAsync(ct);
         if (current is null) return NoSuchConversation;
 
-        return IsTurnLive(current.TurnStartedAt)
-            ? new(AgentDeleteStatus.Busy,
+        if (current.TurnStartedAt is { } started && started > cut.TurnMarkBefore)
+            return new(AgentDeleteStatus.Busy,
                 "This conversation is still answering a message — stop it or wait for it to finish, then delete it.",
-                "این گفت‌وگو هنوز در حال پاسخ به پیامی است — آن را متوقف کنید یا صبر کنید تمام شود، بعد حذفش کنید.")
-            : new(AgentDeleteStatus.Busy,
+                "این گفت‌وگو هنوز در حال پاسخ به پیامی است — آن را متوقف کنید یا صبر کنید تمام شود، بعد حذفش کنید.");
+
+        if (await db.AgentPlans.IgnoreQueryFilters().AnyAsync(AgentConversationDeletion.Running(conversationId, cut), ct))
+            return new(AgentDeleteStatus.Busy,
                 "A plan in this conversation is still running — wait for it to finish, then delete the conversation.",
                 "برنامه‌ای در این گفت‌وگو هنوز در حال اجراست — صبر کنید تمام شود، بعد گفت‌وگو را حذف کنید.");
+
+        return null;
     }
 
     private static readonly AgentDeleteOutcome NoSuchConversation =
@@ -450,10 +482,8 @@ public sealed class AgentConversationService(
 
     /// <summary>On no token: what it records has already happened.</summary>
     private Task AuditAsync(AgentActor actor, string action, string? targetId, string? metadataJson) =>
-        audit is null
-            ? Task.CompletedTask
-            : audit.LogAsync(action, targetType: "agent_conversation", targetId: targetId, ipAddress: actor.IpAddress,
-                metadataJson: metadataJson, workspaceId: actor.WorkspaceId, ct: CancellationToken.None);
+        audit.LogAsync(action, targetType: "agent_conversation", targetId: targetId, ipAddress: actor.IpAddress,
+            metadataJson: metadataJson, workspaceId: actor.WorkspaceId, ct: CancellationToken.None);
 
     // ---- one message ---------------------------------------------------------------------------
 
@@ -591,15 +621,20 @@ public sealed class AgentConversationService(
                 if (refusal is not null)
                     await emit(new AgentStreamEvent(AgentStreamEvents.Error, refusal), turn);
                 else
-                    await RunTurnAsync(actor, conversation, request!.Page, persianInterface, emit, answering);
+                    await RunTurnAsync(actor, conversation, request!.Page, persianInterface, emit, stop, answering);
             }
-            catch (OperationCanceledException) when (answering.IsCancellationRequested && stop.StopRequested)
+            catch (Exception ex) when (stop.StopRequested)
             {
-                // The person's own Stop — not a failure, so no error. What the interrupted call had written
-                // was saved and sent as its message on the way out (RunTurnAsync); a read cut off leaves no
-                // answer row, and the history builder drops a call without one. The `stopped` event follows
-                // below, once the turn is released.
-                logger.LogInformation("The assistant turn in conversation {Conversation} was stopped by the person.", conversation.Id);
+                // The person's own Stop — not a failure, so no error, whatever form the interruption took on
+                // its way out: a cancellation, or the client's "dropped" when the stream it was reading was
+                // cut. What the interrupted call had written was saved and sent as its message
+                // (RunTurnAsync); a read cut off leaves no answer row, and the history builder drops a call
+                // without one; steps already proposed were recorded as not run. `stopped` follows below.
+                if (ex is OperationCanceledException)
+                    logger.LogInformation("The assistant turn in conversation {Conversation} was stopped by the person.", conversation.Id);
+                else
+                    logger.LogInformation(ex, "The assistant turn in conversation {Conversation} was stopped by the person ({Error} on the way out).",
+                        conversation.Id, ex.GetType().Name);
             }
             catch (OperationCanceledException) when (turn.IsCancellationRequested && stopping.IsCancellationRequested)
             {
@@ -626,13 +661,12 @@ public sealed class AgentConversationService(
                     "هنگام پاسخ‌دادن خطایی در سرور رخ داد؛ کار دیگری انجام نشد."), CancellationToken.None);
             }
 
-            // The turn's work is over: a Stop from here on finds nothing and answers false. One that came
-            // before is read now, after the release, so a Stop that answered true is always followed by
-            // `stopped` — including one that arrived while an auto-approved plan ran, which it does not
-            // interrupt (AgentPlanService.RunClaimedAsync takes no token), or after the last step that
-            // listens. The model calls already made stay counted: each was reserved before it was made.
-            _turns.Release(stop);
-            if (stop.StopRequested)
+            // The turn released itself as soon as nothing it had left could be stopped — at the model's last
+            // word, or before storing its plan (RunTurnAsync) — so a Stop after that answered false, and
+            // nothing here says "stopped" under an answer or a plan that ran to its end. A Stop that came
+            // before is the one reported, exactly when the Stop request answered true. The model calls already
+            // made stay counted: each was reserved before it was made.
+            if (_turns.Release(stop))
                 await emit(new AgentStreamEvent(AgentStreamEvents.Stopped, new AgentErrorData(StoppedEn, StoppedFa)),
                     CancellationToken.None);
 
@@ -758,7 +792,7 @@ public sealed class AgentConversationService(
 
     private async Task RunTurnAsync(
         AgentActor actor, AgentConversation conversation, AgentPageContext? page, bool persianInterface,
-        Func<AgentStreamEvent, CancellationToken, Task> emit, CancellationToken ct)
+        Func<AgentStreamEvent, CancellationToken, Task> emit, AgentTurnHandle stop, CancellationToken ct)
     {
         var context = new AgentToolContext(actor.WorkspaceId, actor.UserId, actor.User, conversation.Id, page);
         var system = AgentSystemPrompt.Build(
@@ -780,6 +814,32 @@ public sealed class AgentConversationService(
         var turn = new Turn(actor, context, await plans.RememberedToolsAsync(actor, ct), allowed,
             known);
 
+        try
+        {
+            await AnswerAsync(actor, conversation, turn, messages, specs, emit, stop, ct);
+        }
+        catch (Exception) when (turn.Draft.Count > 0 && !turn.DraftStored)
+        {
+            // A turn that ended before its steps became a plan — stopped, out of time, shut down, or broken —
+            // had already told the model "added as step N … the user will approve it". Left like that, the
+            // next turn would speak of a card that does not exist, so the steps are recorded as not run.
+            await RecordDraftNotRunAsync(actor, conversation, turn);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// The model loop, then the plan the turn proposed. A Stop can interrupt the loop and nothing after it:
+    /// the turn is released (<see cref="AgentTurnRegistry.Release"/>) at the model's last word, before that
+    /// answer is saved or shown, and again as the loop ends, before the closing error, storing the plan and
+    /// running it. A Stop that reached the turn before either point is honoured there, by ending the turn as
+    /// a stop; one after it finds nothing and answers false.
+    /// </summary>
+    private async Task AnswerAsync(
+        AgentActor actor, AgentConversation conversation, Turn turn, List<AgentChatMessage> messages,
+        IReadOnlyList<AgentToolSpec> specs, Func<AgentStreamEvent, CancellationToken, Task> emit, AgentTurnHandle stop,
+        CancellationToken ct)
+    {
         var finished = false;
         var stoppedEarly = false;
 
@@ -800,7 +860,8 @@ public sealed class AgentConversationService(
             //
             // Every run of deltas is finalized by a message event — after a call that ends in text, in
             // tool calls with text before them, or in nothing but whitespace, and also after a call that
-            // failed or ran out of time half-way, whose partial text is saved and sent as the message.
+            // failed, ran out of time or was stopped half-way, whose partial text is saved and sent as the
+            // message (unless it was only whitespace, which nothing stores).
             // The pane's live bubble is never left without its final word. The callback cannot throw for
             // a browser that went away: emit is the listener, which swallows that.
             var streamed = new StringBuilder();
@@ -825,6 +886,11 @@ public sealed class AgentConversationService(
             if (!response.Ok || response.Message is null)
             {
                 if (streamed.Length > 0) await FinalizePartialAsync(conversation, streamed.ToString(), emit);
+
+                // A call cut off by the turn's own ending — Stop, the deadline, a shutdown — can come back as
+                // the client's "dropped" or "unreachable" rather than as a cancellation. Then the ending is
+                // what the person is told about, never a provider failure under it.
+                ThrowIfCutShort(stop, ct);
                 await emit(new AgentStreamEvent(AgentStreamEvents.Error, await ProviderFailureAsync(actor, response, ct)), ct);
                 stoppedEarly = true;
                 break;
@@ -832,6 +898,16 @@ public sealed class AgentConversationService(
 
             var reply = response.Message;
             var toolCalls = NormalizeCalls(reply.ToolCalls, call);
+
+            // A reply without calls is the model's last word, and nothing the turn does after it can be
+            // stopped: it is released before the answer is saved or shown, so a Stop pressed over a complete
+            // answer answers false. A Stop that came while the model was writing and that the call did not
+            // notice is honoured — what was shown is kept, and the turn ends as stopped.
+            if (toolCalls.Count == 0 && _turns.Release(stop))
+            {
+                if (streamed.Length > 0) await FinalizePartialAsync(conversation, streamed.ToString(), emit);
+                throw new OperationCanceledException(StoppedEn);
+            }
 
             // An answer the person watched being written is saved on no token: the turn's own may run out
             // at this very moment, and losing text that was already shown is the one outcome the deltas
@@ -887,6 +963,10 @@ public sealed class AgentConversationService(
             }
         }
 
+        // Everything a Stop can interrupt is behind us; what is left — the closing error, storing the plan and
+        // running it — runs to its end. A finished turn was released at its last word already.
+        if (_turns.Release(stop)) throw new OperationCanceledException(StoppedEn);
+
         if (!finished && !stoppedEarly)
             await emit(Error(
                 $"I stopped after {MaxModelCallsPerMessage} steps without finishing. Try a smaller request.",
@@ -894,13 +974,13 @@ public sealed class AgentConversationService(
 
         if (turn.Draft.Count == 0) return;
 
-        // The turn's token guards this line and nothing after it: a Stop, the deadline or a shutdown that
-        // came before ends the turn here, with nothing stored. Past it the plan is stored, and claimed, on
-        // no token — a store or a claim that committed and was then reported cancelled would leave a plan
-        // nobody was shown, or one executing with nothing running it, whose conversation could then never
-        // be deleted.
+        // The turn's token guards this line and nothing after it: the deadline or a shutdown that came
+        // before ends the turn here, and its steps are recorded as not run (RunTurnAsync). Past it the plan is
+        // stored, and claimed, on no token — a store or a claim that committed and was then reported
+        // cancelled would leave a plan nobody was shown, or one executing with nothing running it.
         ct.ThrowIfCancellationRequested();
         var plan = await plans.CreatePendingAsync(actor, conversation.Id, turn.Draft, CancellationToken.None);
+        turn.DraftStored = true;
 
         // Only a finished turn whose every step is a remembered safe tool runs without a card. A turn the
         // model never finished — the cap, the ceiling, a provider error — may have meant more steps
@@ -908,8 +988,8 @@ public sealed class AgentConversationService(
         if (finished && turn.Draft.All(s => s.AutoApproved))
         {
             // Once claimed, the plan runs to its end on no token (AgentPlanService.RunClaimedAsync) — it is
-            // not bound by the turn's deadline, a shutdown or the person's Stop, because a plan abandoned
-            // half-way would be worse than one that overruns.
+            // not bound by the turn's deadline or a shutdown, and a Stop no longer reaches it, because a plan
+            // abandoned half-way would be worse than one that overruns.
             var result = await plans.ExecuteAutoApprovedAsync(actor, plan, CancellationToken.None);
             await emit(new AgentStreamEvent(AgentStreamEvents.Executed, result), CancellationToken.None);
         }
@@ -924,8 +1004,8 @@ public sealed class AgentConversationService(
     /// it failed, ran out of time, or the person pressed Stop: saved as the model's message, through the
     /// same <see cref="AppendAsync"/> as every other, so a reload shows what was shown, and sent as the
     /// message event that finalizes the bubble. Runs on no token — the turn's own may be the one that just
-    /// ran out. Text that is only whitespace was never anything to read: the bubble is still closed, but
-    /// no row is written for it.
+    /// ran out. Text that is only whitespace was never anything to read: no row is written and no message
+    /// sent — there is no stored id to give one — and the event that ends the turn closes the bubble.
     ///
     /// <para>
     /// Never throws. It runs while another failure is on its way out — the provider's, the deadline's, a
@@ -936,10 +1016,12 @@ public sealed class AgentConversationService(
     private async Task FinalizePartialAsync(
         AgentConversation conversation, string text, Func<AgentStreamEvent, CancellationToken, Task> emit)
     {
-        var partial = new AgentMessage { Role = AgentMessageRole.Assistant, Text = string.IsNullOrWhiteSpace(text) ? null : text };
+        if (string.IsNullOrWhiteSpace(text)) return;
+
+        var partial = new AgentMessage { Role = AgentMessageRole.Assistant, Text = text };
         try
         {
-            if (partial.Text is not null) await AppendAsync(conversation, partial, CancellationToken.None);
+            await AppendAsync(conversation, partial, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -956,6 +1038,36 @@ public sealed class AgentConversationService(
     {
         var entry = db.Entry(message);
         if (entry.State != EntityState.Detached) entry.State = EntityState.Detached;
+    }
+
+    /// <summary>Ends the turn as the cancellation it is, when it is one: the person's Stop, or the turn's
+    /// deadline or a shutdown (<paramref name="ct"/>).</summary>
+    private static void ThrowIfCutShort(AgentTurnHandle stop, CancellationToken ct)
+    {
+        if (stop.StopRequested) throw new OperationCanceledException(StoppedEn);
+        ct.ThrowIfCancellationRequested();
+    }
+
+    /// <summary>
+    /// The steps a turn proposed before it ended, stored as a plan and expired at once — the same path a card
+    /// takes when the person sends a new message instead of deciding (<see cref="AgentPlanService.SupersedePendingAsync"/>).
+    /// The conversation then records, beside the "added as step N" answers the model was given, that the plan
+    /// expired and nothing ran, and the reopened conversation shows the plan as expired. Runs on no token and
+    /// never throws: it runs while the turn's real ending is on its way out.
+    /// </summary>
+    private async Task RecordDraftNotRunAsync(AgentActor actor, AgentConversation conversation, Turn turn)
+    {
+        try
+        {
+            await plans.CreatePendingAsync(actor, conversation.Id, turn.Draft, CancellationToken.None);
+            turn.DraftStored = true;
+            await plans.SupersedePendingAsync(actor, conversation.Id, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The steps proposed in conversation {Conversation} before its turn ended could not be recorded as not run.",
+                conversation.Id);
+        }
     }
 
     /// <summary>Why this message cannot be answered at all right now, or null: no reachable model, or
@@ -986,6 +1098,9 @@ public sealed class AgentConversationService(
         public IReadOnlyList<string> Known { get; } = known;
         public AgentPlanScope Scope { get; } = new();
         public List<AgentPlanStep> Draft { get; } = [];
+
+        /// <summary>Whether <see cref="Draft"/> has become a plan — after which it is the plan's to report.</summary>
+        public bool DraftStored { get; set; }
     }
 
     /// <summary>What goes back to the model for one call, and what the person may be shown instead.</summary>

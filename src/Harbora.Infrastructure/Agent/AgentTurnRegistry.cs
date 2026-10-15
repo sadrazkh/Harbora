@@ -15,9 +15,11 @@ namespace Harbora.Infrastructure.Agent;
 ///
 /// <para>
 /// The lookup, the ownership check and the stop request happen under one lock, and so does a release. A Stop
-/// therefore either reaches a turn whose work has not ended — and the turn, which reads the request only after
-/// its own release, is certain to see it — or finds nothing and says so. That is what lets
-/// <see cref="AgentStopView.Stopped"/> promise a <c>stopped</c> event on the stream.
+/// therefore either reaches a turn that can still be stopped — and the turn, which reads the request as it
+/// releases itself, is certain to see it — or finds nothing and answers false. A turn releases itself the
+/// moment nothing it has left to do can be stopped (the model has given its last word, or its plan is about to
+/// be stored and claimed), so <see cref="AgentStopView.Stopped"/> true always means the answer really was
+/// cut short, and a <c>stopped</c> event follows on its stream.
 /// </para>
 /// </summary>
 public sealed class AgentTurnRegistry
@@ -36,14 +38,18 @@ public sealed class AgentTurnRegistry
         return handle;
     }
 
-    /// <summary>The turn's work is over: from here a Stop finds nothing. Idempotent; removes only this
-    /// handle, never a newer turn's.</summary>
-    internal void Release(AgentTurnHandle handle)
+    /// <summary>
+    /// From here the turn cannot be stopped: a Stop finds nothing and answers false. Returns whether a Stop
+    /// reached it first — read under the lock, so the answer is final, and the turn must then honour it.
+    /// Idempotent; removes only this handle, never a newer turn's.
+    /// </summary>
+    internal bool Release(AgentTurnHandle handle)
     {
         lock (_gate)
         {
             if (_turns.TryGetValue(handle.ConversationId, out var current) && ReferenceEquals(current, handle))
                 _turns.Remove(handle.ConversationId);
+            return handle.StopRequested;
         }
     }
 

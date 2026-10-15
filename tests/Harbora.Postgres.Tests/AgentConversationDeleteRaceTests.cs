@@ -191,9 +191,10 @@ public sealed class AgentConversationDeleteRaceTests(PostgresLane lane)
         await using var claim = await PostgresLane.ConnectAsync(connectionString);
         await using var transaction = await claim.BeginTransactionAsync();
         await using (var update = new NpgsqlCommand(
-                         """UPDATE "AgentPlans" SET "Status" = 1 WHERE "Id" = @id AND "Status" = 0""", claim, transaction))
+                         """UPDATE "AgentPlans" SET "Status" = 1, "DecidedAt" = @now WHERE "Id" = @id AND "Status" = 0""", claim, transaction))
         {
             update.Parameters.AddWithValue("id", planId);
+            update.Parameters.AddWithValue("now", Now);
             (await update.ExecuteNonQueryAsync()).Should().Be(1);
         }
 
@@ -302,7 +303,7 @@ public sealed class AgentConversationDeleteRaceTests(PostgresLane lane)
             db.AgentPlans.Add(new AgentPlan
             {
                 WorkspaceId = actor.WorkspaceId, UserId = actor.UserId, ConversationId = e.Id, Status = AgentPlanStatus.Executing,
-                StepsJson = "[]", ExpiresAt = Now
+                StepsJson = "[]", ExpiresAt = Now, DecidedAt = Now
             });
             await db.SaveChangesAsync();
             (answering, executing, theirs) = (a.Id, e.Id, t.Id);

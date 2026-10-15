@@ -573,6 +573,134 @@ public sealed class AgentPlanService(
     }
 
 
+    // ---- after a restart -----------------------------------------------------------------------
+
+    public const string PanelRestartedEn =
+        "The panel restarted while this plan was running — check the resource before trying again.";
+    public const string PanelRestartedFa =
+        "پنل هنگام اجرای این برنامه دوباره راه‌اندازی شد — پیش از تلاش دوباره، منبع را بررسی کنید.";
+    private const string RanBeforeRestartEn = "Done before the panel restarted.";
+    private const string RanBeforeRestartFa = "پیش از راه‌اندازی دوبارهٔ پنل انجام شد.";
+
+    /// <summary>
+    /// Settles every plan still <see cref="AgentPlanStatus.Executing"/> when the panel starts. The panel is one
+    /// process and a claimed plan runs inside the request that claimed it, so at startup none of them can still
+    /// be running: they were cut off by the restart. Left executing, each would claim forever that it is
+    /// running, and its conversation could never be deleted.
+    ///
+    /// <para>
+    /// What each step did is read from where it was recorded as it happened: the results already in the plan,
+    /// if any, and otherwise the <c>assistant.step_executed</c> entry every step writes the moment its tool
+    /// returns. A step with a successful entry is done. The first step without one — the step that was
+    /// running, whose effect nobody knows — fails with <see cref="PanelRestartedEn"/>, and the steps after it
+    /// are skipped with the same words; the conversation is told the same, so the next turn knows. The plan is
+    /// <see cref="AgentPlanStatus.Failed"/>, unless every step is known to be done — then only the record was
+    /// cut off, and it is <see cref="AgentPlanStatus.Executed"/>, the rule <c>FinishBrokenRunAsync</c> keeps.
+    /// </para>
+    ///
+    /// <para>
+    /// Runs with no session, so every read ignores the workspace filter. A plan that cannot be settled is
+    /// logged and left for the next start; the others are still settled.
+    /// </para>
+    /// </summary>
+    internal static async Task<int> FailInterruptedAsync(HarboraDbContext db, DateTimeOffset now, ILogger logger, CancellationToken ct)
+    {
+        var stuck = await db.AgentPlans.IgnoreQueryFilters()
+            .Where(p => p.Status == AgentPlanStatus.Executing)
+            .ToListAsync(ct);
+
+        var settled = 0;
+        foreach (var plan in stuck)
+        {
+            try
+            {
+                await FailInterruptedAsync(db, plan, now, ct);
+                settled++;
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                logger.LogError(ex, "Plan {Plan}, left executing by a restart, could not be settled; the next start tries again.", plan.Id);
+                db.ChangeTracker.Clear();
+            }
+        }
+        return settled;
+    }
+
+    private static async Task FailInterruptedAsync(HarboraDbContext db, AgentPlan plan, DateTimeOffset now, CancellationToken ct)
+    {
+        var steps = StepsOf(plan);
+        var recorded = (AgentJson.Deserialize<List<AgentPlanStepResultView>>(plan.ResultsJson) ?? [])
+            .GroupBy(r => r.Index).ToDictionary(g => g.Key, g => g.First());
+
+        // The audit entry of a step under a support or sign-in-token session carries a prefix; it is still the step's.
+        var planId = plan.Id.ToString();
+        var audited = new Dictionary<int, bool>();
+        foreach (var metadata in await db.AuditLogs.IgnoreQueryFilters().AsNoTracking()
+                     .Where(a => a.TargetId == planId && a.Action.EndsWith(StepExecutedAction))
+                     .Select(a => a.MetadataJson)
+                     .ToListAsync(ct))
+        {
+            if (StepEntry(metadata) is { } entry) audited[entry.Index] = audited.GetValueOrDefault(entry.Index) || entry.Ok;
+        }
+
+        var results = new List<AgentPlanStepResultView>();
+        var outcomes = new List<StepOutcome>();
+        var cutOff = false;
+        foreach (var step in steps)
+        {
+            if (!cutOff && recorded.TryGetValue(step.Index, out var kept))
+            {
+                results.Add(kept);
+                outcomes.Add(Outcome(step, kept.State, kept.SummaryEn ?? kept.ErrorEn ?? kept.State, kept.SummaryFa ?? kept.ErrorFa ?? kept.State,
+                    error: kept.ErrorEn));
+                cutOff = kept.State != "done";
+            }
+            else if (!cutOff && audited.GetValueOrDefault(step.Index))
+            {
+                results.Add(new(step.Index, "done", RanBeforeRestartEn, RanBeforeRestartFa, null, null, []));
+                outcomes.Add(Outcome(step, "done", RanBeforeRestartEn, RanBeforeRestartFa));
+            }
+            else if (!cutOff)
+            {
+                results.Add(new(step.Index, "failed", null, null, PanelRestartedEn, PanelRestartedFa, []));
+                outcomes.Add(Outcome(step, "failed", PanelRestartedEn, PanelRestartedFa, error: PanelRestartedEn));
+                cutOff = true;
+            }
+            else
+            {
+                results.Add(new(step.Index, "skipped", null, null, PanelRestartedEn, PanelRestartedFa, []));
+                outcomes.Add(Outcome(step, "skipped", PanelRestartedEn, PanelRestartedFa, error: PanelRestartedEn));
+            }
+        }
+
+        plan.Status = results.All(r => r.State == "done") ? AgentPlanStatus.Executed : AgentPlanStatus.Failed;
+        plan.ResultsJson = AgentJson.Serialize(results);
+        // Set, so the result is shown: a step was running, and what it did is exactly what the person must check.
+        plan.ExecutedAt = now;
+        // No vault survives a restart, so there are no held values left to scrub by.
+        await AddOutcomeMessagesAsync(db, plan, outcomes, [], now, ct);
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>The step and its outcome from an <c>assistant.step_executed</c> entry's metadata, or null.</summary>
+    private static (int Index, bool Ok)? StepEntry(string? metadataJson)
+    {
+        if (string.IsNullOrWhiteSpace(metadataJson)) return null;
+        try
+        {
+            using var document = JsonDocument.Parse(metadataJson);
+            var root = document.RootElement;
+            return root.TryGetProperty("stepIndex", out var index) && index.TryGetInt32(out var i)
+                   && root.TryGetProperty("ok", out var ok) && ok.ValueKind is JsonValueKind.True or JsonValueKind.False
+                ? (i, ok.GetBoolean())
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
     private const string NotRunEn = "Not run: another step was refused when the plan was re-checked.";
     private const string NotRunFa = "اجرا نشد: مرحلهٔ دیگری هنگام بررسی دوباره رد شد.";
     private const string StepBrokeEn = "The step failed unexpectedly; see the server log.";
@@ -862,8 +990,14 @@ public sealed class AgentPlanService(
 
     /// <summary><see cref="RecordOutcomeAsync"/>'s messages, added to the context but not saved — so
     /// <see cref="FinishAsync"/> can write them in the same save as the plan's own result.</summary>
-    private async Task AddOutcomeMessagesAsync(
-        AgentPlan plan, IReadOnlyList<StepOutcome> outcomes, IReadOnlyList<string> known, DateTimeOffset now, CancellationToken ct)
+    private Task AddOutcomeMessagesAsync(
+        AgentPlan plan, IReadOnlyList<StepOutcome> outcomes, IReadOnlyList<string> known, DateTimeOffset now, CancellationToken ct) =>
+        AddOutcomeMessagesAsync(db, plan, outcomes, known, now, ct);
+
+    /// <summary>The same, on a context of the caller's — for the startup pass, which has no service.</summary>
+    private static async Task AddOutcomeMessagesAsync(
+        HarboraDbContext db, AgentPlan plan, IReadOnlyList<StepOutcome> outcomes, IReadOnlyList<string> known,
+        DateTimeOffset now, CancellationToken ct)
     {
         if (outcomes.Count == 0) return;
 

@@ -24,11 +24,32 @@ public sealed record AgentDeleteOutcome(AgentDeleteStatus Status, string? Messag
 }
 
 /// <summary>
+/// When a conversation counts as busy, and so is not deleted: a turn mark younger than its lifetime (as
+/// <c>GetAsync</c> judges <c>InProgress</c>), or a plan executing whose claim is younger than
+/// <see cref="AgentConversationDeletion.ExecutingPlanAbandonedAfter"/>.
+/// </summary>
+/// <param name="TurnMarkBefore">A turn mark at or before this was left by a process that died — the same cut
+/// <c>AgentConversationService.TryClaimTurnAsync</c> makes.</param>
+/// <param name="ClaimBefore">A plan claimed at or before this and still executing is a run that broke while the
+/// process lived on; it no longer keeps its conversation.</param>
+internal sealed record AgentBusyCut(DateTimeOffset TurnMarkBefore, DateTimeOffset ClaimBefore)
+{
+    public static AgentBusyCut At(DateTimeOffset now, TimeSpan turnMarkLifetime) =>
+        new(now - turnMarkLifetime, now - AgentConversationDeletion.ExecutingPlanAbandonedAfter);
+}
+
+/// <summary>How many conversations a deletion has committed so far — readable after it threw, because the
+/// batches before the one that failed stay deleted and have to be reported.</summary>
+internal sealed class AgentDeletionTally
+{
+    public int Deleted { get; set; }
+}
+
+/// <summary>
 /// The one way conversations are deleted — one of them by its person, all of a person's, and the owner's
-/// retention sweep — so that "busy" means the same in all three: a turn mark still younger than its lifetime
-/// (as <c>GetAsync</c> judges <c>InProgress</c>), or a plan that is <see cref="AgentPlanStatus.Executing"/>.
-/// A busy conversation is never deleted. Its messages and plans go with it (the foreign keys cascade); the
-/// audit rows the assistant wrote and the day's usage counter are other tables and are not touched.
+/// retention sweep — so that "busy" means the same in all three (<see cref="AgentBusyCut"/>). A busy
+/// conversation is never deleted. Its messages and plans go with it (the foreign keys cascade); the audit rows
+/// the assistant wrote and the day's usage counter are other tables and are not touched.
 ///
 /// <para>
 /// <b>The race that matters is a delete against an approval.</b> An approval claims its plan with one
@@ -46,6 +67,13 @@ public sealed record AgentDeleteOutcome(AgentDeleteStatus Status, string? Messag
 /// </para>
 ///
 /// <para>
+/// <b>An executing plan does not block for ever.</b> One a restart interrupted is failed at startup
+/// (<see cref="AgentPlanStartupReconciler"/>); one whose run broke while the process lived on stops counting
+/// once its claim is older than <see cref="ExecutingPlanAbandonedAfter"/>. Should such a run still be going
+/// after all, its end finds the plan gone and writes nothing (<c>AgentPlanService.FinishAsync</c>).
+/// </para>
+///
+/// <para>
 /// EF InMemory has no <c>ExecuteDeleteAsync</c> and no row locks: there it is a read-then-write that is not
 /// atomic, as in <c>AgentPlanService.TryMoveAsync</c>, and the race is proven only in the Postgres lane
 /// (<c>AgentConversationDeleteRaceTests</c>).
@@ -58,29 +86,43 @@ internal static class AgentConversationDeletion
     internal const int BatchSize = 500;
 
     /// <summary>
-    /// Deletes those of <paramref name="ids"/> that, at the moment of the delete, still match
-    /// <paramref name="eligible"/> and are not busy. Returns how many were deleted. Every read ignores the
-    /// query filters and is pinned by <paramref name="eligible"/> instead: the retention sweep runs without a
-    /// signed-in user, and a tenant filter there would read an empty table and report success.
+    /// How long a plan's claim keeps its conversation from being deleted. Far beyond any real run: a plan's
+    /// steps are calls into the panel's own services that each return in seconds — a deployment is queued,
+    /// not waited for.
     /// </summary>
-    /// <param name="staleBefore">A turn mark at or before this is a dead process's, not a turn — the same
-    /// cut <c>AgentConversationService.TryClaimTurnAsync</c> makes.</param>
+    public static readonly TimeSpan ExecutingPlanAbandonedAfter = TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// Deletes those of <paramref name="ids"/> that, at the moment of the delete, still match
+    /// <paramref name="eligible"/> and are not busy. Returns how many were deleted, and keeps
+    /// <paramref name="tally"/> up to date batch by batch, so a caller whose later batch failed can still say
+    /// what the earlier ones did. Every read ignores the query filters and is pinned by
+    /// <paramref name="eligible"/> instead: the retention sweep runs without a signed-in user, and a tenant
+    /// filter there would read an empty table and report success.
+    /// </summary>
     public static async Task<int> DeleteIdleAsync(
         HarboraDbContext db, IReadOnlyCollection<Guid> ids, Expression<Func<AgentConversation, bool>> eligible,
-        DateTimeOffset staleBefore, CancellationToken ct)
+        AgentBusyCut cut, AgentDeletionTally? tally, CancellationToken ct)
     {
-        var deleted = 0;
+        tally ??= new AgentDeletionTally();
         foreach (var batch in ids.Distinct().Chunk(BatchSize))
-            deleted += db.Database.IsRelational()
-                ? await DeleteRelationalAsync(db, batch, eligible, staleBefore, ct)
-                : await DeleteInMemoryAsync(db, batch, eligible, staleBefore, ct);
-        return deleted;
+            tally.Deleted += db.Database.IsRelational()
+                ? await DeleteRelationalAsync(db, batch, eligible, cut, ct)
+                : await DeleteInMemoryAsync(db, batch, eligible, cut, ct);
+        return tally.Deleted;
     }
 
-    /// <summary>Not busy: no live turn mark, and no plan executing.</summary>
-    internal static Expression<Func<AgentConversation, bool>> Idle(HarboraDbContext db, DateTimeOffset staleBefore) =>
-        c => (c.TurnStartedAt == null || c.TurnStartedAt <= staleBefore)
-             && !db.AgentPlans.IgnoreQueryFilters().Any(p => p.ConversationId == c.Id && p.Status == AgentPlanStatus.Executing);
+    /// <summary>Not busy: no live turn mark, and no plan executing under a live claim.</summary>
+    internal static Expression<Func<AgentConversation, bool>> Idle(HarboraDbContext db, AgentBusyCut cut) =>
+        c => (c.TurnStartedAt == null || c.TurnStartedAt <= cut.TurnMarkBefore)
+             && !db.AgentPlans.IgnoreQueryFilters().Any(p => p.ConversationId == c.Id && p.Status == AgentPlanStatus.Executing
+                                                            && (p.DecidedAt ?? p.UpdatedAt) > cut.ClaimBefore);
+
+    /// <summary>A plan that keeps <paramref name="conversationId"/> busy — <see cref="Idle"/>'s plan half,
+    /// for naming the reason a delete was refused.</summary>
+    internal static Expression<Func<AgentPlan, bool>> Running(Guid conversationId, AgentBusyCut cut) =>
+        p => p.ConversationId == conversationId && p.Status == AgentPlanStatus.Executing
+             && (p.DecidedAt ?? p.UpdatedAt) > cut.ClaimBefore;
 
     /// <summary>
     /// Every plan row of these conversations, locked until the transaction ends — the approval's claim
@@ -92,7 +134,7 @@ internal static class AgentConversationDeletion
             $"""SELECT "Id" AS "Value" FROM "AgentPlans" WHERE "ConversationId" = ANY({conversationIds}) ORDER BY "Id" FOR UPDATE""");
 
     private static async Task<int> DeleteRelationalAsync(
-        HarboraDbContext db, Guid[] batch, Expression<Func<AgentConversation, bool>> eligible, DateTimeOffset staleBefore,
+        HarboraDbContext db, Guid[] batch, Expression<Func<AgentConversation, bool>> eligible, AgentBusyCut cut,
         CancellationToken ct)
     {
         await using var transaction = await db.Database.BeginTransactionAsync(ct);
@@ -104,7 +146,7 @@ internal static class AgentConversationDeletion
         var deleted = await db.AgentConversations.IgnoreQueryFilters()
             .Where(c => batch.Contains(c.Id))
             .Where(eligible)
-            .Where(Idle(db, staleBefore))
+            .Where(Idle(db, cut))
             .ExecuteDeleteAsync(ct);
 
         // On no token: the delete has been decided, and a commit abandoned half-way helps nobody.
@@ -113,13 +155,13 @@ internal static class AgentConversationDeletion
     }
 
     private static async Task<int> DeleteInMemoryAsync(
-        HarboraDbContext db, Guid[] batch, Expression<Func<AgentConversation, bool>> eligible, DateTimeOffset staleBefore,
+        HarboraDbContext db, Guid[] batch, Expression<Func<AgentConversation, bool>> eligible, AgentBusyCut cut,
         CancellationToken ct)
     {
         var doomed = await db.AgentConversations.IgnoreQueryFilters()
             .Where(c => batch.Contains(c.Id))
             .Where(eligible)
-            .Where(Idle(db, staleBefore))
+            .Where(Idle(db, cut))
             .ToListAsync(ct);
         if (doomed.Count == 0) return 0;
 
@@ -130,7 +172,18 @@ internal static class AgentConversationDeletion
         db.AgentPlans.RemoveRange(await db.AgentPlans.IgnoreQueryFilters()
             .Where(p => doomedIds.Contains(p.ConversationId)).ToListAsync(ct));
         db.AgentConversations.RemoveRange(doomed);
-        await db.SaveChangesAsync(CancellationToken.None);
+        try
+        {
+            await db.SaveChangesAsync(CancellationToken.None);
+        }
+        catch
+        {
+            // A batch that did not save is not deleted, and the next save on this context — the audit row
+            // reporting the batches before it — must not try it again.
+            foreach (var entry in db.ChangeTracker.Entries().Where(e => e.State == EntityState.Deleted).ToList())
+                entry.State = EntityState.Detached;
+            throw;
+        }
         return doomed.Count;
     }
 }
