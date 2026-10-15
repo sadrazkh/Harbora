@@ -100,6 +100,30 @@ public class AgentStopTests
     }
 
     [Fact]
+    public async Task Stop_after_nothing_but_whitespace_closes_the_bubble_and_stores_no_message()
+    {
+        using var h = new AgentHarness();
+        h.Chat.ThenStreamed(new AgentChatResponse(true, new AgentChatMessage(AgentRole.Assistant, "never"), "m", null, "stop", null, null),
+            ["\n", "  "], after: ct => Task.Delay(Timeout.Infinite, ct));
+        var events = new List<AgentStreamEvent>();
+
+        async Task Sink(AgentStreamEvent e, CancellationToken _)
+        {
+            events.Add(e);
+            if (e.Name == AgentStreamEvents.Delta && events.Count(x => x.Name == AgentStreamEvents.Delta) == 2)
+                await StopFromAnotherRequest(h, ConversationOf(events));
+        }
+
+        await h.ServiceOver(turnDeadline: Guard).SendAsync(h.Actor, null, new AgentSendMessageRequest("hm?", null), false, Sink, default);
+
+        events.Names().Should().Equal("started", "delta", "delta", "message", "stopped", "done");
+        events.Single<AgentMessageView>("message").Text.Should().BeNull("the bubble is closed with nothing in it");
+        using var other = h.NewContext();
+        (await other.AgentMessages.CountAsync(m => m.Role == AgentMessageRole.Assistant))
+            .Should().Be(0, "whitespace was never anything to read, so no row is written for it");
+    }
+
+    [Fact]
     public async Task Stop_while_a_read_runs_leaves_no_half_written_answer_and_the_next_request_is_valid()
     {
         Guid conversationId = default;
