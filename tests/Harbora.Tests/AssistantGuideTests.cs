@@ -82,4 +82,26 @@ public class AssistantGuideTests
         AgentModelBench.ToolSpecs.Count.Should().Be(9);
         chapter.Should().Contain("شش پرسش").And.Contain("نه ابزار");
     }
+
+    [Fact]
+    public void The_guides_figures_for_paging_deleting_and_reopening_are_the_ones_the_assistant_runs_on()
+    {
+        var chapter = Chapter();
+
+        // The list's second page is the same size as its first, and both are the server's page.
+        chapter.Should().Contain($"{Fa(AgentConversationService.ConversationListSize)} تای بعدی");
+
+        // What a reopened conversation shows: the newest messages, and the newest plans among them.
+        chapter.Should().Contain($"آخرین {Fa(AgentConversationService.ConversationViewMessages)} پیام");
+        chapter.Should().Contain($"حداکثر {Fa(AgentConversationService.PlanHistorySize)} تای آخر");
+
+        // A plan left "running" stops keeping its conversation from being deleted after this long.
+        chapter.Should().Contain($"بیش از {Fa((int)AgentConversationDeletion.ExecutingPlanAbandonedAfter.TotalMinutes)} دقیقه پیش");
+
+        // The owner's retention box accepts whole days up to this many.
+        chapter.Should().Contain($"از {Fa(1)} تا {Fa(AgentSettingsService.MaxConversationRetentionDays)} باشد");
+
+        // The sentence a plan cut off by a restart is given is quoted as the panel writes it.
+        chapter.Should().Contain(AgentPlanService.PanelRestartedFa);
+    }
 }
