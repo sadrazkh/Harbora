@@ -161,7 +161,7 @@ export function createAssistantSession({
     onSettled: () => {
       timeline.resuming = false;
       endStop();
-      if (timeline.notice?.kind === 'busy') timeline.notice = null; // the answer it waited for is in
+      if (timeline.notice?.kind === 'busy' || timeline.notice?.kind === 'stop-failed') timeline.notice = null; // the answer it waited for is in
       onChange('settled');
     },
     onGone: () => {
@@ -511,6 +511,7 @@ export function createAssistantSession({
               streamOver = true;
               endStop();
             }
+            if (name === 'done' && timeline.notice?.kind === 'stop-failed') timeline.notice = null; // "try again" is moot
             if (['tool', 'delta', 'message', 'plan', 'executed'].includes(name)) progressed = true;
             if (name === 'error' && started && !progressed) refusedAtGate = true;
             if ((name === 'started' || name === 'done') && timeline.conversationId) prefs.setConversationId(timeline.conversationId);

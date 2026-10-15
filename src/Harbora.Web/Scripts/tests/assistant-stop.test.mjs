@@ -322,6 +322,42 @@ test('a Stop that never takes asks six times at most; then the button is Stop ag
   assert.equal(s.timeline.stopping, false);
 });
 
+test('the "try again" notice does not outlive its turn: `done` clears it, other notices stay', async () => {
+  const s = setup({ stops: [false, false, false, false, false, false] });
+  await streaming(s);
+  s.session.stop();
+  await settle();
+  for (let i = 0; i < 5; i++) await s.timers.fire(500);
+  assert.equal(s.timeline.notice.kind, 'stop-failed');
+  assert.ok(s.timeline.notice.messageEn.startsWith("Couldn't stop it"));
+  await finishTurn(s);
+  assert.equal(s.timeline.notice, null, 'the turn is over: "try again" would be a lie');
+
+  const kept = setup({ stops: [true] });
+  await streaming(kept);
+  kept.timeline.notice = { kind: 'restored', messageEn: 'something else', messageFa: 'چیز دیگری' };
+  await finishTurn(kept);
+  assert.equal(kept.timeline.notice.kind, 'restored', 'only the stop notice is cleared');
+
+  // a request error is a stop-failed notice too
+  const failed = setup({ stops: [new Error('Could not reach the panel.')] });
+  await streaming(failed);
+  await failed.session.stop();
+  assert.equal(failed.timeline.notice.kind, 'stop-failed');
+  await finishTurn(failed);
+  assert.equal(failed.timeline.notice, null);
+});
+
+test('and when only following, the notice goes when the poll finds the turn over', async () => {
+  const s = setup({ views: [view({ inProgress: true }), view({ messages: [userMessage('hi')] })], stops: [new Error('down')] });
+  await following(s);
+  await s.session.stop();
+  assert.equal(s.timeline.notice.kind, 'stop-failed');
+  await s.timers.fire(2500);
+  assert.equal(s.timeline.resuming, false);
+  assert.equal(s.timeline.notice, null);
+});
+
 test('an error on a retry request is shown like any other, and ends «stopping»', async () => {
   const s = setup({ stops: [false, Object.assign(new Error('Could not reach the panel.'), { messageEn: 'Could not reach the panel.', messageFa: 'ارتباط با پنل برقرار نشد.' })] });
   await streaming(s);
@@ -700,6 +736,9 @@ test('while stopping the button says «در حال توقف…» / "Stopping…"
   const handler = /function stopAnswer\(\)[\s\S]*?\n\}/.exec(source)?.[0] ?? '';
   assert.ok(/if \(stopping\.value\) return;/.test(handler), 'a press while stopping does nothing');
   assert.ok(/session\.stop\(\)/.test(handler));
+  // The focus is owed only to a press that started a Stop — not to one the session ignored.
+  assert.ok(/session\.stop\(\);[\s\S]*?if \(timeline\.stopping\) stopPressed = true;/.test(handler), 'stopPressed follows the intent');
+  assert.equal(/stopPressed = true;[\s\S]*session\.stop\(\)/.test(handler), false, 'and is not set before asking');
 });
 
 test('focus goes to the composer only once the answer is over — never while Stop or Stopping is on screen', () => {

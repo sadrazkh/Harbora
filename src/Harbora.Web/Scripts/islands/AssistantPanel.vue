@@ -234,8 +234,10 @@ let stopPressed = false;
 
 function stopAnswer() {
   if (stopping.value) return;
-  stopPressed = true;
   session.stop();
+  // Only a press that started something is a Stop to move the focus after: one ignored (another
+  // conversation is loading, the turn is already over) leaves everything as it was.
+  if (timeline.stopping) stopPressed = true;
 }
 
 // The Stop button is gone only when the answer is over; that is the moment the keyboard focus can go to the

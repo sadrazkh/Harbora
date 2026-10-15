@@ -26,6 +26,8 @@ const RUN = /\*+/g;
 const SPACE = /\s/;
 // What may stand in front of an opening `**` besides a space or the start of the line.
 const OPENING_PUNCTUATION = new Set(['(', '[', '{', '«', '"', "'", '“', '‘']);
+// What a closing `**` may not directly follow: the same, less the straight quotes (they open and close).
+const OPENING_BRACKETS = new Set(['(', '[', '{', '«', '“', '‘']);
 
 /** @param {string} text @param {Array<{ kind: string, text: string }>} tokens */
 function scanPlain(text, tokens) {
@@ -46,8 +48,9 @@ function scanPlain(text, tokens) {
  * arithmetic literal:
  *  - an opening `**` stands at the start of the line, or after a space or an opening bracket or quote
  *    (`( [ { « " ' “ ‘`), and is followed by something that is neither a space nor a `/`;
- *  - a closing `**` is preceded by something that is neither a space nor a `/`, and is not followed by
- *    a `/` or a `*`.
+ *  - a closing `**` is preceded by something that is neither a space, a `/`, nor an opening bracket
+ *    (`( [ { « “ ‘` — not the straight quotes, since `**"x"**` closes), and is not followed by a `/` or
+ *    a `*`. The bracket clause keeps Python's `f(**kw1) and g(**kw2)` from pairing up.
  * So `ignore **\/node_modules\/** please`, `see **\/bin\/** and **\/obj\/**` and `src/**\/a and lib/**\/b` are
  * text, while `**اپ**ها` (a Persian plural written straight on), `**اپ**‌ها` (with the half-space),
  * `**a**=1` and `**متن**،` are bold.
@@ -83,7 +86,7 @@ export function inline(line) {
     const next = after(i);
     const canOpen = solid(next) && next !== '/'
       && (prev === undefined || SPACE.test(prev) || OPENING_PUNCTUATION.has(prev));
-    const canClose = solid(prev) && prev !== '/' && next !== '/' && next !== '*';
+    const canClose = solid(prev) && prev !== '/' && !OPENING_BRACKETS.has(prev) && next !== '/' && next !== '*';
     if (opener >= 0 && canClose) {
       pairs.push([opener, i]);
       opener = -1;

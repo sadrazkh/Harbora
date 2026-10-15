@@ -124,6 +124,28 @@ test('a closing ** is not preceded by a space or a slash, and not followed by a 
   assert.deepEqual(inlineOf('**a**1'), [bold('a'), text('1')]);
 });
 
+test('a closing ** does not follow an opening bracket: Python unpacking stays literal', () => {
+  for (const line of [
+    'def f(*args, **kwargs) and g(**opts)',
+    'call foo(**kw1) and bar(**kw2) now',
+    'f(**a) g(**b)',
+    'x[**a] y[**b]',
+    'f{**a} g{**b}',
+    '«**a «**b',
+    '“**a “**b',
+  ]) {
+    assert.deepEqual(inlineOf(line), [text(line)], line);
+  }
+});
+
+test('a closing ** may follow a straight quote, and a bold span may still sit inside brackets', () => {
+  assert.deepEqual(inlineOf('**"x"**'), [bold('"x"')]);
+  assert.deepEqual(inlineOf("**'x'**"), [bold("'x'")]);
+  assert.deepEqual(inlineOf('say **"x"** now'), [text('say '), bold('"x"'), text(' now')]);
+  assert.deepEqual(inlineOf('(**x**) and [**y**] and «**z**»'), [text('('), bold('x'), text(') and ['), bold('y'), text('] and «'), bold('z'), text('»')]);
+  assert.deepEqual(inlineOf('**f(x)**'), [bold('f(x)')]);
+});
+
 test('Persian text: a plural written straight on, with the half-space, and the Persian punctuation after a closing **', () => {
   assert.deepEqual(inlineOf('**اپ**ها'), [bold('اپ'), text('ها')]);
   assert.deepEqual(inlineOf('**اپ**‌ها'), [bold('اپ'), text('‌ها')]);

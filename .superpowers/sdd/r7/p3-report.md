@@ -273,3 +273,11 @@ Commands (after the last source change):
   (337 after the first fix pass).
 - `cd src/Harbora.Web && npm run build` → exit 0, `✓ built in 5.22s`.
 - The full dotnet suite was not re-run (no .NET, Razor or layout file changed in either fix pass).
+
+Final tiny pass (approval round): a closing `**` is no longer allowed directly after `( [ { « “ ‘` (not `"` or `'`),
+so Python's `f(**kw1) and g(**kw2)` and `def f(*args, **kwargs) and g(**opts)` stay literal while `**"x"**` and
+`(**x**)` still pair; a `stop-failed` notice is cleared when that turn's `done` arrives (and when the poll finds a
+followed turn over; other notices are left alone); `stopPressed` is set in `AssistantPanel.vue` only when `stop()`
+actually started an intent (`timeline.stopping` after the call). Mutation-checked (each of the three removed makes a
+test fail). `node --test src/Harbora.Web/Scripts/tests/*.test.mjs` → exit 0, `# tests 352 / # pass 352 / # fail 0`;
+`cd src/Harbora.Web && npm run build` → exit 0, `✓ built in 5.16s`.
