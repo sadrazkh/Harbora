@@ -385,14 +385,22 @@ export function createSteadyDirection(latchWords = 4) {
 }
 
 /**
- * A block's prose, for deciding which way it reads: code does not vote, and a table is its cells.
+ * A block's prose, for deciding which way it reads: code does not vote. A table is read by its header
+ * row — the labels are in the message's own language, where the cells below are often identifiers
+ * ("shop-db", "postgres 16") in a Persian table — and by all its cells when the header has no letters.
+ * (Each cell still lays its own text out its own way; this decides the order of the columns.)
+ *
  * @param {Block} block
  */
 export function blockText(block) {
   switch (block.type) {
     case 'pre': return block.text;
     case 'heading': return inlineText(block.nodes);
-    case 'table': return [block.head, ...block.rows].map((row) => row.map(inlineText).join(' ')).join('\n');
+    case 'table': {
+      const head = block.head.map(inlineText).join(' ');
+      if (textDirection(head) !== 'auto') return head;
+      return [block.head, ...block.rows].map((row) => row.map(inlineText).join(' ')).join('\n');
+    }
     default: return (block.type === 'p' ? block.lines : block.items).map(inlineText).join('\n');
   }
 }

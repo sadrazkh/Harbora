@@ -47,7 +47,7 @@ const view = ({ inProgress = false, messages = [] } = {}) => ({ id: CONVO, title
 const userMessage = (text) => ({ id: 'u1', role: 'user', text, toolName: null, createdAt: '2026-10-15T10:00:00Z' });
 
 /** `stopCalls` resolve when the test says so: `gate.stop` is the pending api.stop. */
-function setup({ views = [] } = {}) {
+function setup({ views = [], stop } = {}) {
   const prefs = createAssistantPrefs(fakeStorage());
   const timeline = createTimeline();
   const timers = fakeTimers();
@@ -64,6 +64,7 @@ function setup({ views = [] } = {}) {
     async conversation(id) { calls.push({ op: 'get', id }); return queue.shift() ?? view(); },
     stop(id) {
       calls.push({ op: 'stop', id });
+      if (stop) return stop(id);
       return new Promise((resolve, reject) => { gate.stop = { resolve, reject }; });
     },
   };
@@ -175,6 +176,18 @@ test('an error that arrives after the person moved to another conversation is no
   s.gate.stop.reject(new Error('late'));
   await failed;
   assert.equal(s.timeline.notice, null);
+});
+
+test('a stop that fails at once does not leave the button locked', async () => {
+  let attempt = 0;
+  const s = setup({ stop: () => { if (++attempt === 1) throw new Error('sync failure'); return Promise.resolve({ stopped: true }); } });
+  await streaming(s);
+  const failed = await s.session.stop();
+  assert.equal(failed.stopped, false);
+  assert.ok(failed.error);
+  assert.match(s.timeline.notice.messageEn, /sync failure/);
+  assert.deepEqual(await s.session.stop(), { stopped: true }, 'the next press asks again');
+  assert.equal(s.calls.filter((c) => c.op === 'stop').length, 2);
 });
 
 test('with nothing to stop there is no request at all', async () => {

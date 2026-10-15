@@ -490,7 +490,7 @@ export function createAssistantSession({
       const conversationId = timeline.conversationId;
       if (!conversationId || !(timeline.streaming || timeline.resuming)) return Promise.resolve({ stopped: false });
       const following = !timeline.streaming;
-      stopping = (async () => {
+      const asking = (async () => {
         try {
           const outcome = await api.stop(conversationId);
           if (following && timeline.conversationId === conversationId) session.rereadSoon(STOP_REREAD_MS);
@@ -499,11 +499,11 @@ export function createAssistantSession({
           if (timeline.conversationId === conversationId) timeline.notice = { kind: 'stop-failed', ...wordsOf(error) };
           onChange('stop-failed');
           return { stopped: false, error };
-        } finally {
-          stopping = null;
         }
       })();
-      return stopping;
+      stopping = asking;
+      asking.finally(() => { if (stopping === asking) stopping = null; });
+      return asking;
     },
 
     /** The drawer closed: stop re-reading (the island stays mounted). */

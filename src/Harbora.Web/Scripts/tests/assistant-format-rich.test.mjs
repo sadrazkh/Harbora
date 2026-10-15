@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  formatMessage, blockText, inlineText, textDirection, messageCopyText, codeCopyText, listStyleOf,
+  formatMessage, blockText, inlineText, textDirection, createSteadyDirection, messageCopyText, codeCopyText, listStyleOf,
 } from '../islands/assistantFormat.js';
 
 // Round seven P3: bold, numbered lists, headings and tables — still without markup. The tree's leaves
@@ -265,8 +265,41 @@ test('every block\'s prose is available for direction, and code does not vote', 
   const [heading, ol, table] = formatMessage('## عنوان `x`\n1. اول\n2. دوم\n\n| الف | ب |\n|---|---|\n| ج | د |');
   assert.equal(blockText(heading), 'عنوان ');
   assert.equal(blockText(ol), 'اول\nدوم');
-  assert.equal(blockText(table), 'الف ب\nج د');
-  assert.equal(textDirection(blockText(table)), 'rtl');
+  assert.equal(blockText(table), 'الف ب', 'a table reads by its header row');
+});
+
+test('a Persian table of identifiers reads right to left, by its labels; a header without letters falls back to the cells', () => {
+  const [persian] = formatMessage('| نام | نوع | وضعیت |\n|---|---|---|\n| shop-db | postgres 16 | running |\n| old-db | postgres 15 | stopped |');
+  assert.equal(textDirection(blockText(persian)), 'rtl', 'the body has more Latin words than the header has Persian ones');
+  const [english] = formatMessage('| Name | نوع |\n|---|---|\n| shop-db | پایگاه |');
+  assert.equal(textDirection(blockText(english)), 'ltr');
+  const [numbers] = formatMessage('| 1 | 2 |\n|---|---|\n| سه | چهار |');
+  assert.equal(blockText(numbers), '1 2\nسه چهار');
+  assert.equal(textDirection(blockText(numbers)), 'rtl');
+});
+
+test('while a message is being written, no block flips side once it has been decided', () => {
+  const full = [
+    '## وضعیت استقرار برنامه', '',
+    '1. دیتابیس shop-db ساخته شد و آماده است', '2. به shop وصل شد', '',
+    '| نام | نوع | وضعیت |', '|---|---|---|', '| shop-db | postgres 16 | running |', '',
+    'در پایان همه چیز آماده است و کار تمام شد.',
+  ].join('\n');
+  const dir = createSteadyDirection();
+  const seen = new Map();
+  for (let end = 1; end <= full.length; end++) {
+    formatMessage(full.slice(0, end)).forEach((block, index) => {
+      const words = blockText(block).split(/\s+/).filter(Boolean).length;
+      const now = dir(blockText(block), index);
+      // Once a block has four words it is decided, and the answer it gave then is the one it keeps.
+      if (words >= 4) {
+        if (seen.has(index)) assert.equal(now, seen.get(index), `block ${index} flipped at ${end} characters`);
+        seen.set(index, now);
+      }
+    });
+  }
+  assert.ok(seen.size >= 3, 'the heading, the list and the closing paragraph were all decided');
+  assert.equal([...seen.values()].every((d) => d === 'rtl'), true);
 });
 
 test('the copy button under an answer takes the answer as written; secret handles stay handles', () => {
