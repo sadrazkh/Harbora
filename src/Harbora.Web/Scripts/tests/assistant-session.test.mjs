@@ -585,6 +585,59 @@ test('the delayed re-read is skipped when the person moved on, and dropped on di
   assert.equal(t.timers.queue.length, 0);
 });
 
+// ---- round seven, final review: a Stop that lands before the gate's refusal ---------------------------------
+
+const WAITING = { id: '0199d0c4-6a1e-7000-8000-0000000000f2', status: 'pending', expiresAt: '2026-10-11T10:15:00Z', steps: [] };
+
+function stoppedTurn(...between) {
+  return async (args) => {
+    args.onEvent('started', { conversationId: CONVO });
+    for (const [name, data] of between) args.onEvent(name, data);
+    args.onEvent('stopped', { messageEn: 'You stopped this answer.', messageFa: 'این پاسخ را متوقف کردید.' });
+    args.onEvent('done', { conversationId: CONVO, remainingToday: 3 });
+    return { completed: true };
+  };
+}
+
+test('a Stop that ended the turn before anything came of it gives a superseded card its real status back', async () => {
+  // started, stopped, done — no error: the Stop replaced the gate's refusal, and the server never withdrew the card.
+  const s = setup({
+    script: {
+      views: [view({ messages: [userMessage('first')], pendingPlan: WAITING }), view({ messages: [userMessage('first'), userMessage('second', 'u2')], pendingPlan: WAITING })],
+      send: stoppedTurn(),
+    },
+  });
+  await s.session.open(CONVO);
+  await s.session.send('second');
+  const card = s.timeline.items.find((i) => i.kind === 'plan');
+  assert.deepEqual([card.superseded, card.plan.status], [false, 'pending'], 'still waiting, as the server says');
+  assert.ok(s.timeline.items.some((i) => i.kind === 'stopped'), 'the stop line is still shown');
+  assert.equal(s.calls.filter((c) => c.op === 'get').length, 2, 'read once more');
+});
+
+test('a bare Stop the server did withdraw the card for leaves it superseded, as the re-read says', async () => {
+  const s = setup({
+    script: {
+      views: [view({ messages: [userMessage('first')], pendingPlan: WAITING }), view({ messages: [userMessage('first'), userMessage('second', 'u2')], pendingPlan: null })],
+      send: stoppedTurn(),
+    },
+  });
+  await s.session.open(CONVO);
+  await s.session.send('second');
+  assert.equal(s.timeline.items.find((i) => i.kind === 'plan').superseded, true);
+  assert.equal(s.calls.filter((c) => c.op === 'get').length, 2);
+});
+
+test('a Stop after the turn produced something leaves the card superseded and reads nothing again', async () => {
+  for (const between of [[['delta', { text: 'Let me' }], ['message', { id: 'a2', role: 'assistant', text: 'Let me' }]], [['tool', { name: 'get_app', state: 'running' }]], [['plan', { ...WAITING, id: '0199d0c4-6a1e-7000-8000-0000000000f3', status: 'expired' }]]]) {
+    const s = setup({ script: { views: [view({ messages: [userMessage('first')], pendingPlan: WAITING })], send: stoppedTurn(...between) } });
+    await s.session.open(CONVO);
+    await s.session.send('second');
+    assert.equal(s.timeline.items.find((i) => i.plan?.id === WAITING.id).superseded, true, between[0][0]);
+    assert.equal(s.calls.filter((c) => c.op === 'get').length, 1, between[0][0]);
+  }
+});
+
 // ---- round seven, final review: a conversation deleted in another tab ---------------------------------------
 
 const GONE_EN = 'This conversation was deleted — your message is back in the box; send it again to start a new one.';

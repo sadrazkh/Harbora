@@ -555,6 +555,9 @@ export function createAssistantSession({
       // was a refusal at the gate (no model, today's cap), which withdraws no waiting card.
       let progressed = false;
       let refusedAtGate = false;
+      // A Stop that ended the turn before it produced anything — possibly before the gate, whose refusal it
+      // then replaced (`started`, `stopped`, `done`, no error): the server may not have withdrawn the card.
+      let stoppedBare = false;
       try {
         outcome = await api.send({
           conversationId,
@@ -577,6 +580,7 @@ export function createAssistantSession({
             if (name === 'done' && isStopNotice(timeline.notice)) timeline.notice = null; // "try again" and "finishing" are moot
             if (['tool', 'delta', 'message', 'plan', 'executed'].includes(name)) progressed = true;
             if (name === 'error' && started && !progressed) refusedAtGate = true;
+            if (name === 'stopped' && started && !progressed) stoppedBare = true;
             if ((name === 'started' || name === 'done') && timeline.conversationId) prefs.setConversationId(timeline.conversationId);
             onChange(name);
           },
@@ -652,9 +656,10 @@ export function createAssistantSession({
         return { sent: false, restoreDraft: message };
       }
 
-      // Refused at the gate: the cards marked superseded on `started` were not withdrawn after all —
-      // the server's own account of the conversation says what they are.
-      if (refusedAtGate && conversationId && timeline.items.some((i) => i.kind === 'plan' && i.superseded)) {
+      // Refused at the gate, or stopped before anything came of it (a Stop that lands before a refusal is
+      // that turn's ending, with no error): the cards marked superseded on `started` may not have been
+      // withdrawn after all — the server's own account of the conversation says what they are.
+      if ((refusedAtGate || stoppedBare) && conversationId && timeline.items.some((i) => i.kind === 'plan' && i.superseded)) {
         try {
           const view = await api.conversation(conversationId);
           if (timeline.conversationId === conversationId) restoreSuperseded(timeline, view);
