@@ -13,6 +13,11 @@ import { createConversationList, groupConversations, groupLabel, timeLabel } fro
 // closing the drawer), and a row that is deleted hands the focus to its neighbour instead of dropping it
 // on the page. It tells its parent three things — `open(id)`, `back`, and `deleted(id)` — and the parent
 // decides what a deleted conversation means for the one on screen.
+//
+// `deleted` is declared as a prop (`onDeleted`) rather than an emit, though the parent writes
+// `@deleted="…"` either way: a delete that is still out when the person goes back to the conversation
+// finishes after this component is gone, and Vue drops an emit from an unmounted component — the pane
+// would then keep showing, and sending into, a conversation the server has deleted.
 
 const props = defineProps<{
   api: any;
@@ -21,11 +26,12 @@ const props = defineProps<{
   currentId: string | null;
   /** Why the conversation just asked for could not be opened (the parent's words). */
   openError?: { messageEn: string; messageFa: string } | null;
+  /** A conversation is gone: deleted here, or found already gone. */
+  onDeleted?: (id: string) => void;
 }>();
 const emit = defineEmits<{
   (e: 'open', id: string): void;
   (e: 'back'): void;
-  (e: 'deleted', id: string): void;
 }>();
 
 const t = (en: string, persian: string) => (props.fa ? persian : en);
@@ -33,7 +39,7 @@ const say = (w: { messageEn: string; messageFa: string } | null | undefined) =>
   (w ? (props.fa ? w.messageFa || w.messageEn : w.messageEn || w.messageFa) : '');
 const Back = props.fa ? ChevronRight : ChevronLeft;
 
-const list = createConversationList({ api: props.api, wrap: reactive, onDeleted: (id: string) => emit('deleted', id) });
+const list = createConversationList({ api: props.api, wrap: reactive, onDeleted: (id: string) => props.onDeleted?.(id) });
 const state = list.state as any;
 
 const groups = computed(() => groupConversations(state.rows, new Date()));
