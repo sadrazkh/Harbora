@@ -23,7 +23,8 @@ namespace Harbora.Infrastructure.Maintenance;
 /// <b>No signed-in user, so no query filter.</b> It runs outside any request, and every read here ignores
 /// the workspace filter and says which rows it means in its own predicate: a tenant filter in a sweeper
 /// reads an empty table and reports success, which has happened in this codebase before. A conversation is
-/// judged by <c>UpdatedAt</c> — moved by every message and every plan outcome — and a busy one (a live turn,
+/// judged by <c>UpdatedAt</c> — moved by every message and every plan outcome, but not by the startup pass
+/// that settles a plan a restart cut off (<see cref="AgentPlanStartupReconciler"/>) — and a busy one (a live turn,
 /// a plan executing) is kept exactly as the person's own "delete all" keeps it
 /// (<see cref="AgentConversationDeletion"/>). Its messages and plans go with it; the audit log does not.
 /// </para>
