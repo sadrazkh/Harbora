@@ -12,6 +12,9 @@
 //      reload before it was saved does not lose the words — they come back in the composer;
 //   3. a conversation that is still being answered (`inProgress`) is shown with the typing indicator and
 //      re-read every few seconds until it is not.
+// A conversation deleted somewhere else while it is on screen (another tab, the retention setting) is let
+// go of the moment the server says so — a send answered 404, or a read answered 404 — with the words back
+// in the composer, rather than staying on screen to be sent to.
 //
 // Plain JS over a plain timeline object, with the API, storage and timers injected, so `node --test`
 // drives every one of these paths without a browser; AssistantPanel.vue is the wiring.
@@ -70,6 +73,29 @@ const UNSURE_SENT = {
   messageFa: 'معلوم نیست پیام شما به دستیار رسیده باشد. دوباره در کادر پایین است — پیش از فرستادن دوباره، گفت‌وگو را نگاه کنید.',
 };
 
+// The conversation on screen was deleted somewhere else — another tab, the retention setting. Nothing can
+// be sent to it, and nothing sent to it was kept: the pane starts a new one, and the words go back in the box.
+const CONVERSATION_GONE = {
+  kind: 'gone',
+  messageEn: 'This conversation was deleted — your message is back in the box; send it again to start a new one.',
+  messageFa: 'این گفت‌وگو حذف شده است — پیامتان در گفت‌وگوی تازه است، دوباره بفرستید.',
+};
+
+// The same, found by the poller while no words of the person's were waiting: there is nothing to give back,
+// so the notice does not say there is.
+const CONVERSATION_GONE_QUIETLY = {
+  kind: 'gone',
+  messageEn: 'This conversation was deleted.',
+  messageFa: 'این گفت‌وگو حذف شده است.',
+};
+
+/**
+ * Whether a failed read of a conversation says it is gone: 404, or a 403 that is not the workspace's
+ * assistant being switched off (`feature_not_enabled` — the conversation is still there, and saying it was
+ * deleted would be false).
+ */
+const isGone = (error) => error?.status === 404 || (error?.status === 403 && error?.code !== 'feature_not_enabled');
+
 /**
  * Re-reads a conversation every `intervalMs` while the server says it is still being answered.
  * Starts on `inProgress`, stops when a read says it is over (after drawing that final state), and
@@ -100,7 +126,7 @@ export function createResumePoller({
       if (gen !== generation) return;
       if (error?.status === 404 || error?.status === 403 || ++failures >= maxFailures) {
         generation++;
-        onGone?.(error);
+        onGone?.(error, conversationId);
         return;
       }
       schedule(gen);
@@ -177,9 +203,16 @@ export function createAssistantSession({
       if (timeline.notice?.kind === 'busy' || isStopNotice(timeline.notice)) timeline.notice = null; // the answer it waited for is in
       onChange('settled');
     },
-    onGone: () => {
+    onGone: (error, id) => {
       timeline.resuming = false;
       endStop();
+      // Deleted while it was being followed: the pane lets go of it. The words the person was told are back
+      // in the box ("still answering", or a message that may not have been sent) are still there to send.
+      if (isGone(error) && id && timeline.conversationId === id) {
+        const handedBack = timeline.notice?.kind === 'busy' || timeline.notice?.kind === 'restored';
+        conversationGone(id, handedBack ? CONVERSATION_GONE : CONVERSATION_GONE_QUIETLY);
+        return;
+      }
       if (timeline.notice?.kind === 'busy') timeline.notice = null;
       onChange('settled');
     },
@@ -351,6 +384,17 @@ export function createAssistantSession({
     };
   }
 
+  /**
+   * The conversation on screen is gone — deleted in another tab, or by the retention setting. The pane lets
+   * go of it the way a delete from the list does (forget: a new, empty conversation; its remembered id and
+   * waiting words dropped, so a reload does not try it again) and says so, gently: it is not a failure.
+   */
+  function conversationGone(id, notice) {
+    session.forget(id);
+    timeline.notice = notice;
+    onChange('gone');
+  }
+
   const session = {
     /**
      * Opens a conversation. Returns `{ restoreDraft }` when a message from before a reload never
@@ -455,7 +499,8 @@ export function createAssistantSession({
 
     /**
      * Sends one message. Returns `{ sent, restoreDraft? }`: `restoreDraft` is the text to put back in
-     * the composer when the message was not taken (still answering, or it never reached the server).
+     * the composer when the message was not taken (still answering, it never reached the server, or the
+     * conversation had been deleted elsewhere — then a new, empty one is on screen to send it to).
      */
     async send(text) {
       const message = String(text ?? '').trim();
@@ -562,12 +607,20 @@ export function createAssistantSession({
         return { sent: false, restoreDraft: message };
       }
 
+      if (outcome?.gone) {
+        // 404 on the send: the conversation is not there, so the message was certainly not taken — and there
+        // is nothing to read back. A new conversation takes its place, with the words back in the box.
+        conversationGone(conversationId, CONVERSATION_GONE);
+        return { sent: false, restoreDraft: message };
+      }
+
       if (!started && !outcome?.aborted) {
         // `started` never arrived, which does not prove the server did not take the message: the
         // connection can break after it was saved, and the server answers on regardless. So the
         // conversation is read again before anything is called "not sent" — offering a resend of a
         // message the server already has would put it in the conversation twice.
         let unsure = false;
+        let gone = false;
         if (conversationId) {
           timeline.loading = true;
           try {
@@ -579,12 +632,18 @@ export function createAssistantSession({
               onChange('opened');
               return { sent: true };
             }
-          } catch {
-            unsure = true;
+          } catch (error) {
+            // A conversation that is not there kept nothing sent to it: not "unsure", gone.
+            if (isGone(error)) gone = true;
+            else unsure = true;
           } finally {
             timeline.loading = false;
           }
           if (timeline.conversationId !== conversationId) return { sent: false }; // moved on meanwhile
+          if (gone) {
+            conversationGone(conversationId, CONVERSATION_GONE);
+            return { sent: false, restoreDraft: message };
+          }
         }
         markUnsent(timeline, userKey, unsure ? 'unsure' : true);
         prefs.clearOutbox(conversationId);

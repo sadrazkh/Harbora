@@ -61,6 +61,8 @@ const session = createAssistantSession({
     scrollToEnd(what === 'sent' || what === 'opened');
     // A conversation that finished while it was being re-read: today's count has moved.
     if (what === 'settled') refreshStatus();
+    // Deleted elsewhere and replaced by a new one: as after a delete from the list, no half-typed secret stays.
+    if (what === 'gone') secretForm.close();
   },
 });
 const thinking = computed(() => thinkingShows(timeline));

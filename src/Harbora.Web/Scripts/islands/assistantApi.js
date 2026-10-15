@@ -316,7 +316,7 @@ export function createAssistantApi({ fetch: fetchImpl = globalThis.fetch?.bind(g
      * throws for anything the network or the server did: those arrive as an `error` event shaped
      * like the server's own ({ messageEn, messageFa }), so the pane has one path for both.
      *
-     * @returns {Promise<{ completed: boolean, aborted?: true }>} completed: `done` arrived.
+     * @returns {Promise<{ completed: boolean, aborted?: true, busy?: true, gone?: true }>} completed: `done` arrived.
      */
     async send({ conversationId, text, page, onEvent, signal }) {
       const target = conversationId ? encodeURIComponent(conversationId) : 'new';
@@ -361,6 +361,10 @@ export function createAssistantApi({ fetch: fetchImpl = globalThis.fetch?.bind(g
         if (response.status === 409) {
           return { completed: false, busy: true, notice: fromServer ? { messageEn, messageFa } : words('stillAnswering') };
         }
+        // 404 for a conversation named by its id: it is not there any more (deleted in another tab, or by
+        // the retention setting), so the message was not taken. Handed back too, not reported: the pane
+        // says that once, in words that fit, instead of an error over a message it then calls unsure.
+        if (response.status === 404 && conversationId) return { completed: false, gone: true };
         report({ messageEn, messageFa });
         return { completed: false };
       }

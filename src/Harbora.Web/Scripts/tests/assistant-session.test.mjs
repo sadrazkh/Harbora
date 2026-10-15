@@ -584,3 +584,128 @@ test('the delayed re-read is skipped when the person moved on, and dropped on di
   t.session.dispose();
   assert.equal(t.timers.queue.length, 0);
 });
+
+// ---- round seven, final review: a conversation deleted in another tab ---------------------------------------
+
+const GONE_EN = 'This conversation was deleted — your message is back in the box; send it again to start a new one.';
+const GONE_FA = 'این گفت‌وگو حذف شده است — پیامتان در گفت‌وگوی تازه است، دوباره بفرستید.';
+const notFound = () => Object.assign(new Error('There is no such conversation.'), { status: 404, code: 'not_found', messageEn: 'There is no such conversation.', messageFa: 'x' });
+
+/** The pane forgot the conversation: a new, empty one on screen, nothing remembered, no waiting words. */
+function assertForgotten(s) {
+  assert.equal(s.timeline.conversationId, null, 'a new, empty conversation is on screen');
+  assert.deepEqual(s.timeline.items, []);
+  assert.equal(s.storage.data[STORAGE_CONVERSATION], undefined, 'a reload will not try it again');
+  assert.equal(s.storage.data[STORAGE_OUTBOX], undefined);
+  assert.equal(s.timeline.streaming, false);
+  assert.equal(s.timeline.resuming, false);
+  assert.equal(s.timeline.loading, false);
+  assert.equal(s.session.polling, false);
+}
+
+test('a send answered 404 starts a new conversation, puts the words back and says it was deleted — no "may not have been sent"', async () => {
+  const changes = [];
+  const s = setup({
+    stored: { [STORAGE_CONVERSATION]: CONVO },
+    script: { views: [view({ messages: [userMessage('first')] })], send: async () => ({ completed: false, gone: true }) },
+  });
+  s.session = createAssistantSession({ api: s.api, prefs: s.prefs, timeline: s.timeline, timers: s.timers, onChange: (w) => changes.push(w), now: () => Date.parse('2026-10-11T10:00:00Z') });
+  await s.session.restore();
+  const result = await s.session.send('second');
+  assert.deepEqual(result, { sent: false, restoreDraft: 'second' });
+  assertForgotten(s);
+  assert.deepEqual({ ...s.timeline.notice }, { kind: 'gone', messageEn: GONE_EN, messageFa: GONE_FA });
+  assert.equal(s.calls.filter((c) => c.op === 'get').length, 1, 'nothing is read back: the 404 already said it was not sent');
+  assert.ok(changes.includes('gone'));
+  // The next message goes to a new conversation, created first as always.
+  s.api.send = async (args) => {
+    s.calls.push({ op: 'send', conversationId: args.conversationId });
+    args.onEvent('started', { conversationId: args.conversationId });
+    args.onEvent('done', { conversationId: args.conversationId, remainingToday: 3 });
+    return { completed: true };
+  };
+  await s.session.send('second');
+  assert.deepEqual(s.calls.slice(-2).map((c) => c.op), ['create', 'send']);
+  assert.equal(s.timeline.notice, null, 'the notice goes with the next message');
+});
+
+test('no "started" and the read-back answers 404: deleted, not unsure — and the error line goes with it', async () => {
+  const s = setup({
+    script: {
+      views: [view({ messages: [userMessage('first')] }), notFound()],
+      send: async (args) => { args.onEvent('error', { messageEn: 'The connection was lost.', messageFa: 'x' }); return { completed: false }; },
+    },
+  });
+  await s.session.open(CONVO);
+  const result = await s.session.send('second');
+  assert.deepEqual(result, { sent: false, restoreDraft: 'second' });
+  assertForgotten(s);
+  assert.deepEqual({ ...s.timeline.notice }, { kind: 'gone', messageEn: GONE_EN, messageFa: GONE_FA });
+});
+
+test("a read-back 403 is gone too — unless it is the workspace's assistant being switched off, which deletes nothing", async () => {
+  const forbidden = Object.assign(new Error('no'), { status: 403, code: null, messageEn: 'You do not have permission to do this.', messageFa: 'x' });
+  const s = setup({
+    script: {
+      views: [view({ messages: [userMessage('first')] }), forbidden],
+      send: async (args) => { args.onEvent('error', { messageEn: 'x', messageFa: 'x' }); return { completed: false }; },
+    },
+  });
+  await s.session.open(CONVO);
+  await s.session.send('second');
+  assert.equal(s.timeline.notice.kind, 'gone');
+
+  const locked = Object.assign(new Error('locked'), { status: 403, code: 'feature_not_enabled', messageEn: 'The assistant is not enabled for this workspace.', messageFa: 'x' });
+  const t = setup({
+    script: {
+      views: [view({ messages: [userMessage('first')] }), locked],
+      send: async (args) => { args.onEvent('error', { messageEn: 'The assistant is not enabled for this workspace.', messageFa: 'x' }); return { completed: false }; },
+    },
+  });
+  await t.session.open(CONVO);
+  await t.session.send('second');
+  assert.equal(t.timeline.conversationId, CONVO, 'the conversation is still there');
+  assert.notEqual(t.timeline.notice.kind, 'gone');
+});
+
+test('the poller finding the conversation gone after "still answering" lets go of it; the words are still in the box', async () => {
+  const s = setup({
+    script: {
+      views: [view({ messages: [userMessage('first')] }), view({ messages: [userMessage('first')], inProgress: true }), notFound()],
+      send: async () => ({ completed: false, busy: true, notice: { messageEn: 'Still answering.', messageFa: 'x' } }),
+    },
+  });
+  await s.session.open(CONVO);
+  assert.deepEqual(await s.session.send('second'), { sent: false, restoreDraft: 'second' });
+  await s.timers.next(); // still answering
+  assert.equal(s.timeline.resuming, true);
+  await s.timers.next(); // deleted in another tab meanwhile
+  assertForgotten(s);
+  assert.deepEqual({ ...s.timeline.notice }, { kind: 'gone', messageEn: GONE_EN, messageFa: GONE_FA });
+});
+
+test('the poller finding a followed conversation gone, with no words waiting, says only that it was deleted', async () => {
+  const s = setup({
+    stored: { [STORAGE_CONVERSATION]: CONVO },
+    script: { views: [view({ messages: [userMessage('q'), assistantMessage('working on it')], inProgress: true }), notFound()] },
+  });
+  await s.session.restore();
+  assert.equal(s.session.polling, true);
+  await s.timers.next();
+  assertForgotten(s);
+  assert.deepEqual({ ...s.timeline.notice }, { kind: 'gone', messageEn: 'This conversation was deleted.', messageFa: 'این گفت‌وگو حذف شده است.' });
+});
+
+test('a poller that only fails to read leaves the conversation where it is: unreadable is not deleted', async () => {
+  const offline = () => Object.assign(new Error('offline'), { status: 0 });
+  const s = setup({
+    stored: { [STORAGE_CONVERSATION]: CONVO },
+    script: { views: [view({ messages: [userMessage('q')], inProgress: true }), offline(), offline(), offline(), offline()] },
+  });
+  await s.session.restore();
+  for (let i = 0; i < 4; i++) await s.timers.next();
+  assert.equal(s.session.polling, false, 'it gave up');
+  assert.equal(s.timeline.conversationId, CONVO);
+  assert.equal(s.storage.data[STORAGE_CONVERSATION], CONVO);
+  assert.notEqual(s.timeline.notice?.kind, 'gone');
+});

@@ -400,3 +400,19 @@ test('a refusal keeps the server\'s machine reason as a code, never as the words
     return true;
   });
 });
+
+// ---- round seven, final review: a conversation deleted elsewhere ------------------------------------------
+
+test('a send answered 404 for a conversation id is handed back as gone, never reported as an error', async () => {
+  const { fetch } = recordingFetch(() => jsonResponse({ error: 'not_found', messageEn: 'There is no such conversation.', messageFa: 'چنین گفت‌وگویی وجود ندارد.' }, 404));
+  const { events, outcome } = await sendCollect(createAssistantApi({ fetch }), { conversationId: '0199d0c4-6a1e-7000-8000-000000000001', text: 'x', page: null });
+  assert.deepEqual(events, [], 'the pane says it once, in its own words');
+  assert.deepEqual(outcome, { completed: false, gone: true });
+});
+
+test('a 404 to "new" is not a deleted conversation: it is reported like any other refusal', async () => {
+  const { fetch } = recordingFetch(() => new Response('', { status: 404 }));
+  const { events, outcome } = await sendCollect(createAssistantApi({ fetch }), { conversationId: null, text: 'x', page: null });
+  assert.deepEqual(outcome, { completed: false });
+  assert.deepEqual(events.map(([n]) => n), ['error']);
+});
