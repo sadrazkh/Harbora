@@ -125,3 +125,78 @@ covered by the node tests.)
 - Interaction with P2's and P3's changes to `AssistantPanel.vue`: not merged here, so not run together.
 - The history tests were last run in the four time zones before the final component edit; the component edit did not
   touch the modules, and the full node suite (285) was re-run after it.
+
+## Fix pass (after review: Approved, no Critical/Important)
+
+All six items done; the lucide import edit in `AssistantPanel.vue` is left as it was.
+
+1. **A 409 without words.** `assistantHistory.js` owns `BUSY_WORDS` — «هنوز در حال پاسخ یا اجراست — وقتی تمام شد دوباره
+   امتحان کنید.» / "Still answering or running — try again when it has finished." — used for a 409 (delete one and delete
+   all) whose body had no `messageEn`/`messageFa`. To tell the server's words from the pane's stand-in
+   (`describeFailure`'s generic "no longer possible…" 409 sentence), `AssistantRequestError` now carries `fromServer`
+   (already computed by `describeFailure`, just not kept; default `false`). **Touched outside my area:** that one field
+   and its comment in `assistantApi.js` (the error class, not one of P1's functions). The server's own words are never
+   replaced, other statuses never get the busy sentence. Tests: four shapes of wordless 409 (nothing, blank, stand-in,
+   a code but no sentence) for delete one and delete all; a 409 with the server's words keeps them; a 502 does not get the
+   busy sentence; and through the real api: 409 with words → `fromServer: true`, empty / code-only / 502 → `false`.
+2. **Delete all resolves the open conversation when the answer arrives.** `confirmDeleteAll({ openId })` takes a string or
+   a function, called after the response (also the id used for the follow-up `GET` when some were skipped).
+   `AssistantHistory.vue` passes `currentIdNow()`, which reads a new optional prop `getCurrentId`; `AssistantPanel.vue` passes
+   `() => timeline.conversationId` (**touched outside my area, two lines:** the prop in the `<AssistantHistory>` tag and a
+   one-line function beside `onConversationDeleted`). A prop value would be stale once the list is unmounted, hence the getter.
+   Tests: open id changes during the request → the later one is forgotten and the earlier one is not mentioned; same with
+   skipped > 0 (the `GET` goes to the later one, 404 → gone); a getter answering nothing forgets nothing.
+3. **A delete that fails out of sight.** If the failed delete's row is no longer in the list (a newer search filtered it
+   out), the strip cannot be drawn, so `state.failure = { id, title, error, refused }` is set and the confirm cleared; the
+   view shows it at the top of the list ("This conversation was not deleted", the title, the server's words, «باشه»).
+   While such a delete is still out a status line at the top says «در حال حذف: title…». A new question (`ask` / `askAll`) or
+   «باشه» clears the line. A success out of sight leaves no line and still tells the pane. Tests for 409, other failure, success,
+   and that a failure with the row still shown stays in the row.
+   **A delete that outlives its list:** handled, with a deletion ledger (`createDeletionLedger`, shared by every list of the
+   page; the component holds one at module level, because it is made afresh each time the person returns to the list).
+   A list asked to delete writes the id to the ledger when the server says it is gone; lists made later filter their pages
+   through it, and a list already showing the row (opened while the delete was out) loses the row when the delete finishes
+   (and drops a question it was holding about that row). Delete all tells the other live lists to reload. The list that
+   issued the delete still tells the pane (`onDeleted`) after it was disposed. Tests: row removed from the fresh list
+   when the old delete finishes; a list opened after it finished does not show the row even if the server's answer still has
+   it; a question on that row in the new list is dropped; delete all pending across dispose makes the new list reload and the
+   disposed one asks for nothing; lists without a shared ledger share nothing. Browser harness: slow delete of one row, Back,
+   reopen → the row is listed while the delete is out and gone when it finishes.
+   (A failure after dispose is invisible by nature — the person left; nothing was deleted and the next list shows the row.)
+4. **Rules out of the `.vue`.** `neighbourAfter(rows, id)` and `keptMessage(count, fa)` are in `assistantHistory.js` with tests
+   (next / previous / only row / not found / empty / undefined; singular, plural, Persian digits, thousands separator).
+   The DOM-only focus handling stays in the component, with one correction found while testing in the browser: focus is now
+   moved only when the person's last action moved it (a strip they opened, a question ending while the focus is still in it or
+   has fallen to the page) — so someone typing in the search box while a delete finishes is not pulled away.
+5. **One `now` per drawing, cached formats, a DST test.** The component computes `{ now, groups }` once per render and uses
+   that `now` for every row's `timeLabel`. `timeLabel` builds its `Intl.DateTimeFormat` once per (language, time-or-date);
+   test: 200 labels build at most 4 formats (via a counting proxy). DST test: `process.env.TZ = 'America/New_York'` inside the
+   test (asserts that the zone took effect, so it cannot pass vacuously), the 23-hour day (2026-03-08) and the 25-hour day
+   (2026-11-01): yesterday holds for the whole day, and the 7/8-day edge holds where a "divide the milliseconds by 24 h"
+   rule gives the wrong group (8 days back, but 6 d 23 h 40 min / 7 d 31 min have passed).
+6. **No `fetchFirst` after unmount.** `dispose()` sets a flag; `load`, a fired search timer, `loadMore` and a ledger-requested
+   reload all return without asking. Test: after dispose nothing is asked.
+
+Harbora-side contract note unchanged: the server's 409 should still carry `messageEn`/`messageFa`; without them the pane now
+says the sentence above instead of the generic one.
+
+### Commands and what they printed (fix pass)
+
+- `node --test Scripts/tests/*.test.mjs` (in `src/Harbora.Web`) → `# tests 305 / # pass 305 / # fail 0`
+  (285 before: history 42 → 61, api/session 13 → 14).
+- `TZ=UTC`, `Asia/Tehran`, `America/New_York`, `Pacific/Auckland node --test Scripts/tests/assistant-history.test.mjs` →
+  `# pass 61 # fail 0` each.
+- Mutation check of the new rules (each mutation made a test fail, then reverted): 409 sentence disabled (1 fail), open-id
+  getter ignored (2), out-of-sight failure branch removed (2), ledger filter removed (2), ledger removal notification removed
+  (2), delete-all reload notification removed (1), dispose guard removed (2), formatter cache removed (1), calendar-day
+  counting replaced by milliseconds / 24 h (4), `neighbourAfter` without the previous-row fallback (1).
+- `npm run build` → `BUILD_EXIT=0` (`✓ built in 5.43s`, `AssistantPanel-*.js 87.25 kB`). Run with nothing else building in this
+  worktree.
+- Browser harness (`assistant-history.preview.html`, new `?delay=<ms>` knob), built-in browser pane, `?scenario=busy&delay=2500`:
+  delete a row, type a search that filters it out → "Deleting: Create Postgres 16…" at the top, focus stays in the search box;
+  when the 409 arrives the failure block shows the title and the busy words with «OK», rows unchanged, focus still in the box.
+  `?scenario=slow`: delete one row, Back, reopen → row listed while the delete is out, gone when it finishes (29 rows, server 74);
+  delete all, Back, reopen, open the second conversation while the request is out → when it finishes the pane has forgotten the
+  second conversation (remembered id cleared, empty conversation), not the first.
+- Not re-run in the fix pass: the dotnet build/test (no C# changed since the run in the main report: `Harbora.Tests.dll`
+  7304 passed). The report above stays as it was written.

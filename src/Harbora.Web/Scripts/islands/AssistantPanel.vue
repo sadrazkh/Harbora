@@ -179,6 +179,8 @@ async function openConversation(id: string) {
 function onConversationDeleted(id: string) {
   if (session.forget(id)) secretForm.close();
 }
+// Asked by "delete all" when the server has answered: the conversation on screen then, not when it was pressed.
+const currentConversationId = () => timeline.conversationId;
 
 function newConversation() {
   secretForm.close();
@@ -428,8 +430,8 @@ const suggestions = fa
     </header>
 
     <!-- Conversation list -->
-    <AssistantHistory v-if="view === 'history'" :api="api" :fa="fa" :current-id="timeline.conversationId" :open-error="openError"
-                      @open="openConversation" @back="view = 'chat'" @deleted="onConversationDeleted" />
+    <AssistantHistory v-if="view === 'history'" :api="api" :fa="fa" :current-id="timeline.conversationId" :get-current-id="currentConversationId"
+                      :open-error="openError" @open="openConversation" @back="view = 'chat'" @deleted="onConversationDeleted" />
 
     <!-- The conversation -->
     <div v-else ref="scroller" class="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-4 py-4"

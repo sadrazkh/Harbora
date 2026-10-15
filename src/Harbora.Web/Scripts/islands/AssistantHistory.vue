@@ -1,9 +1,17 @@
+<script lang="ts">
+import { createDeletionLedger } from './assistantHistory.js';
+
+// One for the page, not for each opening of the list: this component is made afresh every time the person
+// comes back to the list, and a delete they started in the last one finishes in the next one's time.
+const deletions = createDeletionLedger();
+</script>
+
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { ChevronLeft, ChevronRight, LoaderCircle, MessageSquare, Search, Trash2, TriangleAlert } from 'lucide';
 import { AssistantIcon } from './assistantIcon';
 import { textDirection } from './assistantFormat.js';
-import { createConversationList, groupConversations, groupLabel, timeLabel } from './assistantHistory.js';
+import { createConversationList, groupConversations, groupLabel, keptMessage, neighbourAfter, timeLabel } from './assistantHistory.js';
 
 // The pane's conversation list: a title search, rows grouped by day, "show more", and deleting — one
 // conversation (the row turns into a question, in place) or all of them (the question at the bottom).
@@ -24,6 +32,12 @@ const props = defineProps<{
   fa: boolean;
   /** The conversation on screen, which gets the soft background. */
   currentId: string | null;
+  /**
+   * The conversation on screen *now* — "delete all" asks when the server has answered, which may be after
+   * the person opened another one (or went back to the conversation and this list is no longer drawn, when
+   * `currentId` is no longer kept up to date).
+   */
+  getCurrentId?: () => string | null;
   /** Why the conversation just asked for could not be opened (the parent's words). */
   openError?: { messageEn: string; messageFa: string } | null;
   /** A conversation is gone: deleted here, or found already gone. */
@@ -39,21 +53,29 @@ const say = (w: { messageEn: string; messageFa: string } | null | undefined) =>
   (w ? (props.fa ? w.messageFa || w.messageEn : w.messageEn || w.messageFa) : '');
 const Back = props.fa ? ChevronRight : ChevronLeft;
 
-const list = createConversationList({ api: props.api, wrap: reactive, onDeleted: (id: string) => props.onDeleted?.(id) });
+const list = createConversationList({
+  api: props.api, wrap: reactive, ledger: deletions, onDeleted: (id: string) => props.onDeleted?.(id),
+});
 const state = list.state as any;
 
-const groups = computed(() => groupConversations(state.rows, new Date()));
-const working = computed(() => state.confirm?.phase === 'working');
-const number = (n: number) => new Intl.NumberFormat(props.fa ? 'fa-IR' : 'en').format(n);
-const keptLine = computed(() => {
-  const n = state.kept as number;
-  return n === 1
-    ? t('1 conversation was kept because it is still answering or running something.', '۱ گفت‌وگو حذف نشد، چون هنوز در حال پاسخ یا اجراست.')
-    : t(`${number(n)} conversations were kept because they are still answering or running something.`, `${number(n)} گفت‌وگو حذف نشد، چون هنوز در حال پاسخ یا اجراست.`);
+// One moment for the whole drawing: the groups and every row's time are worked out against the same "now",
+// so a row cannot be in the "today" group with a label that reads as yesterday's.
+const listed = computed(() => {
+  const now = new Date();
+  return { now, groups: groupConversations(state.rows, now) };
 });
+const working = computed(() => state.confirm?.phase === 'working');
+const keptLine = computed(() => keptMessage(state.kept, props.fa));
+const currentIdNow = () => (props.getCurrentId ? props.getCurrentId() : props.currentId);
 
 const asking = (id: string) => state.confirm?.target === 'one' && state.confirm.id === id;
 const askingAll = computed(() => state.confirm?.target === 'all');
+// A delete is out for a row that is not on screen (a newer search filtered it out): there is no strip to say
+// it is under way, so a line at the top does.
+const deletingOutOfSight = computed(() => {
+  const c = state.confirm;
+  return c?.target === 'one' && c.phase === 'working' && !state.rows.some((row: any) => row.id === c.id) ? c : null;
+});
 
 // A danger button inside the soft-danger strip is an outline on the surface colour: a soft red button on
 // a soft red strip would not read as a button.
@@ -67,8 +89,7 @@ const searchBox = ref<HTMLInputElement | null>(null);
 let returnTo: { id: string | null; next: string | null } | null = null;
 
 function askRow(id: string) {
-  const at = state.rows.findIndex((row: any) => row.id === id);
-  returnTo = { id, next: state.rows[at + 1]?.id ?? state.rows[at - 1]?.id ?? null };
+  returnTo = { id, next: neighbourAfter(state.rows, id) };
   list.ask(id);
 }
 
@@ -77,21 +98,31 @@ function askAll() {
   list.askAll();
 }
 
+// The keyboard is moved only when it is the person's last action that moved it: a strip they opened, a
+// question that ends while the focus is still in it (or has fallen to the page because its button went).
+// Someone typing in the search box while a delete finishes is not pulled away from it.
+const focusLost = () => !document.activeElement || document.activeElement === document.body;
+
 watch(() => {
   const c = state.confirm;
   return c ? `${c.target}|${c.id}|${c.phase}` : '';
-}, async (now) => {
+}, async (now, before) => {
   await nextTick();
   const el = root.value;
   if (!el) return;
   if (now) {
-    // «نه» / «باشه» / «دوباره»; while the request is out, the strip itself, so Esc still lands in it.
-    (el.querySelector<HTMLElement>('[data-confirm-focus]') ?? el.querySelector<HTMLElement>('[data-confirm-strip]'))?.focus();
+    const strip = el.querySelector<HTMLElement>('[data-confirm-strip]');
+    const question = (key: string) => key.split('|').slice(0, 2).join('|');
+    // A question that is only changing phase (asking, working, refused) keeps the focus where it is unless
+    // that was in the strip. «نه» / «باشه» / «دوباره» take it; while the request is out, the strip itself,
+    // so Esc still lands in it.
+    if (before && question(before) === question(now) && !focusLost() && !strip?.contains(document.activeElement)) return;
+    (el.querySelector<HTMLElement>('[data-confirm-focus]') ?? strip)?.focus();
     return;
   }
   const back = returnTo;
   returnTo = null;
-  if (!back) return;
+  if (!back || !focusLost()) return;
   const target = (back.id && el.querySelector<HTMLElement>(`[data-trash="${back.id}"]`))
     || (back.next && el.querySelector<HTMLElement>(`[data-conversation-open="${back.next}"]`))
     || (back.id === null && el.querySelector<HTMLElement>('[data-delete-all]'))
@@ -131,6 +162,22 @@ onUnmounted(() => list.dispose());
     <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-3" :aria-busy="state.loading ? 'true' : 'false'" data-history-list>
       <p v-if="openError" class="alert-danger mt-2 text-sm" role="alert" :dir="textDirection(say(openError))">{{ say(openError) }}</p>
       <p v-if="state.kept > 0" class="mt-2 rounded-lg bg-surface-2 px-3 py-2 text-sm leading-5 text-ink-muted" role="status" data-history-kept>{{ keptLine }}</p>
+      <p v-if="deletingOutOfSight" class="mt-2 flex items-center gap-2 rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger" role="status" data-history-deleting>
+        <AssistantIcon :icon="LoaderCircle" spin /><span class="min-w-0 truncate" :dir="textDirection(deletingOutOfSight.title)">{{ t('Deleting', 'در حال حذف') }}: {{ deletingOutOfSight.title || t('Untitled', 'بی‌عنوان') }}…</span>
+      </p>
+      <!-- A delete that failed after its row had been filtered out by a newer search: nothing is left to
+           carry the words, and "it vanished" must not be what the person concludes. -->
+      <div v-if="state.failure" class="alert-danger mt-2 space-y-2 text-sm" role="alert" data-history-failure>
+        <p class="flex items-start gap-2 leading-5">
+          <AssistantIcon :icon="TriangleAlert" :size="14" class="mt-0.5" />
+          <span class="min-w-0">
+            <span class="block font-medium">{{ t('This conversation was not deleted', 'این گفت‌وگو حذف نشد') }}</span>
+            <span class="block break-words text-[11px] text-ink-muted" :dir="textDirection(state.failure.title)">{{ state.failure.title || t('Untitled', 'بی‌عنوان') }}</span>
+            <span class="mt-0.5 block" :dir="textDirection(say(state.failure.error))">{{ say(state.failure.error) }}</span>
+          </span>
+        </p>
+        <button type="button" class="btn-secondary py-1.5" data-history-failure-close @click="list.dismissFailure()">{{ t('OK', 'باشه') }}</button>
+      </div>
 
       <p v-if="!state.loaded && state.loading" class="flex items-center gap-2 p-3 text-sm text-ink-muted">
         <AssistantIcon :icon="LoaderCircle" spin />{{ t('Loading…', 'در حال بارگذاری…') }}
@@ -148,7 +195,7 @@ onUnmounted(() => list.dispose());
 
       <template v-else>
         <div :class="state.loading ? 'opacity-60' : ''">
-          <section v-for="g in groups" :key="g.key" :aria-labelledby="`assistant-history-group-${g.key}`" :data-history-group="g.key">
+          <section v-for="g in listed.groups" :key="g.key" :aria-labelledby="`assistant-history-group-${g.key}`" :data-history-group="g.key">
             <h3 :id="`assistant-history-group-${g.key}`" class="px-2.5 pb-1 pt-3 text-[11px] font-medium text-ink-muted">{{ groupLabel(g.key, fa) }}</h3>
             <ul class="space-y-0.5">
               <li v-for="c in g.rows" :key="c.id" class="assistant-row relative" data-history-row>
@@ -188,7 +235,7 @@ onUnmounted(() => list.dispose());
                     <AssistantIcon :icon="MessageSquare" class="mt-0.5 text-ink-faint" />
                     <span class="min-w-0 flex-1">
                       <span :id="`assistant-conversation-${c.id}`" class="block truncate text-sm text-ink" :dir="textDirection(c.title)">{{ c.title || t('Untitled', 'بی‌عنوان') }}</span>
-                      <time :datetime="c.updatedAt" class="block text-[11px] text-ink-muted">{{ timeLabel(c.updatedAt, new Date(), fa) }}</time>
+                      <time :datetime="c.updatedAt" class="block text-[11px] text-ink-muted">{{ timeLabel(c.updatedAt, listed.now, fa) }}</time>
                     </span>
                   </button>
                   <button type="button" class="assistant-row-trash absolute inset-y-0 end-1 my-auto grid h-8 w-8 place-items-center rounded-lg text-ink-faint hover:bg-danger-soft hover:text-danger focus-visible:text-danger"
@@ -221,7 +268,7 @@ onUnmounted(() => list.dispose());
           <p v-if="state.shown" class="mt-0.5 text-[11px] leading-4 text-ink-muted">{{ t('Every conversation is deleted, not only the ones found.', 'همهٔ گفت‌وگوها حذف می‌شوند، نه فقط نتیجه‌های جست‌وجو.') }}</p>
           <p class="mt-0.5 text-[11px] leading-4 text-ink-muted">{{ t('What the assistant did is not undone, and the audit log keeps it.', 'کارهایی که دستیار انجام داده برنمی‌گردند و در گزارش رخدادها می‌مانند.') }}</p>
           <div class="mt-2 flex gap-2">
-            <button type="button" :class="dangerButton" data-history-confirm-yes @click="list.confirmDeleteAll({ openId: currentId })">{{ t('Delete all', 'حذف همه') }}</button>
+            <button type="button" :class="dangerButton" data-history-confirm-yes @click="list.confirmDeleteAll({ openId: currentIdNow })">{{ t('Delete all', 'حذف همه') }}</button>
             <button type="button" class="btn-secondary py-1.5" data-confirm-focus data-history-confirm-no @click="list.cancel()">{{ t('No', 'نه') }}</button>
           </div>
         </template>
@@ -235,7 +282,7 @@ onUnmounted(() => list.dispose());
           <div class="mt-2 flex gap-2">
             <button v-if="state.confirm.phase === 'refused'" type="button" class="btn-secondary py-1.5" data-confirm-focus data-history-confirm-ok @click="list.cancel()">{{ t('OK', 'باشه') }}</button>
             <template v-else>
-              <button type="button" :class="dangerButton" data-confirm-focus data-history-confirm-retry @click="list.confirmDeleteAll({ openId: currentId })">{{ t('Try again', 'دوباره') }}</button>
+              <button type="button" :class="dangerButton" data-confirm-focus data-history-confirm-retry @click="list.confirmDeleteAll({ openId: currentIdNow })">{{ t('Try again', 'دوباره') }}</button>
               <button type="button" class="btn-secondary py-1.5" @click="list.cancel()">{{ t('Close', 'بستن') }}</button>
             </template>
           </div>

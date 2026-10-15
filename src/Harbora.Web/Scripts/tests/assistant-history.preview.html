@@ -13,6 +13,7 @@
     ?dark               dark theme
     ?count=75           how many conversations there are (default 75: three pages)
     ?scenario=slow      deleting takes 3 s (to see the spinner)
+    ?delay=2500         every delete takes this many ms (to type a search while one is out)
     ?scenario=busy      the 4th conversation answers DELETE with 409 busy
     ?scenario=gone      the 5th conversation answers DELETE with 404 (already deleted elsewhere)
     ?scenario=flaky     the first DELETE of anything fails with 502; the second works
@@ -51,6 +52,7 @@ const params = new URLSearchParams(location.search);
 const lang = params.get('lang') === 'en' ? 'en' : 'fa';
 const scenario = params.get('scenario') ?? '';
 const count = Number(params.get('count') ?? 75);
+const delay = Number(params.get('delay') ?? 0);
 document.documentElement.lang = lang;
 document.documentElement.dir = lang === 'fa' ? 'rtl' : 'ltr';
 document.documentElement.classList.toggle('dark', params.has('dark'));
@@ -99,7 +101,7 @@ window.fetch = async (url, init = {}) => {
   }
 
   if (path === '/assistant/conversations' && method === 'DELETE') {
-    if (scenario === 'slow') await sleep(3000);
+    await sleep(scenario === 'slow' ? 3000 : delay);
     const keep = scenario === 'kept' ? conversations.filter((c) => c.id === OPEN_ID) : [];
     const removed = conversations.length - keep.length;
     conversations = keep;
@@ -108,7 +110,7 @@ window.fetch = async (url, init = {}) => {
 
   const one = path.match(/^\/assistant\/conversations\/([^/]+)$/);
   if (one && method === 'DELETE') {
-    if (scenario === 'slow') await sleep(3000);
+    await sleep(scenario === 'slow' ? 3000 : delay);
     const target = conversations.findIndex((c) => c.id === one[1]);
     if (scenario === 'busy' && one[1] === id(4)) return json({ error: 'busy', messageEn: 'It is still answering or running something. Try again when it has finished.', messageFa: 'هنوز در حال پاسخ یا اجراست. وقتی تمام شد دوباره امتحان کنید.' }, 409);
     if (scenario === 'gone' && one[1] === id(5)) { if (target >= 0) conversations.splice(target, 1); return json({ error: 'not_found', messageEn: 'There is no such conversation.', messageFa: 'چنین گفت‌وگویی وجود ندارد.' }, 404); }

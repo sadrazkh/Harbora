@@ -12,7 +12,10 @@
 //     query the person has since changed, or for a "show more" asked before a delete moved every row up
 //     by one, is dropped instead of being drawn over newer words;
 //   * a row that was deleted does not come back because an older page, asked before the delete finished,
-//     arrived after it.
+//     arrived after it — nor in a list opened afterwards, whichever of the two the server finished first
+//     (the deletion ledger, below);
+//   * a delete that fails is always said somewhere the person can see: in the row's strip, or — when a newer
+//     search has filtered the row out meanwhile — in a line at the top of the list.
 //
 // Server shapes: AgentViews.cs (`AgentConversationSummaryView`, `AgentDeleteAllView`); the endpoints are
 // in assistantApi.js.
@@ -90,8 +93,44 @@ export function timeLabel(updatedAt, now = new Date(), fa = false) {
   const date = asDate(updatedAt);
   if (Number.isNaN(date.getTime())) return '';
   const key = groupKey(date, now);
-  const options = key === 'today' || key === 'yesterday' ? { timeStyle: 'short' } : { dateStyle: 'medium' };
-  return new Intl.DateTimeFormat(fa ? 'fa-IR' : 'en-GB', options).format(date);
+  return formatter(fa ? 'fa-IR' : 'en-GB', key === 'today' || key === 'yesterday' ? 'time' : 'date').format(date);
+}
+
+// An Intl.DateTimeFormat is costly to build and a list draws one label per row, again on every change of
+// the list: there are only four of them (two languages, a time or a date), so each is built once.
+const formatters = new Map();
+function formatter(locale, kind) {
+  const key = `${locale}|${kind}`;
+  let format = formatters.get(key);
+  if (!format) {
+    format = new Intl.DateTimeFormat(locale, kind === 'time' ? { timeStyle: 'short' } : { dateStyle: 'medium' });
+    formatters.set(key, format);
+  }
+  return format;
+}
+
+/**
+ * The row to put the keyboard focus on when `id`'s row is gone: the one after it, else the one before it,
+ * else nothing (the caller falls back to the search box).
+ */
+export function neighbourAfter(rows, id) {
+  const at = (rows ?? []).findIndex((row) => row.id === id);
+  if (at === -1) return null;
+  return rows[at + 1]?.id ?? rows[at - 1]?.id ?? null;
+}
+
+/** The line that says how many conversations "delete all" kept because they were still running. */
+export function keptMessage(count, fa) {
+  const n = Number(count) || 0;
+  if (n === 1) {
+    return fa
+      ? '۱ گفت‌وگو حذف نشد، چون هنوز در حال پاسخ یا اجراست.'
+      : '1 conversation was kept because it is still answering or running something.';
+  }
+  const shown = new Intl.NumberFormat(fa ? 'fa-IR' : 'en').format(n);
+  return fa
+    ? `${shown} گفت‌وگو حذف نشد، چون هنوز در حال پاسخ یا اجراست.`
+    : `${shown} conversations were kept because they are still answering or running something.`;
 }
 
 /**
@@ -115,6 +154,55 @@ const words = (error) => ({
 });
 
 /**
+ * What the list says when the server refuses a delete with 409 ("a turn or plan is still running in it")
+ * and sent no words of its own. The pane's generic sentence for a 409 ("no longer possible — it may
+ * already have run, been cancelled or expired") is about plans, and wrong here.
+ */
+export const BUSY_WORDS = {
+  messageEn: 'Still answering or running — try again when it has finished.',
+  messageFa: 'هنوز در حال پاسخ یا اجراست — وقتی تمام شد دوباره امتحان کنید.',
+};
+
+const hasText = (value) => typeof value === 'string' && value.trim() !== '';
+
+/** The words for a failed delete: the server's own always; for a 409 without any, ours. */
+function refusalWords(error) {
+  if (error?.status === 409 && (error.fromServer === false || !(hasText(error.messageEn) || hasText(error.messageFa)))) {
+    return { ...BUSY_WORDS };
+  }
+  return words(error);
+}
+
+/**
+ * What the lists of one page know about each other. A list is dropped when the person goes back to the
+ * conversation and made afresh when they come back, but a delete started in the first is still out, and
+ * finishes in the second's time. So deletions are written here, by whichever list asked for them: a list
+ * made later does not show a row that is known deleted, and one already showing it loses the row when the
+ * delete finishes. Conversation ids are never reused, so remembering one for the life of the page is safe.
+ */
+export function createDeletionLedger() {
+  const deleted = new Set();
+  const members = new Set();
+  return {
+    deleted,
+    /** A list joins with `{ removeRow(id), reload() }`; the result is how it leaves. */
+    join(member) {
+      members.add(member);
+      return () => members.delete(member);
+    },
+    /** `origin` deleted a conversation. */
+    deletedOne(origin, id) {
+      deleted.add(id);
+      for (const member of members) if (member !== origin) member.removeRow(id);
+    },
+    /** `origin` deleted all of them: what the others show is out of date, and which rows is not known. */
+    clearedAll(origin) {
+      for (const member of members) if (member !== origin) member.reload();
+    },
+  };
+}
+
+/**
  * The list's state and everything that changes it.
  *
  * `state.confirm` is the one open question at a time — `null`, or `{ target: 'one' | 'all', id, phase,
@@ -131,13 +219,16 @@ const words = (error) => ({
  *   pageSize?: number,
  *   debounceMs?: number,
  *   timers?: { setTimeout: Function, clearTimeout: Function },
+ *   ledger?: ReturnType<typeof createDeletionLedger>,
  * }} deps
  *   `wrap`: how the state is made reactive (`reactive` in the island; identity in tests).
+ *   `ledger`: shared by every list of one page (see createDeletionLedger); a list on its own gets its own.
  *   `onDeleted(id)`: a conversation is gone — deleted here, or found already gone. The pane uses it to
  *   forget the open one.
  */
 export function createConversationList({
   api, wrap = (state) => state, onDeleted = () => {}, pageSize = PAGE_SIZE, debounceMs = SEARCH_DEBOUNCE_MS, timers,
+  ledger = createDeletionLedger(),
 }) {
   const clock = timers ?? { setTimeout: globalThis.setTimeout.bind(globalThis), clearTimeout: globalThis.clearTimeout.bind(globalThis) };
   const state = wrap({
@@ -156,6 +247,11 @@ export function createConversationList({
     /** Whether any first page has been applied yet. */
     loaded: false,
     confirm: null,
+    /**
+     * A delete that failed after its row had left the screen (a newer search filtered it out while the
+     * request was out), so no strip was left to say so: `{ id, title, error, refused }`, shown at the top.
+     */
+    failure: null,
     /** After "delete all": how many were kept because a turn or plan was still running in them. */
     kept: 0,
   });
@@ -168,7 +264,8 @@ export function createConversationList({
   // changes with that too, and also when a delete moves the rows under a "show more" that is out.
   let listToken = 0;
   let moreToken = 0;
-  const removed = new Set();
+  /** The island is going away: nothing may be asked, and nothing in flight may touch the state. */
+  let disposed = false;
 
   function clearTimer() {
     if (timer !== null) clock.clearTimeout(timer);
@@ -182,6 +279,7 @@ export function createConversationList({
 
   async function fetchFirst() {
     clearTimer();
+    if (disposed) return;
     const mine = ++listToken;
     staleMore();
     const q = wanted;
@@ -191,7 +289,7 @@ export function createConversationList({
     try {
       const page = (await api.conversations({ q, skip: 0 })) ?? [];
       if (mine !== listToken) return;
-      state.rows = mergePage([], page, removed);
+      state.rows = mergePage([], page, ledger.deleted);
       state.hasMore = page.length >= pageSize;
       state.shown = q;
       state.loaded = true;
@@ -206,14 +304,42 @@ export function createConversationList({
     }
   }
 
-  /** Removes a row the server no longer has, and tells the pane. */
-  function gone(id) {
-    removed.add(id);
+  function dropRow(id) {
     state.rows = state.rows.filter((row) => row.id !== id);
-    state.confirm = null;
     // A "show more" asked before this asked for an offset that no longer matches the rows.
     staleMore();
+  }
+
+  /** Removes a row the server no longer has, and tells the pane and the page's other lists. */
+  function gone(id) {
+    dropRow(id);
+    state.confirm = null;
+    ledger.deletedOne(member, id);
     onDeleted(id);
+  }
+
+  /** What other lists of the page do to this one (see createDeletionLedger). */
+  const member = {
+    removeRow(id) {
+      dropRow(id);
+      const open = state.confirm;
+      if (open?.target === 'one' && open.id === id && open.phase !== 'working') state.confirm = null;
+    },
+    reload() {
+      fetchFirst();
+    },
+  };
+  const leave = ledger.join(member);
+
+  /** A failed delete of one row: in its strip while the row is on screen, at the top of the list when not. */
+  function failed(question, error, refused) {
+    if (state.rows.some((row) => row.id === question.id)) {
+      question.phase = refused ? 'refused' : 'failed';
+      question.error = error;
+      return;
+    }
+    state.confirm = null;
+    state.failure = { id: question.id, title: question.title, error, refused };
   }
 
   const list = {
@@ -245,7 +371,7 @@ export function createConversationList({
       try {
         const page = (await api.conversations({ q: state.shown, skip: state.rows.length })) ?? [];
         if (mine !== moreToken) return;
-        state.rows = mergePage(state.rows, page, removed);
+        state.rows = mergePage(state.rows, page, ledger.deleted);
         state.hasMore = page.length >= pageSize;
       } catch (error) {
         if (mine !== moreToken) return;
@@ -262,7 +388,8 @@ export function createConversationList({
       if (state.confirm?.phase === 'working') return false;
       if (!state.rows.some((row) => row.id === id)) return false;
       state.kept = 0;
-      state.confirm = { target: 'one', id, phase: 'asking', error: null };
+      state.failure = null;
+      state.confirm = { target: 'one', id, title: state.rows.find((row) => row.id === id).title, phase: 'asking', error: null };
       return true;
     },
 
@@ -270,8 +397,14 @@ export function createConversationList({
     askAll() {
       if (state.confirm?.phase === 'working') return false;
       state.kept = 0;
+      state.failure = null;
       state.confirm = { target: 'all', id: null, phase: 'asking', error: null };
       return true;
+    },
+
+    /** Closes the line about a delete that failed out of sight. */
+    dismissFailure() {
+      state.failure = null;
     },
 
     /** "No", Esc, or "OK" after a refusal. Not while the request is out. */
@@ -294,8 +427,8 @@ export function createConversationList({
         if (state.confirm !== question) return;
         // Not there any more — deleted in another tab, or by the retention setting. The row goes.
         if (error?.status === 404 || error?.code === 'not_found') { gone(id); return; }
-        question.phase = error?.status === 409 ? 'refused' : 'failed';
-        question.error = words(error);
+        const refused = error?.status === 409;
+        failed(question, refused ? refusalWords(error) : words(error), refused);
         return;
       }
       gone(id);
@@ -306,7 +439,9 @@ export function createConversationList({
      * did not (the strip then says why and offers "try again"). `openId`, the conversation open in the
      * pane, is reported through `onDeleted` when it is among those deleted: when nothing was skipped it
      * certainly is; when some were kept it is asked of the server, since a conversation still answering
-     * — usually the one open — is exactly what is kept.
+     * — usually the one open — is exactly what is kept. `openId` may be a function, called when the answer
+     * arrives: the person can open another conversation while the request is out, and that one — not the
+     * one open when they pressed the button — is what has to be forgotten.
      */
     async confirmDeleteAll({ openId = null } = {}) {
       const question = state.confirm;
@@ -318,8 +453,9 @@ export function createConversationList({
         result = await api.deleteAllConversations();
       } catch (error) {
         if (state.confirm !== question) return null;
-        question.phase = error?.status === 409 ? 'refused' : 'failed';
-        question.error = words(error);
+        const refused = error?.status === 409;
+        question.phase = refused ? 'refused' : 'failed';
+        question.error = refused ? refusalWords(error) : words(error);
         return null;
       }
       const deleted = Number(result?.deleted) || 0;
@@ -329,30 +465,37 @@ export function createConversationList({
       // Whatever was shown is old now; and a page asked before this must not draw rows back.
       state.rows = [];
       state.hasMore = false;
+      ledger.clearedAll(member);
       const reloaded = fetchFirst();
 
+      const open = typeof openId === 'function' ? openId() : openId;
       let openGone = false;
-      if (openId) {
+      if (open) {
         if (skipped === 0) {
           openGone = true;
         } else {
           try {
-            await api.conversation(openId);
+            await api.conversation(open);
           } catch (error) {
             openGone = error?.status === 404;
           }
         }
-        if (openGone) onDeleted(openId);
+        if (openGone) onDeleted(open);
       }
       await reloaded;
       return { deleted, skipped, openGone };
     },
 
-    /** The island is going away: nothing in flight may touch the state afterwards. */
+    /**
+     * The island is going away: nothing is asked afterwards and nothing in flight touches the state. A
+     * delete already out still finishes what it is for — it tells the pane and the page's other lists.
+     */
     dispose() {
+      disposed = true;
       clearTimer();
       listToken++;
       staleMore();
+      leave();
     },
   };
   return list;

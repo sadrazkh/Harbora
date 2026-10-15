@@ -1,8 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  PAGE_SIZE, SEARCH_DEBOUNCE_MS, createConversationList, groupConversations, groupKey, groupLabel, mergePage, timeLabel,
+  BUSY_WORDS, PAGE_SIZE, SEARCH_DEBOUNCE_MS, createConversationList, createDeletionLedger, groupConversations, groupKey, groupLabel,
+  keptMessage, mergePage, neighbourAfter, timeLabel,
 } from '../islands/assistantHistory.js';
+import { AssistantRequestError } from '../islands/assistantApi.js';
 
 // The conversation list's rules against a scripted server and clock: which group a row is in (by the
 // browser's local calendar), what the search box asks and which answers it believes, what "show more"
@@ -138,7 +140,7 @@ function setup(script = {}, options = {}) {
     conversation: (id) => { calls.push({ op: 'get', id }); return (script.conversation ?? (() => ({ id })))(id); },
   };
   const list = createConversationList({ api, timers, onDeleted: (id) => deleted.push(id), ...options });
-  return { list, state: list.state, calls, deleted, timers };
+  return { list, state: list.state, calls, deleted, timers, api };
 }
 
 const page = (from, count) => Array.from({ length: count }, (_, i) => row(`id-${from + i}`, `title ${from + i}`));
@@ -360,7 +362,7 @@ async function withRows(script = {}, options = {}) {
 test('asking replaces one row; asking about another moves the question, never two at once', async () => {
   const s = await withRows();
   assert.equal(s.list.ask('b'), true);
-  assert.deepEqual({ ...s.state.confirm }, { target: 'one', id: 'b', phase: 'asking', error: null });
+  assert.deepEqual({ ...s.state.confirm }, { target: 'one', id: 'b', title: 'second', phase: 'asking', error: null });
   assert.equal(s.list.ask('c'), true);
   assert.equal(s.state.confirm.id, 'c');
   assert.equal(s.list.ask('nope'), false, 'a row that is not in the list cannot be asked about');
@@ -637,4 +639,333 @@ test('disposing stops the search timer and drops what is in flight', async () =>
   request.resolve([row('a', 'a')]);
   await loading;
   assert.deepEqual(s.state.rows, []);
+});
+
+// ---- fix pass: a 409 without words ---------------------------------------------------------------------
+
+test('a 409 with no words of its own says "still answering or running", in both languages', async () => {
+  assert.deepEqual(BUSY_WORDS, {
+    messageEn: 'Still answering or running — try again when it has finished.',
+    messageFa: 'هنوز در حال پاسخ یا اجراست — وقتی تمام شد دوباره امتحان کنید.',
+  });
+  const generic = ['This is no longer possible — it may already have run, been cancelled or expired.', 'این کار دیگر ممکن نیست — شاید قبلاً اجرا، لغو یا منقضی شده باشد.'];
+  const errors = [
+    Object.assign(new Error('x'), { status: 409 }), // nothing at all
+    Object.assign(new Error(''), { status: 409, messageEn: '  ', messageFa: '' }),
+    new AssistantRequestError(409, generic[0], generic[1], { fromServer: false }), // what describeFailure makes of an empty body
+    new AssistantRequestError(409, generic[0], generic[1], { code: 'busy', fromServer: false }), // a code, but no sentence
+  ];
+  for (const error of errors) {
+    const s = await withRows({ deleteConversation: () => { throw error; } });
+    s.list.ask('b');
+    await s.list.confirmDelete();
+    assert.equal(s.state.confirm.phase, 'refused');
+    assert.deepEqual({ ...s.state.confirm.error }, BUSY_WORDS);
+    assert.deepEqual(ids(s.state.rows), ['a', 'b', 'c'], 'refused: the row stays');
+  }
+  // Delete all, refused the same way.
+  const s = await withRows({ deleteAllConversations: () => { throw new AssistantRequestError(409, generic[0], generic[1], { fromServer: false }); } });
+  s.list.askAll();
+  assert.equal(await s.list.confirmDeleteAll(), null);
+  assert.equal(s.state.confirm.phase, 'refused');
+  assert.deepEqual({ ...s.state.confirm.error }, BUSY_WORDS);
+});
+
+test('a 409 that has the server’s words keeps them, and other statuses never get the busy sentence', async () => {
+  const server = new AssistantRequestError(409, 'Wait for the plan.', 'منتظر برنامه بمانید.', { code: 'busy', fromServer: true });
+  let s = await withRows({ deleteConversation: () => { throw server; } });
+  s.list.ask('a');
+  await s.list.confirmDelete();
+  assert.deepEqual({ ...s.state.confirm.error }, { messageEn: 'Wait for the plan.', messageFa: 'منتظر برنامه بمانید.' });
+
+  s = await withRows({ deleteConversation: () => { throw new AssistantRequestError(502, 'The panel failed to answer (HTTP 502).', 'پنل نتوانست پاسخ دهد (HTTP 502).', { fromServer: false }); } });
+  s.list.ask('a');
+  await s.list.confirmDelete();
+  assert.equal(s.state.confirm.phase, 'failed');
+  assert.equal(s.state.confirm.error.messageEn, 'The panel failed to answer (HTTP 502).');
+});
+
+// ---- fix pass: delete all forgets the conversation open when the answer comes ---------------------------
+
+test('delete all forgets the conversation open when the answer arrives, not the one open when it was pressed', async () => {
+  const request = deferred();
+  let open = 'a';
+  const s = await withRows({ deleteAllConversations: () => request.promise, conversations: () => [] });
+  s.list.askAll();
+  const deleting = s.list.confirmDeleteAll({ openId: () => open });
+  open = 'c'; // the person opened another conversation while the request was out
+  request.resolve({ deleted: 3, skipped: 0 });
+  const result = await deleting;
+  assert.equal(result.openGone, true);
+  assert.deepEqual(s.deleted, ['c'], '"c" is the one that is gone, and "a" is not mentioned');
+});
+
+test('with some kept, the server is asked about the conversation open when the answer arrives', async () => {
+  const request = deferred();
+  let open = 'a';
+  const s = await withRows({
+    deleteAllConversations: () => request.promise,
+    conversations: () => [row('a', 'a')],
+    conversation: (id) => { if (id === 'c') throw refusal(404, 'not_found', 'There is no such conversation.', 'چنین گفت‌وگویی وجود ندارد.'); return { id }; },
+  });
+  s.list.askAll();
+  const deleting = s.list.confirmDeleteAll({ openId: () => open });
+  open = 'c';
+  request.resolve({ deleted: 2, skipped: 1 });
+  const result = await deleting;
+  assert.deepEqual(s.calls.filter((c) => c.op === 'get'), [{ op: 'get', id: 'c' }]);
+  assert.equal(result.openGone, true);
+  assert.deepEqual(s.deleted, ['c']);
+});
+
+test('a getter that answers nothing forgets nothing', async () => {
+  const s = await withRows({ deleteAllConversations: () => ({ deleted: 3, skipped: 0 }), conversations: () => [] });
+  s.list.askAll();
+  const result = await s.list.confirmDeleteAll({ openId: () => null });
+  assert.equal(result.openGone, false);
+  assert.deepEqual(s.deleted, []);
+});
+
+// ---- fix pass: a delete that fails out of sight ------------------------------------------------------------
+
+async function filteredOut(script) {
+  const request = deferred();
+  const s = setup({
+    conversations: ({ q }) => (q ? [row('c', 'third')] : [row('a', 'first'), row('b', 'second'), row('c', 'third')]),
+    deleteConversation: () => request.promise,
+    ...script,
+  });
+  await s.list.load();
+  s.list.ask('a');
+  const deleting = s.list.confirmDelete();
+  s.list.setQuery('third'); // the row's strip is gone with its row
+  await s.timers.fire();
+  assert.deepEqual(ids(s.state.rows), ['c']);
+  assert.equal(s.state.confirm.phase, 'working', 'the request is still out, and the buttons wait for it');
+  return { s, request, deleting };
+}
+
+test('a delete refused after a newer search filtered its row out is said at the top of the list', async () => {
+  const { s, request, deleting } = await filteredOut();
+  request.reject(refusal(409, 'busy', 'It is still answering or running something.', 'هنوز در حال پاسخ یا اجراست.'));
+  await deleting;
+  assert.equal(s.state.confirm, null, 'no strip is left hanging on a row that is not there');
+  assert.deepEqual(JSON.parse(JSON.stringify(s.state.failure)), {
+    id: 'a', title: 'first', refused: true,
+    error: { messageEn: 'It is still answering or running something.', messageFa: 'هنوز در حال پاسخ یا اجراست.' },
+  });
+  assert.deepEqual(s.deleted, [], 'nothing was deleted, so the pane forgot nothing');
+  assert.deepEqual(ids(s.state.rows), ['c']);
+
+  s.list.dismissFailure();
+  assert.equal(s.state.failure, null);
+});
+
+test('any other failure of a delete out of sight is said the same way, and asking again clears the line', async () => {
+  const { s, request, deleting } = await filteredOut();
+  request.reject(refusal(0, null, 'Could not reach the panel.', 'ارتباط با پنل برقرار نشد.'));
+  await deleting;
+  assert.equal(s.state.failure.refused, false);
+  assert.equal(s.state.failure.error.messageFa, 'ارتباط با پنل برقرار نشد.');
+  assert.equal(s.state.failure.title, 'first');
+
+  s.list.ask('c');
+  assert.equal(s.state.failure, null, 'a new question replaces the old news');
+  s.list.cancel();
+  s.list.askAll();
+  assert.equal(s.state.failure, null);
+});
+
+test('a delete that succeeds out of sight leaves no line and still tells the pane', async () => {
+  const { s, request, deleting } = await filteredOut();
+  request.resolve(null);
+  await deleting;
+  assert.equal(s.state.failure, null);
+  assert.equal(s.state.confirm, null);
+  assert.deepEqual(s.deleted, ['a']);
+  assert.deepEqual(ids(s.state.rows), ['c']);
+});
+
+test('a delete that fails while its row is still shown is said in the row, not at the top', async () => {
+  const s = await withRows({ deleteConversation: () => { throw refusal(500, null, 'The panel failed to answer (HTTP 500).', 'پنل نتوانست پاسخ دهد (HTTP 500).'); } });
+  s.list.ask('b');
+  await s.list.confirmDelete();
+  assert.equal(s.state.failure, null);
+  assert.equal(s.state.confirm.phase, 'failed');
+});
+
+// ---- fix pass: a delete that outlives its list ----------------------------------------------------------------
+
+function afresh(first, ledger, script = {}) {
+  const deleted = [];
+  const calls = [];
+  const api = { ...first.api, conversations: (args) => { calls.push({ op: 'list', ...args }); return (script.conversations ?? first.api.conversations)(args); } };
+  const list = createConversationList({ api, timers: first.timers, ledger, onDeleted: (id) => deleted.push(id) });
+  return { list, state: list.state, deleted, calls };
+}
+
+test('a delete still out when the list is left and opened again removes the row from the new list when it finishes', async () => {
+  const ledger = createDeletionLedger();
+  const request = deferred();
+  const first = setup({ conversations: () => [row('a', 'a'), row('b', 'b'), row('c', 'c')], deleteConversation: () => request.promise }, { ledger });
+  await first.list.load();
+  first.list.ask('b');
+  const deleting = first.list.confirmDelete();
+  first.list.dispose(); // "Back to the conversation"
+
+  const second = afresh(first, ledger);
+  await second.list.load(); // the server has not finished: "b" is still in its answer
+  assert.deepEqual(ids(second.state.rows), ['a', 'b', 'c']);
+
+  request.resolve(null);
+  await deleting;
+  assert.deepEqual(ids(second.state.rows), ['a', 'c'], 'the row went from the list that is on screen');
+  assert.deepEqual(first.deleted, ['b'], 'and the pane was still told, by the list that asked');
+  assert.deepEqual(second.deleted, [], 'once');
+});
+
+test('a list opened after the delete finished does not show the row, even if the server’s answer still has it', async () => {
+  const ledger = createDeletionLedger();
+  const first = setup({ conversations: () => [row('a', 'a'), row('b', 'b')] }, { ledger });
+  await first.list.load();
+  first.list.ask('b');
+  await first.list.confirmDelete();
+  first.list.dispose();
+
+  const second = afresh(first, ledger); // an answer asked for just before the delete took effect
+  await second.list.load();
+  assert.deepEqual(ids(second.state.rows), ['a']);
+});
+
+test('a row being asked about in the new list when the old list’s delete finishes loses its question', async () => {
+  const ledger = createDeletionLedger();
+  const request = deferred();
+  const first = setup({ conversations: () => [row('a', 'a'), row('b', 'b')], deleteConversation: () => request.promise }, { ledger });
+  await first.list.load();
+  first.list.ask('b');
+  const deleting = first.list.confirmDelete();
+  first.list.dispose();
+  const second = afresh(first, ledger);
+  await second.list.load();
+  second.list.ask('b');
+  request.resolve(null);
+  await deleting;
+  assert.equal(second.state.confirm, null);
+  assert.deepEqual(ids(second.state.rows), ['a']);
+});
+
+test('a delete all still out when the list is left makes the new list reload when it finishes', async () => {
+  const ledger = createDeletionLedger();
+  const request = deferred();
+  let all = false;
+  const first = setup({
+    conversations: () => (all ? [] : [row('a', 'a'), row('b', 'b')]),
+    deleteAllConversations: () => request.promise,
+  }, { ledger });
+  await first.list.load();
+  first.list.askAll();
+  const deleting = first.list.confirmDeleteAll({ openId: null });
+  first.list.dispose();
+
+  const second = afresh(first, ledger, { conversations: () => (all ? [] : [row('a', 'a'), row('b', 'b')]) });
+  await second.list.load();
+  assert.deepEqual(ids(second.state.rows), ['a', 'b']);
+
+  all = true;
+  request.resolve({ deleted: 2, skipped: 0 });
+  await deleting;
+  await settle();
+  assert.deepEqual(second.state.rows, [], 'the new list reloaded and found nothing');
+  assert.equal(first.calls.filter((c) => c.op === 'list').length, 1, 'the disposed list asked for nothing more');
+});
+
+test('lists that never met share nothing', async () => {
+  const one = setup({ conversations: () => [row('a', 'a')] });
+  const two = setup({ conversations: () => [row('a', 'a')] });
+  await one.list.load();
+  await two.list.load();
+  one.list.ask('a');
+  await one.list.confirmDelete();
+  assert.deepEqual(ids(two.state.rows), ['a']);
+});
+
+// ---- fix pass: a list that is gone asks for nothing ---------------------------------------------------------------
+
+test('after dispose nothing is asked, whoever calls', async () => {
+  const s = setup({ conversations: () => page(0, 2) });
+  s.list.dispose();
+  await s.list.load();
+  await s.list.loadMore();
+  s.list.setQuery('x');
+  await s.timers.fire();
+  assert.deepEqual(s.calls, []);
+  assert.deepEqual(s.state.rows, []);
+});
+
+// ---- fix pass: the rules that used to be in the .vue -----------------------------------------------------------------
+
+test('neighbourAfter is the next row, else the previous one, else nothing', () => {
+  const rows = [row('a', 'a'), row('b', 'b'), row('c', 'c')];
+  assert.equal(neighbourAfter(rows, 'a'), 'b');
+  assert.equal(neighbourAfter(rows, 'b'), 'c');
+  assert.equal(neighbourAfter(rows, 'c'), 'b', 'the last row hands over to the one above it');
+  assert.equal(neighbourAfter([row('a', 'a')], 'a'), null, 'the only row has no neighbour');
+  assert.equal(neighbourAfter(rows, 'zzz'), null, 'not in the list');
+  assert.equal(neighbourAfter([], 'a'), null);
+  assert.equal(neighbourAfter(undefined, 'a'), null);
+});
+
+test('the kept line counts in the panel’s language and digits', () => {
+  assert.equal(keptMessage(1, false), '1 conversation was kept because it is still answering or running something.');
+  assert.equal(keptMessage(1, true), '۱ گفت‌وگو حذف نشد، چون هنوز در حال پاسخ یا اجراست.');
+  assert.equal(keptMessage(3, false), '3 conversations were kept because they are still answering or running something.');
+  assert.equal(keptMessage(3, true), '۳ گفت‌وگو حذف نشد، چون هنوز در حال پاسخ یا اجراست.');
+  assert.match(keptMessage(1200, false), /^1,200 conversations/);
+  assert.match(keptMessage(12, true), /^[۰-۹]+ گفت‌وگو/);
+});
+
+// ---- fix pass: formats built once, daylight-saving days ----------------------------------------------------------------
+
+test('the date and time formats are built a few times in all, not once per row', () => {
+  const real = Intl.DateTimeFormat;
+  let built = 0;
+  Intl.DateTimeFormat = new Proxy(real, { construct(target, args) { built++; return new target(...args); } });
+  try {
+    const now = local(2026, 10, 15, 18, 0);
+    for (let i = 0; i < 100; i++) {
+      timeLabel(local(2026, 10, 15, 9, i % 60), now, i % 2 === 0); // a time
+      timeLabel(local(2026, 8, 1 + (i % 20), 9, 0), now, i % 2 === 0); // a date
+    }
+  } finally {
+    Intl.DateTimeFormat = real;
+  }
+  assert.ok(built <= 4, `built ${built} formats for 200 labels; there are only four kinds`);
+});
+
+test('a day that is 23 or 25 hours long is still one day: groups hold across daylight-saving changes', () => {
+  const was = process.env.TZ;
+  process.env.TZ = 'America/New_York';
+  try {
+    // Without this the test would pass in a zone with no daylight saving and prove nothing.
+    assert.notEqual(new Date(2026, 2, 1, 12).getTimezoneOffset(), new Date(2026, 2, 9, 12).getTimezoneOffset(), 'the zone took effect');
+
+    // 2026-03-08: clocks go forward at 02:00 — a 23-hour day.
+    const afterSpring = local(2026, 3, 9, 0, 30);
+    assert.equal(groupKey(local(2026, 3, 8, 0, 10), afterSpring), 'yesterday', 'the whole short day is yesterday');
+    assert.equal(groupKey(local(2026, 3, 8, 23, 50), afterSpring), 'yesterday');
+    assert.equal(groupKey(local(2026, 3, 7, 23, 59), afterSpring), 'week');
+    const weekAfterSpring = local(2026, 3, 12, 0, 30);
+    assert.equal(groupKey(local(2026, 3, 5, 23, 50), weekAfterSpring), 'week', '7 calendar days back');
+    assert.equal(groupKey(local(2026, 3, 4, 23, 50), weekAfterSpring), 'older', '8 calendar days back, though only 6 days 23 hours 40 minutes have passed');
+
+    // 2026-11-01: clocks go back at 02:00 — a 25-hour day.
+    const afterFall = local(2026, 11, 2, 0, 30);
+    assert.equal(groupKey(local(2026, 11, 1, 0, 10), afterFall), 'yesterday', 'the whole long day is yesterday');
+    assert.equal(groupKey(local(2026, 11, 1, 23, 50), afterFall), 'yesterday');
+    const weekAfterFall = local(2026, 11, 9, 0, 30);
+    assert.equal(groupKey(local(2026, 11, 2, 12, 0), weekAfterFall), 'week', '7 calendar days back');
+    assert.equal(groupKey(local(2026, 11, 1, 23, 59), weekAfterFall), 'older', '8 calendar days back, though 7 days and 31 minutes have passed');
+  } finally {
+    if (was === undefined) delete process.env.TZ; else process.env.TZ = was;
+  }
 });

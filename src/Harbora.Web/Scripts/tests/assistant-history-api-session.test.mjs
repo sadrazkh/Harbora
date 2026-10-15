@@ -198,3 +198,22 @@ test('forgetting nothing does nothing', () => {
   assert.equal(s.timeline.conversationId, A);
   assert.equal(s.storage.data[STORAGE_CONVERSATION], A);
 });
+
+// ---- fix pass: whose words an error carries ----------------------------------------------------------
+
+test('an error says whether its words are the server’s own or the pane’s stand-in for the status', async () => {
+  const bodies = {
+    withWords: jsonResponse({ error: 'busy', messageEn: 'It is still answering.', messageFa: 'هنوز در حال پاسخ است.' }, 409),
+    empty: new Response(null, { status: 409 }),
+    codeOnly: jsonResponse({ error: 'busy' }, 409),
+    server: new Response(null, { status: 502 }),
+  };
+  const api = (response) => createAssistantApi({ fetch: async () => response, csrf: CSRF });
+
+  await assert.rejects(api(bodies.withWords).deleteConversation(A), (e) => e.status === 409 && e.fromServer === true && e.messageFa === 'هنوز در حال پاسخ است.');
+  await assert.rejects(api(bodies.empty).deleteConversation(A), (e) => e.status === 409 && e.fromServer === false && /no longer possible/.test(e.messageEn));
+  await assert.rejects(api(bodies.codeOnly).deleteConversation(A), (e) => e.status === 409 && e.code === 'busy' && e.fromServer === false);
+  await assert.rejects(api(bodies.server).deleteConversation(A), (e) => e.status === 502 && e.fromServer === false);
+  // Constructed by hand, as the rest of the pane does, it is the stand-in unless it says otherwise.
+  assert.equal(new AssistantRequestError(409, 'x', 'y').fromServer, false);
+});

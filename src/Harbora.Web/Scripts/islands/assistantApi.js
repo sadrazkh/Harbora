@@ -96,7 +96,7 @@ function statusWords(status) {
  * "expired") — the server's word on both, since the pane does not judge expiry by its own clock.
  */
 export class AssistantRequestError extends Error {
-  constructor(status, messageEn, messageFa, { stepIndex = null, planStatus = null, code = null } = {}) {
+  constructor(status, messageEn, messageFa, { stepIndex = null, planStatus = null, code = null, fromServer = false } = {}) {
     super(messageEn);
     this.name = 'AssistantRequestError';
     this.status = status;
@@ -107,6 +107,10 @@ export class AssistantRequestError extends Error {
     // The server's machine-readable reason (`error`: "revalidation_refused", "not_pending", …) — never
     // shown to a person, but it is what tells "nothing ran" from "it already ran".
     this.code = code;
+    // Whether the words above are the server's own (the body had messageEn / messageFa) or the pane's
+    // stand-in for a status it has no sentence for — a caller with a better sentence for its own status
+    // (the list's 409 "still answering") may replace a stand-in, never the server's words.
+    this.fromServer = fromServer === true;
   }
 }
 
