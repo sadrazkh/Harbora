@@ -526,11 +526,14 @@ dotnet run --project src/Harbora.Web                             # auto-migrates
   carrying an archive between two machines needs a transport Harbora does not have. Harbora refuses
   before it starts rather than writing an archive onto a disk it cannot read back. Plan for it in
   [docs/disaster-recovery.md](docs/disaster-recovery.md).
-- **Functions have never been built on a machine with Docker.** The generator, the routing, the
-  triggers, the entitlement checks and the refusals are covered by tests; what no test on the
-  development machine can cover is `docker build` actually producing the three host images and a
-  container answering. The first publish on a real server is the step that proves it, and until one
-  has been done, treat the three runtimes as unproven rather than shipped.
+- **All three function hosts build and run; what is still unwritten is `docker build` on a server.**
+  The generator's own output — the real `FunctionProject` source, copied byte for byte rather than
+  retyped — was built and exercised in a scratch harness on 2026-08-18: each runtime answered
+  `/__harbora/health` with its own name and the right function count, routed requests, refused an
+  unsigned invocation with 401, accepted a signed one with 204, and logged a scheduled run. The one
+  step nothing in this repository records is the first `docker build` of those Dockerfiles through
+  the deploy pipeline on a real server. Written up in
+  [the functions design](docs/superpowers/specs/2026-08-18-functions-design.md) §3.
 - **Functions do not scale to zero and are not billed per request.** The host runs like any other
   app and is metered by the hour — the answer this platform already settled on for a self-hosted
   single-VPS product. Nor do they install packages: each host has what its base image ships, and a

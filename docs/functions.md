@@ -139,9 +139,17 @@ just the create page.
 
 ---
 
-## Not yet proven
+## What is proven, and what is not
 
-The generator, the routing, the triggers and every refusal are covered by tests. What no test on a
-machine without Docker can cover is `docker build` producing the three host images and a container
-answering. Until a publish has succeeded on a real server, treat the runtimes as unproven — and if
-the first one fails, the build log has the reason.
+The generator, the routing, the triggers and every refusal are covered by tests. The hosts
+themselves are covered too, which is worth saying plainly because this page used to claim the
+opposite: on 2026-08-18 the generator's real output — `FunctionProject`'s own source files, copied
+byte for byte into a scratch harness rather than retyped — was built and run for all three runtimes.
+Each answered `/__harbora/health` with its own runtime name and the right function count, routed
+requests to the right function, refused an unsigned `POST /__harbora/invoke/{name}` with 401,
+accepted a signed one with 204, and logged a scheduled run. It is written up in
+[the functions design](superpowers/specs/2026-08-18-functions-design.md) §3.
+
+What nothing in this repository records is the first `docker build` of those Dockerfiles through the
+deploy pipeline on a real server — the base images being pulled, the layers cached, the image
+actually tagged. If that step ever fails, the build log on the deployment page has the reason.
