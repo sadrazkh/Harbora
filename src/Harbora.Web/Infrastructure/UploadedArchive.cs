@@ -30,16 +30,16 @@ public static class UploadedArchive
     private static string Directory(string workDir) => Path.Combine(workDir, "_uploads");
 
     /// <summary>
-    /// Where a launch's archive goes: the person's own file name, in a folder of its own.
+    /// Where a launch's archive goes: the person's own file name with a unique part.
     ///
     /// <para>
-    /// The folder is what keeps the name usable. <c>LaunchStartRequest</c> carries only this path, and
-    /// the path is all the launch has to name the app and label the source with, so a random token in
-    /// the file name would come back as the suggested name of the app.
+    /// <c>LaunchStartRequest</c> carries only this path, and the path is all the launch has to name the
+    /// app and label the source with. <c>LaunchSource.LabelForArchive</c> strips the GUID, so the name
+    /// survives; and a flat file leaves nothing behind once the pipeline has consumed it.
     /// </para>
     /// </summary>
     public static string PathForLaunch(string workDir, string? clientFileName) =>
-        Path.Combine(Directory(workDir), $"launch-{Guid.CreateVersion7():N}", SafeFileName(clientFileName));
+        Path.Combine(Directory(workDir), $"{SafeStem(clientFileName)}-{Guid.CreateVersion7():N}{Extension(clientFileName)}");
 
     /// <summary>Where a new version of an app goes, named the way the CLI's route names one.</summary>
     public static string PathForApp(string workDir, string appSlug, string? clientFileName) =>
@@ -78,17 +78,12 @@ public static class UploadedArchive
             };
     }
 
-    /// <summary>Removes an archive nothing is going to read, and the folder a launch's sat in.</summary>
+    /// <summary>Removes an archive nothing is going to read.</summary>
     public static void Delete(string path)
     {
         try
         {
             if (File.Exists(path)) File.Delete(path);
-
-            var folder = Path.GetDirectoryName(path);
-            if (folder is not null && Path.GetFileName(folder).StartsWith("launch-", StringComparison.Ordinal)
-                && System.IO.Directory.Exists(folder) && !System.IO.Directory.EnumerateFileSystemEntries(folder).Any())
-                System.IO.Directory.Delete(folder);
         }
         catch (IOException) { /* best effort */ }
         catch (UnauthorizedAccessException) { /* best effort */ }
@@ -99,7 +94,7 @@ public static class UploadedArchive
     /// letters, digits and a few marks survive. Letters of any script, because a Persian project name
     /// is as good a name as any.
     /// </summary>
-    private static string SafeFileName(string? clientFileName)
+    private static string SafeStem(string? clientFileName)
     {
         var extension = Extension(clientFileName);
         var name = clientFileName ?? "";
@@ -110,7 +105,7 @@ public static class UploadedArchive
             .Trim('-', '.', '_');
         if (safe.Length > 80) safe = safe[..80].Trim('-', '.', '_');
 
-        return (safe.Length == 0 ? "source" : safe) + extension;
+        return safe.Length == 0 ? "source" : safe;
     }
 
     private static string Extension(string? clientFileName)
