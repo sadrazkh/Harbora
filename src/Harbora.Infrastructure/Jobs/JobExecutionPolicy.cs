@@ -81,6 +81,10 @@ public static class JobExecutionPolicy
         // it will ever have. Generous for the same reason JobKind.Backup's own six hours is.
         JobKind.DatabaseMaintenance => TimeSpan.FromHours(6),
 
+        // A clone with no depth limit (libgit2 has none) and one read of the tree. A repository that
+        // takes longer than this to fetch would not get far with the deployment after it either.
+        JobKind.LaunchInspect => TimeSpan.FromMinutes(15),
+
         // A kind appended to the enum without a deadline still gets one. "For ever" is the defect
         // this class exists to remove, so it cannot be the default.
         _ => TimeSpan.FromHours(1)

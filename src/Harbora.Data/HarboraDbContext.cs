@@ -279,6 +279,9 @@ public class HarboraDbContext : DbContext
     public DbSet<Harbora.Domain.Agent.AgentToolApproval> AgentToolApprovals => Set<Harbora.Domain.Agent.AgentToolApproval>();
     public DbSet<Harbora.Domain.Agent.AgentUsageDay> AgentUsageDays => Set<Harbora.Domain.Agent.AgentUsageDay>();
 
+    public DbSet<Harbora.Domain.Launch.AppLaunch> AppLaunches => Set<Harbora.Domain.Launch.AppLaunch>();
+    public DbSet<Harbora.Domain.Launch.AppVerification> AppVerifications => Set<Harbora.Domain.Launch.AppVerification>();
+
     protected override void OnModelCreating(ModelBuilder b)
     {
         base.OnModelCreating(b);
@@ -982,6 +985,31 @@ public class HarboraDbContext : DbContext
         // Postgres already treats every NULL in a unique index as distinct from every other, so
         // without the filters a plain unique index on (AppId, ManagedServiceDatabaseId) would let the
         // no-logical-database case collide silently — the exact hole these two indexes together close.
+        b.Entity<Harbora.Domain.Launch.AppLaunch>(e =>
+        {
+            // What the tick reads every few seconds: everything still in flight.
+            e.HasIndex(x => x.Status);
+            e.HasIndex(x => new { x.WorkspaceId, x.CreatedAt });
+            e.Property(x => x.CloneUrl).HasMaxLength(2048);
+            e.Property(x => x.GitRef).HasMaxLength(255);
+            e.Property(x => x.ResolvedBranch).HasMaxLength(255);
+            e.Property(x => x.ArchivePath).HasMaxLength(1024);
+            e.Property(x => x.FailedStep).HasMaxLength(32);
+            e.Property(x => x.FailureMessage).HasMaxLength(2000);
+            e.Property(x => x.FailureMessageFa).HasMaxLength(2000);
+            // SetNull: a launch outlives the app it made. It is history, and it says what happened.
+            e.HasOne<App>().WithMany().HasForeignKey(x => x.AppId).OnDelete(DeleteBehavior.SetNull);
+            e.HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        });
+
+        b.Entity<Harbora.Domain.Launch.AppVerification>(e =>
+        {
+            // One row per app, overwritten by each run.
+            e.HasIndex(x => x.AppId).IsUnique();
+            e.HasOne<App>().WithMany().HasForeignKey(x => x.AppId).OnDelete(DeleteBehavior.Cascade);
+            e.HasQueryFilter(x => IgnoreWorkspaceFilter || x.WorkspaceId == CurrentWorkspaceId);
+        });
+
         b.Entity<Harbora.Domain.Services.AppManagedService>(e =>
         {
             e.HasIndex(x => new { x.AppId, x.ManagedServiceDatabaseId }).IsUnique()
