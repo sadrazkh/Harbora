@@ -18,7 +18,7 @@ public sealed record LaunchQuestion(string Key, bool IsSecret);
 /// <param name="Guesses">Services that were only suspected, and so will not be created.</param>
 /// <param name="Generated">The names of the secrets it will generate.</param>
 /// <param name="Kept">The names of the variables it will set from the example file.</param>
-/// <param name="Unattached">Variables a service would have answered, had it not been turned down.</param>
+/// <param name="Unattached">Variables a service would have answered, had there been one: turned down, or only ever a guess.</param>
 public sealed record LaunchDescription(
     string Found,
     IReadOnlyList<string> Details,
@@ -61,6 +61,8 @@ public static class LaunchPlan
     private const string NeedsAnswer = "NeedsAnswer";
     private const string GeneratedSecret = "GeneratedSecret";
     private const string KeepExample = "KeepExample";
+    private const string ProvidedByAttach = "ProvidedByAttach";
+    private const string AliasOfAttach = "AliasOfAttach";
 
     /// <summary>Flags that contradict each other. Said before anything leaves the machine.</summary>
     public static string? OptionProblem(string? path, string? git, string? gitRef, string? gitToken)
@@ -184,23 +186,71 @@ public static class LaunchPlan
             var text = value.Length == 0 ? null : value;
 
             var existing = variables.FirstOrDefault(v => v!["key"]!.GetValue<string>() == key);
-            if (existing is not null) existing["value"] = text;
-            else variables.Add(new JsonObject { ["key"] = key, ["value"] = text, ["isSecret"] = IsSecret(proposal, key) });
+            if (existing is not null)
+            {
+                existing["value"] = text;
+                existing["isSecret"] = IsSecret(proposal, key);
+            }
+            else
+            {
+                variables.Add(new JsonObject { ["key"] = key, ["value"] = text, ["isSecret"] = IsSecret(proposal, key) });
+            }
         }
+
+        // Nothing will set these. They go along with no value, because that is how the timeline comes to
+        // name them; the same as the panel's own form.
+        foreach (var key in Unattached(proposal, answers, dropped))
+            if (variables.All(v => v!["key"]!.GetValue<string>() != key))
+                variables.Add(new JsonObject { ["key"] = key, ["value"] = null, ["isSecret"] = IsSecret(proposal, key) });
 
         return choices;
     }
 
     /// <summary>
-    /// The server's answer for a name it asked about. For one it did not, a secret: masking a value that
-    /// did not need it costs a click, and the reverse leaves somebody's key on a page.
+    /// The server's answer for a name it asked about, except that a connection somebody gives themselves
+    /// usually has a password in it, whatever was said about a name an attachment was going to answer.
+    /// For a name it did not ask about, a secret: masking a value that did not need it costs a click, and
+    /// the reverse leaves somebody's key on a page.
     /// </summary>
     private static bool IsSecret(JsonElement proposal, string key)
     {
         foreach (var field in Items(proposal, "envFields"))
             if (Text(field, "key") == key)
-                return field.GetProperty("isSecret").GetBoolean();
+                return field.GetProperty("isSecret").GetBoolean()
+                       || (Text(field, "disposition") is ProvidedByAttach or AliasOfAttach && !ConnectionNames.IsPlainPart(key));
         return true;
+    }
+
+    /// <summary>
+    /// The connection names no service here will answer, and nobody has: their service was turned down,
+    /// was only a guess and so never proposed, or is not known. An attachment would have set them, so
+    /// they are never asked; left unsaid, the app reads an empty variable with no word about why.
+    /// </summary>
+    public static IReadOnlyList<string> Unattached(
+        JsonElement proposal, IReadOnlyDictionary<string, string> answers, IReadOnlySet<string> dropped)
+    {
+        var offered = Items(proposal.GetProperty("defaults"), "services").ToList();
+        var kept = offered.Where(s => !dropped.Contains(Text(s, "type") ?? "")).ToList();
+        var keptTypes = kept.Select(s => Text(s, "type") ?? "").ToHashSet(StringComparer.Ordinal);
+        var aliased = kept.SelectMany(s => Items(s, "aliases")).Select(a => Text(a, "name")).ToHashSet(StringComparer.Ordinal);
+
+        var unanswered = Items(proposal, "envFields")
+            .Where(f => Text(f, "disposition") is ProvidedByAttach or AliasOfAttach)
+            .Where(f => !aliased.Contains(Text(f, "key"))
+                        && !(Text(f, "service") is { } named && keptTypes.Contains(named))
+                        && !(Text(f, "disposition") == ProvidedByAttach && keptTypes.Any(t => ConnectionNames.IsSetBy(t, Text(f, "key") ?? ""))))
+            .Select(f => Text(f, "key") ?? "");
+
+        // An older panel names no service on its fields, and has no field at all for an attachment's own name.
+        var turnedDown = offered
+            .Where(s => dropped.Contains(Text(s, "type") ?? ""))
+            .SelectMany(s => Items(s, "aliases"))
+            .Select(a => Text(a, "name") ?? "");
+
+        return unanswered.Concat(turnedDown)
+            .Where(key => !answers.ContainsKey(key))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
     }
 
     /// <summary>What only a person can answer, and nobody has.</summary>
@@ -214,7 +264,7 @@ public static class LaunchPlan
     public static IReadOnlyList<string> UnaskedKeys(JsonElement proposal, IReadOnlyDictionary<string, string> answers)
     {
         var asked = Items(proposal, "envFields").Select(f => Text(f, "key") ?? "").ToHashSet(StringComparer.Ordinal);
-        return answers.Keys.Where(k => !asked.Contains(k)).ToList();
+        return answers.Keys.Where(k => !asked.Contains(k) && !ConnectionNames.IsKnown(k)).ToList();
     }
 
     public static LaunchDescription Describe(
@@ -258,13 +308,6 @@ public static class LaunchPlan
             .Select(f => Text(f, "key") ?? "")
             .ToList();
 
-        var unattached = offered
-            .Where(s => dropped.Contains(Text(s, "type") ?? ""))
-            .SelectMany(s => Items(s, "aliases"))
-            .Select(a => Text(a, "name") ?? "")
-            .Where(key => !answers.ContainsKey(key))
-            .ToList();
-
         return new LaunchDescription(
             WhatItIs(inspection, defaults),
             details,
@@ -273,7 +316,7 @@ public static class LaunchPlan
             guesses,
             Named(GeneratedSecret),
             Named(KeepExample),
-            unattached);
+            Unattached(proposal, answers, dropped));
     }
 
     private static string WhatItIs(JsonElement inspection, JsonElement defaults)
@@ -288,6 +331,7 @@ public static class LaunchPlan
             "Php" => "a PHP app",
             "Python" => "a Python app",
             "Static" => "a static site",
+            "Frontend" => "a frontend that is built and then served",
             _ => null
         };
 
@@ -323,6 +367,10 @@ public static class LaunchPlan
         quote.TryGetProperty("refusal", out var refusal) && refusal.ValueKind == JsonValueKind.Object
             ? Text(refusal, "message")
             : null;
+
+    /// <summary>Whether more credit would fix that refusal. A size with no price would not, and nothing on the billing page will.</summary>
+    public static bool RefusalIsAboutMoney(JsonElement quote) =>
+        quote.TryGetProperty("refusalIsAboutMoney", out var money) && money.ValueKind == JsonValueKind.True;
 
     /// <summary>What the panel said no with, one line each: the launch API's list, the older single sentence, or nothing.</summary>
     public static IReadOnlyList<string> RefusalLines(string body)
@@ -419,18 +467,47 @@ public static class LaunchPlan
 
     public static bool CheckNeedsAction(JsonElement check) => Text(check, "status") is CheckFailed or CheckWarning;
 
+    /// <summary>A check found something, as against none of them being able to say.</summary>
+    public static bool ProblemFound(JsonElement view) => Items(view, "checks").Any(CheckNeedsAction);
+
+    /// <summary>What no answer came back for, by title.</summary>
+    public static IReadOnlyList<string> NotChecked(JsonElement view) =>
+        Items(view, "checks")
+            .Where(c => Text(c, "status") is CheckSkipped or CheckPending)
+            .Select(c => Text(c, "title") ?? "")
+            .ToList();
+
+    /// <summary>The app this launch made has since been deleted. Whatever the status says, there is nothing to open.</summary>
+    public static bool AppGone(JsonElement view) =>
+        view.TryGetProperty("appGone", out var gone) && gone.ValueKind == JsonValueKind.True;
+
     /// <summary>The step a failed launch stopped at, by title.</summary>
     public static string? FailedStepTitle(JsonElement view) =>
         Items(view, "steps").Where(s => Text(s, "state") == StepFailed).Select(s => Text(s, "title")).FirstOrDefault();
 
     /// <summary>
-    /// What is left standing, because that is what a person is paying for while they read this. Only what
-    /// the view can vouch for: a database made before a later step refused is named in the failure
-    /// message itself, by the row that knows it.
+    /// What is left standing, because that is what a person is paying for while they read this. Read from
+    /// the panel's own list, which comes from the rows. An older panel has no such list, so from there
+    /// only what its view can vouch for: a database made before a later step refused is named in the
+    /// failure message itself.
     /// </summary>
     public static IReadOnlyList<string> WhatExists(JsonElement view, string server)
     {
         var lines = new List<string>();
+
+        if (view.TryGetProperty("created", out var created) && created.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var thing in created.EnumerateArray())
+            {
+                var ready = thing.TryGetProperty("ready", out var r) && r.ValueKind == JsonValueKind.True;
+                lines.Add($"The {Text(thing, "kind")} {Text(thing, "name")}{(ready ? "" : " (not ready)")}: {server}{Text(thing, "linkPath")}");
+            }
+
+            if (!AppGone(view) && Text(view, "deploymentId") is { Length: > 0 } deployment)
+                lines.Add($"Its deployment: {DeploymentPage(server, deployment)}");
+
+            return lines;
+        }
 
         if (Text(view, "appId") is { Length: > 0 } appId)
             lines.Add($"The app {Text(view, "appName")}: {AppPage(server, appId)}");

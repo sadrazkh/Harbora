@@ -43,10 +43,8 @@ public sealed partial class AppsController
 
         if (file is null || file.Length == 0)
             return Refused(IsFa ? "فایلی انتخاب نشده بود، یا فایل خالی بود." : "No file was chosen, or the file was empty.");
-        if (!UploadedArchive.LooksLikeArchive(file))
-            return Refused(IsFa
-                ? "این فایل zip نیست. پوشه‌ی پروژه را zip کن و همان را بفرست."
-                : "That file isn't a zip. Zip your project folder and send that.");
+        if (UploadedArchive.WhyNot(file, IsFa) is { } notAZip)
+            return Refused(notAZip);
 
         // The same check the deploy button makes, before anything is written to disk.
         var check = await quota.CanAddAppAsync(WorkspaceId, app.InstanceSizeKey, excludeAppId: app.Id, ct);
@@ -70,10 +68,22 @@ public sealed partial class AppsController
         }
         catch (InvalidOperationException ex)
         {
-            // A rollback is running, or this was coalesced onto a deployment already in flight. The
-            // upload is an orphan either way, so it goes rather than leaking a file per refused try.
+            // A rollback is running. The upload is an orphan, so it goes rather than leaking a file per
+            // refused try.
             UploadedArchive.Delete(archivePath);
             return Refused(ex.Message);
+        }
+
+        // A deployment already in flight is not a refusal: the engine coalesces onto it and answers with
+        // its id. That one will never read this file, so taking the answer at its word would land
+        // somebody on the old build's log believing their fix was running.
+        if (await db.Deployments.IgnoreQueryFilters().AsNoTracking()
+                .AnyAsync(d => d.Id == deploymentId && d.SourceArchivePath != archivePath, ct))
+        {
+            UploadedArchive.Delete(archivePath);
+            return Refused(IsFa
+                ? "یک ساخت هنوز در جریان است، پس این نسخه اجرا نشد. وقتی تمام شد، همین فایل را دوباره بفرست."
+                : "A build is still running, so this version wasn't run. Send it again when that finishes.");
         }
 
         await audit.LogAsync("app.deploy", "app", id.ToString(), ClientIp, workspaceId: WorkspaceId, ct: ct);

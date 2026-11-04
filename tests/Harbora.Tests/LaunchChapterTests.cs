@@ -63,6 +63,7 @@ public sealed class LaunchChapterTests : IDisposable
     [InlineData("Pipfile", "Pipfile", "", DetectedStack.Python)]
     [InlineData("index.html", "index.html", "<html></html>", DetectedStack.Static)]
     [InlineData("docker-compose.yml", "docker-compose.yml", "services: {}", DetectedStack.Compose)]
+    [InlineData("build", "package.json", """{ "scripts": { "build": "vite build" }, "devDependencies": { "vite": "5" } }""", DetectedStack.Frontend)]
     public void Each_file_the_chapter_says_decides_the_language_does(
         string named, string file, string content, DetectedStack stack)
     {
@@ -128,6 +129,18 @@ public sealed class LaunchChapterTests : IDisposable
         result.EnvVars.Single(v => v.Name == "STRIPE_SECRET_KEY").Disposition.Should().Be(EnvVarDisposition.NeedsAnswer);
         result.EnvVars.Should().NotContain(v => v.Name == "ONLY_IN_THE_REAL_ONE",
             "docs/tutorial/15-launch.md tells a customer the inspector never opens .env");
+    }
+
+    /// <summary>The prefixes the chapter promises reach the build, and one it does not, which must not.</summary>
+    [Theory]
+    [InlineData("VITE_API_URL", true)]
+    [InlineData("REACT_APP_API_URL", true)]
+    [InlineData("STRIPE_SECRET_KEY", false)]
+    public void The_public_build_variables_the_chapter_names_are_the_ones_a_build_reads(string name, bool isPublic)
+    {
+        if (isPublic) Chapter().Should().Contain(name[..(name.IndexOf('_') + 1)]);
+        PublicBuildVariables.IsPublic(name).Should().Be(isPublic,
+            "docs/tutorial/15-launch.md tells a customer which variables go into the built files");
     }
 
     // ---- what "connected" means ----
@@ -218,6 +231,11 @@ public sealed class LaunchChapterTests : IDisposable
     [InlineData("برو به صورت‌حساب", "src/Harbora.Web/Views/Launch/_Cost.cshtml")]
     [InlineData("اپت بالاست", "src/Harbora.Web/Views/Launch/_Timeline.cshtml")]
     [InlineData("اپ بالا آمد، ولی یک چیز درست نیست", "src/Harbora.Web/Views/Launch/_Timeline.cshtml")]
+    [InlineData("بالا آمد، ولی نتوانستم مطمئن شوم که کار می‌کند", "src/Harbora.Web/Views/Launch/_Timeline.cshtml")]
+    [InlineData("این اپ بعداً پاک شده", "src/Harbora.Web/Views/Launch/_Timeline.cshtml")]
+    [InlineData("دیتابیس را جای دیگری داری؟", "src/Harbora.Web/Views/Launch/Confirm.cshtml")]
+    [InlineData("از مرورگر فقط zip می‌گیرم", "src/Harbora.Web/Infrastructure/UploadedArchive.cs")]
+    [InlineData("یک ساخت هنوز در جریان است", "src/Harbora.Web/Controllers/AppsController.Upload.cs")]
     [InlineData("اینجا گیر کرد", "src/Harbora.Web/Views/Launch/_Timeline.cshtml")]
     [InlineData("دوباره امتحان کن", "src/Harbora.Web/Views/Launch/_Timeline.cshtml")]
     [InlineData("بررسی نشد", "src/Harbora.Web/Views/Shared/Design/_AppChecks.cshtml")]
@@ -248,8 +266,7 @@ public sealed class LaunchChapterTests : IDisposable
 
     /// <summary>
     /// Reads the CLI's own source, the way <see cref="DocumentationDriftTests"/> reads its registrations:
-    /// its commands are configured in a top-level program, so there is no surface to reflect over. Asks
-    /// nothing until the command is registered there.
+    /// its commands are configured in a top-level program, so there is no surface to reflect over.
     /// </summary>
     [Fact]
     public void Each_flag_the_chapter_names_is_one_the_launch_command_takes()
@@ -257,7 +274,7 @@ public sealed class LaunchChapterTests : IDisposable
         var cli = string.Join("\n",
             Directory.EnumerateFiles(Path.Combine(TestPaths.RepoRoot, "src", "Harbora.Cli"), "*.cs")
                 .Select(File.ReadAllText));
-        if (!cli.Contains("AddCommand<LaunchCommand>", StringComparison.Ordinal)) return;
+        cli.Should().Contain("AddCommand<LaunchCommand>", "the chapter has a section about a command that has to exist");
 
         var flags = Regex.Matches(Chapter(), @"(?<![\w-])--[a-z][a-z-]*")
             .Select(m => m.Value)

@@ -23,5 +23,10 @@
         <noscript>
             <p class="mt-4 text-center text-xs" data-launch-refresh><a href="/launch/@view.Id" class="text-accent-text hover:underline">@(isFa ? "تازه کن تا ببینی کجاست" : "Refresh to see how far it has got")</a></p>
         </noscript>
+        @* Outside the region, so a swap cannot take it away. The script shows it when the poll stops with no answer: a session that ended, or a launch that is gone. *@
+        <p class="mt-4 hidden text-center text-sm text-ink-muted" data-launch-poll-stopped role="status">
+            @(isFa ? "دیگر نمی‌توانم ببینم کار به کجا رسید؛ شاید از حسابت بیرون آمده‌ای یا این راه‌اندازی دیگر نیست. " : "I can't see how far it has got any more: you may have been signed out, or this launch is gone. ")
+            <a href="/launch/@view.Id" class="text-accent-text hover:underline">@(isFa ? "صفحه را تازه کن" : "Refresh the page")</a>
+        </p>
     }
 </div>

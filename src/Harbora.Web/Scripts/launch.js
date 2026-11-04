@@ -41,10 +41,11 @@ export function afterPoll({ ok, status, redirected, terminal, reload, recognised
  *   swap(html: string): void,
  *   reload(): void,
  *   tick?(): void,
+ *   lostSight?(): void,
  *   schedule(fn: () => void, ms: number): unknown,
  * }} deps
  */
-export function createPoller({ fetchProgress, readState, swap, reload, tick, schedule }) {
+export function createPoller({ fetchProgress, readState, swap, reload, tick, lostSight, schedule }) {
   let last = null;
   let stopped = false;
 
@@ -77,7 +78,9 @@ export function createPoller({ fetchProgress, readState, swap, reload, tick, sch
       return;
     }
     if (next === 'stop') {
+      // Nothing more will arrive, so what is on the page has stopped being news and must say so.
       stopped = true;
+      lostSight?.();
       return;
     }
     // An unchanged answer is not put back: replacing it would restart the spinner, close a <details>
@@ -157,23 +160,42 @@ export function withoutValues(formData) {
 
 /**
  * The slug the server would derive (`AppProvisioningService.Slugify`), for the address shown beside
- * the name. Letters of any script survive, because they do there. The server's answer is the one that
- * counts: this is only so the address follows the typing.
+ * the name. Only `a-z`, `0-9` and dashes, because an image tag and a hostname take nothing else, so a
+ * wholly Persian name comes to the fallback. The server's answer is the one that counts: this is only
+ * so the address follows the typing.
  */
 export function slugFor(name) {
   const slug = (name ?? '')
     .trim()
     .toLowerCase()
-    .replace(/[^\p{L}\p{Nd}]/gu, '-')
+    .replace(/[^a-z0-9]/g, '-')
     .replace(/-{2,}/g, '-')
     .replace(/^-+|-+$/g, '');
   const cut = slug.length > 50 ? slug.slice(0, 50).replace(/-+$/, '') : slug;
   return cut === '' ? 'app' : cut;
 }
 
-export function addressFor(name, slug, rootDomain) {
+/**
+ * The address as the name and slug stand. The name as it was proposed has its slug worked out already,
+ * because the server can see which are taken and this cannot. A blanked name goes back to that one,
+ * as it does when the form is sent.
+ *
+ * @param {string} [name]
+ * @param {string} [slug]
+ * @param {string} rootDomain
+ * @param {{ name?: string, slug?: string }} [suggested]
+ */
+export function addressFor(name, slug, rootDomain, suggested) {
   const typed = (slug ?? '').trim();
-  return `${typed === '' ? slugFor(name) : typed}.${rootDomain}`;
+  if (typed !== '') return `${slugFor(typed)}.${rootDomain}`;
+
+  const named = (name ?? '').trim() || suggested?.name;
+  return `${suggested?.slug && named === suggested.name ? suggested.slug : slugFor(named)}.${rootDomain}`;
+}
+
+/** Whether a ticked service would set a name, given the space-separated services that could. */
+export function isAnswered(answeredBy, ticked) {
+  return (answeredBy ?? '').split(' ').some((service) => ticked.has(service));
 }
 
 export function isTooBig(file, maxBytes) {
@@ -223,6 +245,12 @@ function initPoll(doc, win) {
     },
     reload: () => win.location.reload(),
     tick: paintSlow,
+    lostSight: () => {
+      // A spinner and "it keeps going" are claims about a launch this page can no longer see.
+      region.querySelectorAll('.animate-spin').forEach((el) => el.classList.remove('animate-spin'));
+      region.querySelectorAll('[data-launch-keeps-going]').forEach((el) => el.classList.add('hidden'));
+      doc.querySelector('[data-launch-poll-stopped]')?.classList.remove('hidden');
+    },
     schedule: (fn, ms) => win.setTimeout(fn, ms),
   }).start();
 }
@@ -237,6 +265,7 @@ function initConfirm(doc, win) {
   const slug = form.querySelector('[data-launch-slug]');
   const kind = form.querySelector('[data-launch-kind]');
   const address = form.querySelector('[data-launch-address]');
+  const details = form.querySelector('[data-launch-details]');
 
   const refresher = createQuoteRefresher({
     send: async () => {
@@ -255,14 +284,54 @@ function initConfirm(doc, win) {
     cancel: (handle) => win.clearTimeout(handle),
   });
 
+  // What a ticked service answers goes on the quiet line and comes off the questions, and the reverse.
+  // A value hidden here is also not sent: it would outrank the database that was just ticked.
+  const paintConnections = () => {
+    const ticked = new Set([...form.querySelectorAll('input[name="Services"]:checked')].map((box) => box.value));
+
+    let promised = false;
+    form.querySelectorAll('[data-launch-answered-name]').forEach((el) => {
+      const answered = isAnswered(el.dataset.launchAnsweredName, ticked);
+      el.classList.toggle('hidden', !answered);
+      promised ||= answered;
+    });
+    form.querySelector('[data-launch-aliases]')?.classList.toggle('hidden', !promised);
+
+    let asking = false;
+    form.querySelectorAll('[data-launch-connection]').forEach((el) => {
+      const answered = isAnswered(el.dataset.launchConnection, ticked);
+      el.classList.toggle('hidden', answered);
+      const input = el.querySelector('input');
+      if (input) input.disabled = answered;
+      asking ||= !answered;
+    });
+    form.querySelector('[data-launch-own-connection]')?.classList.toggle('hidden', !asking);
+  };
+
   form.addEventListener('change', (event) => {
     const field = event.target?.name;
     if (field === 'Services' || field === 'InstanceSizeKey' || field === 'ServerId' || field === 'Kind') refresher.trigger();
+    if (field !== 'Services') return;
+
+    paintConnections();
+    // Somebody who just unticked a database for one of their own has to find where it goes.
+    const opened = !event.target.checked && [...form.querySelectorAll('[data-launch-connection]')]
+      .some((el) => isAnswered(el.dataset.launchConnection, new Set([event.target.value])) && !el.classList.contains('hidden'));
+    if (opened && details) details.open = true;
   });
+  paintConnections();
 
   const paintAddress = () => {
     const root = form.dataset.rootDomain;
-    if (address && root) address.textContent = addressFor(name?.value, slug?.value, root);
+    if (!address || !root) return;
+
+    address.textContent = addressFor(name?.value, slug?.value, root, {
+      name: form.dataset.suggestedName,
+      slug: form.dataset.suggestedSlug,
+    });
+    // What the server said was about the name it was given, and it judges this one when it is sent.
+    form.querySelector('[data-launch-reserved]')?.classList.add('hidden');
+    form.querySelector('[data-launch-address-line]')?.classList.remove('hidden');
   };
   name?.addEventListener('input', paintAddress);
   slug?.addEventListener('input', paintAddress);

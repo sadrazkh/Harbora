@@ -217,6 +217,11 @@ public class AppVerifyHttpTests(HarboraHttpFixture fixture)
         var app = GivenApp("verify-viewer");
         var client = await SignedIn("verify-viewer", "203.0.113.157", SystemRole.Viewer);
 
+        var html = await (await client.GetAsync($"/apps/details/{app.Id}")).Content.ReadAsStringAsync();
+        html.Should().Contain("data-verification-state=\"never\"", "the card is theirs to read");
+        html.Should().NotContain("data-verify-now", "a button that can only be refused is not an offer");
+        html.Should().NotContain($"action=\"/apps/{app.Id}/verify\"");
+
         var token = await client.AntiforgeryTokenFrom($"/apps/details/{app.Id}");
         var response = await client.PostFormAsync($"/apps/{app.Id}/verify", token);
 

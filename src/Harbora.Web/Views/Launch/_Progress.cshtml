@@ -22,7 +22,7 @@
             <h1 class="text-xl font-bold tracking-tight text-ink">@(isFa ? "دارم کدت را می‌خوانم…" : "Reading your code…")</h1>
             <p class="max-w-full break-all text-xs text-ink-muted" dir="ltr">@view.SourceLabel</p>
             @* LaunchView carries no start time, so "after a minute" is counted from when this page opened. *@
-            <p class="hidden text-sm text-ink-muted" data-launch-slow>@(isFa ? "هنوز دارم می‌خوانم؛ مخزن بزرگی است. می‌توانی این صفحه را ببندی و بعداً برگردی، کار ادامه دارد." : "Still reading: this is a big one. You can close this page and come back later, it keeps going.")</p>
+            <p class="hidden text-sm text-ink-muted" data-launch-slow data-launch-keeps-going>@(isFa ? "هنوز دارم می‌خوانم؛ مخزن بزرگی است. می‌توانی این صفحه را ببندی و بعداً برگردی، کار ادامه دارد." : "Still reading: this is a big one. You can close this page and come back later, it keeps going.")</p>
             <noscript><p class="text-sm text-ink-muted">@(isFa ? "مخزن بزرگ چند دقیقه طول می‌کشد. می‌توانی این صفحه را ببندی و بعداً برگردی، کار ادامه دارد." : "A big repository can take a few minutes. You can close this page and come back later, it keeps going.")</p></noscript>
         </div>
     }

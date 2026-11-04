@@ -97,6 +97,10 @@ public class AppReleaseCommandHttpTests(HarboraHttpFixture fixture)
         Panel.GivenUser(fixture.WorkspaceId, "release-cmd-viewer@example.com", SystemRole.Viewer);
         var client = await Panel.SignedInAs("203.0.113.223", "release-cmd-viewer@example.com");
 
+        var page = await (await client.GetAsync($"/apps/details/{appId}")).Content.ReadAsStringAsync();
+        page.Should().NotContain("data-release-command-input", "a Save that can only be refused is not an offer");
+        page.Should().NotContain($"action=\"/apps/{appId}/release-command\"");
+
         var response = await client.PostFormAsync($"/apps/{appId}/release-command",
             await client.AntiforgeryTokenFrom($"/apps/details/{appId}"),
             ("releaseCommand", "rm -rf /"));

@@ -102,8 +102,8 @@ Nothing is created and nothing is charged until you say yes.
 | `--git-token <TOKEN>` | With `--git`: for a private repository. Also read from `HARBORA_GIT_TOKEN` |
 | `--folder <FOLDER>` | Which app, when a repository holds several |
 | `--name <NAME>` | The app's name |
-| `--set KEY=VALUE` | Answer a question up front. Repeatable. A value is never printed |
-| `--no-service <TYPE>` | Do not create a service it proposed, such as `postgres`. Repeatable |
+| `--set KEY=VALUE` | Answer a question up front, or give the app its own `DATABASE_URL`. Repeatable. A value is never printed |
+| `--no-service <TYPE>` | Do not create a service it proposed, such as `postgres`. Repeatable. It names what nothing will set as a result |
 | `-y`, `--yes` | Accept the proposal without asking |
 | `--no-follow` | Return as soon as it is confirmed, for CI that will look later |
 | `--server`, `--token`, `--account` | As `harbora deploy` |
@@ -115,14 +115,33 @@ simply not set, and the app's page is where to set it later.
 Press Ctrl-C while it is following and it stops watching. The launch carries on, and it says where to
 look. To read the build log itself, `harbora logs <deploymentId>`: it prints the id once there is one.
 
+Have your own database? Turn down the one it proposed and give it yours. What you set is the app's own
+variable, and outranks an attachment whichever services are created. A name no service will answer and
+nobody gave is said before you confirm, and again on the launch's timeline:
+
+```bash
+harbora launch --no-service postgres --set DATABASE_URL="$NEON_URL"
+```
+
+A frontend (Vite, Create React App and so on: a `build` script and no real `start`) is built and then
+served. Public build variables such as `VITE_` and `REACT_APP_` are read when it is built and end up in
+the files every visitor downloads, so changing one takes a new deploy.
+
+The database starts empty. It proposes a release task for Prisma, Laravel and Alembic; once the app
+exists, the **Release task** card on its page in the panel is where to set or change one.
+
 On success from a folder it writes `harbora.yml`, so `harbora deploy` works from then on. It never
 overwrites one that is already there.
 
+A browser takes a zip only, on `/launch` and on an uploaded app's page, because that is where `.env` and
+`node_modules` are left out. A `.tar.gz` sent there is told to send a zip. This command and
+`POST /launch/archive` still send a gzipped tar, which the CLI's packer has already filtered.
+
 | Exit code | Meaning |
 |---|---|
-| `0` | It is running and every check that could run passed. Also `--no-follow` once it is confirmed. A check that could not run is printed as not checked, never as a pass |
-| `1` | It failed, or never started: the step and the message are printed, with what exists so far |
-| `2` | It is running, but a check failed. The failed checks come first, with what to do about each |
+| `0` | It is running and nothing was found wrong. Also `--no-follow` once it is confirmed. A check that could not run is printed as not checked, never as a pass |
+| `1` | It failed, or never started: the step and the message are printed, with what exists so far. Also when the app it made has since been deleted |
+| `2` | It is running, but a check failed or warned, with those first and what to do about each. Or it came up and could not be confirmed as working, which names what could not be checked |
 
 Behind it is an API any client can use, under `/api/v1/launch`, with the same bearer token. Enums go by
 name in both directions, and a number is refused. A refusal is a `400` with
@@ -133,10 +152,10 @@ route. `apps.create` is needed for everything marked below.
 |---|---|---|
 | `POST /launch` | `apps.create` | `{ cloneUrl, gitRef, gitToken }` → `{ id }` |
 | `POST /launch/archive?name=my-app` | `apps.create` | Raw gzipped tar in the body, up to 512 MB → `{ id }` |
-| `GET /launch/{id}` | | Where it has got to, with its steps and checks |
+| `GET /launch/{id}` | | Where it has got to, with its steps and checks, what exists from it right now (`created`), and whether its app has since been deleted (`appGone`) |
 | `GET /launch/{id}/proposal` | | What was found and what would be created. `409` with `{ error, status }` once it is past asking |
 | `POST /launch/{id}/root` | `apps.create` | `{ candidate }`: which folder of several. Answers its proposal |
-| `POST /launch/{id}/quote` | | The proposal's `defaults`, as changed → what confirming would cost |
+| `POST /launch/{id}/quote` | | The proposal's `defaults`, as changed → what confirming would cost. `refusalIsAboutMoney` says whether more credit would fix a `refusal` |
 | `POST /launch/{id}/confirm` | `apps.create` | The same choices → the launch. A `200` can still be `Failed` part-way: read `status` |
 | `POST /launch/{id}/retry` | `apps.create` | Runs the failed step again |
 | `POST /launch/{id}/abandon` | `apps.create` | Gives up before anything was created |

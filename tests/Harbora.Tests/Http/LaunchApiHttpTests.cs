@@ -378,15 +378,35 @@ public class LaunchApiHttpTests : IClassFixture<LaunchPanelFixture>
         var refused = LaunchScript.Charged with
         {
             BalanceMinor = 0,
-            Refusal = new ServiceRefusal("Your balance cannot pay for the first hour.", "موجودی کافی نیست.")
+            Refusal = new ServiceRefusal("Your balance cannot pay for the first hour.", "موجودی کافی نیست."),
+            RefusalIsAboutMoney = true
         };
         var id = GivenAwaiting(refused);
 
         var response = await Client().PostAsync($"/api/v1/launch/{id}/quote", ChoicesJson());
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, "nothing was refused yet: this says what would be");
-        (await response.JsonAsync()).GetProperty("refusal").GetProperty("message").GetString()
-            .Should().Be("Your balance cannot pay for the first hour.");
+        var quote = await response.JsonAsync();
+        quote.GetProperty("refusal").GetProperty("message").GetString().Should().Be("Your balance cannot pay for the first hour.");
+        quote.GetProperty("refusalIsAboutMoney").GetBoolean().Should().BeTrue("the CLI has only this to say whether billing could help");
+    }
+
+    [Fact]
+    public async Task What_a_launch_left_and_a_deleted_app_go_over_the_wire()
+    {
+        var id = Guid.CreateVersion7();
+        var view = LaunchScript.View(LaunchStatus.Failed, id, appGone: true,
+            created: [new LaunchCreatedThing("database", "shop-postgresql", "/databases/x", Ready: false)]);
+        Launches.Add(_fixture.WorkspaceId, view);
+
+        var answer = await (await Client().GetAsync($"/api/v1/launch/{id}")).JsonAsync();
+
+        answer.GetProperty("appGone").GetBoolean().Should().BeTrue();
+        var thing = answer.GetProperty("created").EnumerateArray().Should().ContainSingle().Subject;
+        thing.GetProperty("kind").GetString().Should().Be("database");
+        thing.GetProperty("name").GetString().Should().Be("shop-postgresql");
+        thing.GetProperty("linkPath").GetString().Should().Be("/databases/x");
+        thing.GetProperty("ready").GetBoolean().Should().BeFalse();
     }
 
     // ---- confirming -----------------------------------------------------------------------------------

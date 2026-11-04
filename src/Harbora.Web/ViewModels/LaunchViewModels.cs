@@ -1,5 +1,6 @@
 using Harbora.Domain.Common;
 using Harbora.Infrastructure.Launch;
+using Harbora.Infrastructure.Services;
 using Harbora.Shared.Inspection;
 using Microsoft.AspNetCore.Mvc.Rendering;
 
@@ -59,6 +60,7 @@ public sealed class LaunchConfirmForm
 /// <param name="AddressIsReserved">It would get none because the platform keeps that name for itself.</param>
 /// <param name="Refusals">Why the last submit did not go through.</param>
 /// <param name="SecretsToRetype">A secret was typed and refused along with everything else, and is not drawn back.</param>
+/// <param name="ConnectionsToRetype">The same for a connection, which lives under Details and so has to say it there.</param>
 public sealed record LaunchConfirmModel(
     LaunchProposal Proposal,
     LaunchConfirmForm Form,
@@ -68,14 +70,53 @@ public sealed record LaunchConfirmModel(
     bool AddressIsReserved,
     IReadOnlyList<SelectListItem> Environments,
     IReadOnlyList<Harbora.Application.Abstractions.ServiceRefusal> Refusals,
-    bool SecretsToRetype)
+    bool SecretsToRetype,
+    bool ConnectionsToRetype = false)
 {
     public bool IsWorker => Form.Kind == nameof(ServiceKind.Worker);
 
     public IEnumerable<LaunchEnvField> Asked => Proposal.EnvFields.Where(f => f.Disposition == EnvVarDisposition.NeedsAnswer);
     public IEnumerable<LaunchEnvField> Generated => Proposal.EnvFields.Where(f => f.Disposition == EnvVarDisposition.GeneratedSecret);
     public IEnumerable<LaunchEnvField> Examples => Proposal.EnvFields.Where(f => f.Disposition == EnvVarDisposition.KeepExample);
-    public IEnumerable<LaunchEnvField> Aliases => Proposal.EnvFields.Where(f => f.Disposition == EnvVarDisposition.AliasOfAttach);
+    public IEnumerable<LaunchEnvField> Connections => Proposal.EnvFields.Where(LaunchConnections.IsConnection);
+}
+
+/// <summary>
+/// What the screen and the form both have to know about a name a service's attachment answers:
+/// <c>DATABASE_URL</c>, or a different spelling of it such as <c>DB_HOST</c>. Whether it needs asking
+/// depends on what is ticked at that moment, so it cannot be settled once when the proposal is made.
+/// </summary>
+public static class LaunchConnections
+{
+    public static bool IsConnection(LaunchEnvField field) =>
+        field.Disposition is EnvVarDisposition.ProvidedByAttach or EnvVarDisposition.AliasOfAttach;
+
+    /// <summary>
+    /// The services that would set this name if ticked. More than the one the field names:
+    /// <c>DATABASE_URL</c> is set by Postgres, MySQL and MariaDB alike, so ticking MySQL instead still
+    /// answers it, whereas an alias is only ever written for its own engine. None at all means nothing
+    /// on this screen is known to set it, and it can only be asked.
+    /// </summary>
+    public static IReadOnlySet<ManagedServiceType> AnsweredBy(LaunchEnvField field)
+    {
+        var services = new HashSet<ManagedServiceType>();
+        if (field.Service is { } named) services.Add(named);
+        if (field.Disposition == EnvVarDisposition.ProvidedByAttach)
+            foreach (var (kind, names) in AttachEnvNames.All)
+                if (names.Contains(field.Key)) services.Add(AttachEnvRoles.TypeFor(kind));
+        return services;
+    }
+
+    /// <summary>
+    /// Whether what is typed for this stays off the screen. Somebody's own <c>DATABASE_URL</c> has their
+    /// password in it, whatever the proposal says about a name it expected an attachment to answer. So
+    /// a connection is masked unless its name is plainly a part with nothing secret in it: masking
+    /// a host costs a glance, and the reverse leaves a password on a page.
+    /// </summary>
+    public static bool IsMasked(LaunchEnvField field) => field.IsSecret
+        || (IsConnection(field) && !PlainParts.Any(part => field.Key.EndsWith(part, StringComparison.OrdinalIgnoreCase)));
+
+    private static readonly string[] PlainParts = ["HOST", "PORT", "USER", "USERNAME", "NAME", "DATABASE", "DB"];
 }
 
 /// <summary>The one question a several-app repository gets before anything else can be said about it.</summary>
