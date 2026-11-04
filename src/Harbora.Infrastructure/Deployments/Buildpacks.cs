@@ -1,4 +1,5 @@
 using Harbora.Domain.Common;
+using Harbora.Shared.Inspection;
 
 namespace Harbora.Infrastructure.Deployments;
 
@@ -20,16 +21,32 @@ public static class Buildpacks
     private static readonly string[] PythonEntryCandidates =
         ["app.py", "main.py", "wsgi.py", "server.py", "bot.py", "run.py", "start.py", "__main__.py"];
 
+    /// <summary>
+    /// A <c>package.json</c> wins when it can start something, and otherwise gives way to any other
+    /// stack's marker: see <see cref="NodeStartRule"/> for why. With no other marker it is still Node,
+    /// and fails at <c>npm start</c> as it always has, ahead of the static build, because that
+    /// <c>index.html</c> is usually the frontend's own source. <c>SourceInspector</c> mirrors this
+    /// order, and <c>SourceInspectorParityTests</c> holds the two together.
+    /// </summary>
     public static BuildpackResult? Detect(string contextPath, int port, ServiceKind kind = ServiceKind.Web)
     {
         bool Has(string file) => File.Exists(Path.Combine(contextPath, file));
         bool HasAny(params string[] files) => files.Any(Has);
 
-        if (Has("package.json")) return Node(contextPath, port);
-        if (FindCsproj(contextPath) is { } csproj) return DotNet(csproj, port);
-        if (Has("go.mod")) return Go(port);
-        if (HasAny("composer.json", "index.php")) return Php(contextPath, port);
-        if (HasAny("requirements.txt", "pyproject.toml", "Pipfile")) return Python(contextPath, port, kind);
+        // What the chosen image will not do, said in the deploy log because this deploys and serves a
+        // page with no CSS. Without the sentence, nothing would explain why.
+        BuildpackResult? BesidePackage(BuildpackResult? pack) =>
+            pack is { } chosen && NodeStartRule.HasBuildScript(contextPath)
+                ? chosen with { Warning = NodeStartRule.AssetsNotBuilt }
+                : pack;
+
+        var hasPackage = Has("package.json");
+        if (hasPackage && NodeStartRule.CanStart(contextPath)) return Node(contextPath, port);
+        if (FindCsproj(contextPath) is { } csproj) return BesidePackage(DotNet(csproj, port));
+        if (Has("go.mod")) return BesidePackage(Go(port));
+        if (HasAny("composer.json", "index.php")) return BesidePackage(Php(contextPath, port));
+        if (HasAny("requirements.txt", "pyproject.toml", "Pipfile")) return BesidePackage(Python(contextPath, port, kind));
+        if (hasPackage) return Node(contextPath, port);
         if (HasAny("index.html", "index.htm")) return Static();
         return null;
     }
@@ -220,5 +237,6 @@ public static class Buildpacks
 /// <paramref name="Entry"/> is the chosen entry point / start command when the stack has one worth
 /// naming (currently just Python's <c>CMD</c> file) — null for stacks where "the stack" already is
 /// the answer. Lets the pipeline log which guess it made instead of just which stack it picked.
+/// <paramref name="Warning"/> is what this build will leave undone without failing, for the deploy log.
 /// </summary>
-public readonly record struct BuildpackResult(string Dockerfile, string Stack, string? Entry = null);
+public readonly record struct BuildpackResult(string Dockerfile, string Stack, string? Entry = null, string? Warning = null);

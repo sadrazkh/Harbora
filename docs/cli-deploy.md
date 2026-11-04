@@ -336,7 +336,10 @@ values in the app's **Environment Variables**.
 2. The `dockerfile` path, if that file exists in the context
 3. Stack auto-detection — Node (`package.json`), .NET (`*.csproj`), Go (`go.mod`), PHP
    (`composer.json`/`index.php`), Python (`requirements.txt`/`pyproject.toml`/`Pipfile`), static
-   (`index.html`)
+   (`index.html`). A `package.json` with no `start` script and no `server.js` beside it can start
+   nothing, so it gives way to .NET, Go, PHP or Python when one of those is present: it is that
+   app's frontend. The generated image does not build that frontend, and the deploy log says so
+   when there is a `build` script; add a Dockerfile if it needs building.
 4. Otherwise the deployment fails with a message saying exactly this
 
 Auto-detected builds set `ENV PORT` to the app's container port, so `process.env.PORT` and the

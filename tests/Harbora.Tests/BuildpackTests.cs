@@ -1,6 +1,8 @@
 using FluentAssertions;
 using Harbora.Domain.Common;
 using Harbora.Infrastructure.Deployments;
+using Harbora.Shared.Inspection;
+using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 namespace Harbora.Tests;
@@ -176,5 +178,236 @@ public class BuildpackTests : IDisposable
     {
         Touch("README.md", "# nothing to build");
         Buildpacks.Detect(_dir, 80).Should().BeNull();
+    }
+
+    // --- A package.json that is only a frontend's ------------------------------------------------
+
+    private const string FrontendOnly = """{"scripts":{"build":"vite build"},"devDependencies":{"vite":"5"}}""";
+    private const string RealNodeApp = """{"scripts":{"start":"node app.js"}}""";
+
+    [Fact]
+    public void Laravel_with_a_frontend_package_json_builds_as_PHP()
+    {
+        Touch("package.json", FrontendOnly);
+        Touch("composer.json", "{}");
+        Touch("artisan");
+
+        var pack = Buildpacks.Detect(_dir, 80)!.Value;
+
+        pack.Stack.Should().Be("PHP");
+        pack.Dockerfile.Should().Contain("FROM php:").And.NotContain("npm");
+        pack.Warning.Should().Be(NodeStartRule.AssetsNotBuilt);
+    }
+
+    [Fact]
+    public void Flask_with_a_frontend_package_json_builds_as_Python()
+    {
+        Touch("package.json", FrontendOnly);
+        Touch("requirements.txt", "flask");
+        Touch("app.py");
+
+        var pack = Buildpacks.Detect(_dir, 5000)!.Value;
+
+        pack.Stack.Should().Be("Python");
+        pack.Entry.Should().Be("app.py");
+        pack.Dockerfile.Should().NotContain("npm");
+        pack.Warning.Should().Be(NodeStartRule.AssetsNotBuilt);
+    }
+
+    [Fact]
+    public void AspNet_with_a_frontend_package_json_builds_as_DotNet()
+    {
+        Touch("package.json", FrontendOnly);
+        Touch("Shop.csproj", "<Project Sdk=\"Microsoft.NET.Sdk.Web\" />");
+
+        var pack = Buildpacks.Detect(_dir, 8080)!.Value;
+
+        pack.Stack.Should().Be(".NET");
+        pack.Dockerfile.Should().Contain("dotnet publish \"Shop.csproj\"").And.NotContain("npm");
+        pack.Warning.Should().Be(NodeStartRule.AssetsNotBuilt);
+    }
+
+    [Fact]
+    public void A_project_anywhere_FindCsproj_looks_counts_as_the_other_stack()
+    {
+        Touch("package.json", FrontendOnly);
+        Directory.CreateDirectory(Path.Combine(_dir, "src", "Shop"));
+        Touch(Path.Combine("src", "Shop", "Shop.csproj"), "<Project />");
+
+        Buildpacks.Detect(_dir, 8080)!.Value.Stack.Should().Be(".NET");
+    }
+
+    [Fact]
+    public void Go_with_a_frontend_package_json_builds_as_Go()
+    {
+        Touch("package.json", FrontendOnly);
+        Touch("go.mod", "module x");
+
+        Buildpacks.Detect(_dir, 8080)!.Value.Stack.Should().Be("Go");
+    }
+
+    [Fact]
+    public void The_other_stacks_keep_their_own_order_when_a_package_json_gives_way()
+    {
+        Touch("package.json", FrontendOnly);
+        Touch("composer.json", "{}");
+        Touch("go.mod", "module x");
+
+        Buildpacks.Detect(_dir, 8080)!.Value.Stack.Should().Be("Go");
+    }
+
+    [Fact]
+    public void A_real_node_app_with_a_stray_requirements_txt_is_still_node_and_builds_exactly_as_before()
+    {
+        Touch("package.json", RealNodeApp);
+        var before = Buildpacks.Detect(_dir, 3000)!.Value;
+
+        Touch("requirements.txt", "flask");
+        Touch("app.py");
+        var after = Buildpacks.Detect(_dir, 3000)!.Value;
+
+        after.Stack.Should().Be("Node.js");
+        after.Should().Be(before);
+        after.Warning.Should().BeNull();
+    }
+
+    [Fact]
+    public void A_server_js_and_no_scripts_is_still_node_since_it_is_what_npm_start_runs()
+    {
+        Touch("package.json", "{}");
+        Touch("server.js");
+        Touch("composer.json", "{}");
+
+        Buildpacks.Detect(_dir, 3000)!.Value.Stack.Should().Be("Node.js");
+    }
+
+    [Fact]
+    public void A_package_json_alone_with_no_start_is_still_node()
+    {
+        Touch("package.json", FrontendOnly);
+
+        var pack = Buildpacks.Detect(_dir, 3000)!.Value;
+
+        pack.Stack.Should().Be("Node.js");
+        pack.Warning.Should().BeNull();
+    }
+
+    [Fact]
+    public void A_package_json_with_no_start_still_outranks_its_own_index_html()
+    {
+        Touch("package.json", FrontendOnly);
+        Touch("index.html", "<html></html>");
+
+        Buildpacks.Detect(_dir, 3000)!.Value.Stack.Should().Be("Node.js",
+            "index.html is not another stack's marker: in a frontend it is the source, not the site");
+    }
+
+    [Theory]
+    [InlineData("not json")]
+    [InlineData("")]
+    [InlineData("[1,2]")]
+    [InlineData("""{"scripts":"start"}""")]
+    [InlineData("""{"scripts":{"start":3}}""")]
+    [InlineData("""{"scripts":{"start":""}}""")]
+    [InlineData("""{"scripts":{"start":"   "}}""")]
+    [InlineData("""{"start":"node a.js"}""")]
+    public void A_package_json_with_no_usable_start_gives_way_only_when_another_marker_exists(string content)
+    {
+        Touch("package.json", content);
+        Buildpacks.Detect(_dir, 3000)!.Value.Stack.Should().Be("Node.js");
+
+        Touch("composer.json", "{}");
+        Buildpacks.Detect(_dir, 80)!.Value.Stack.Should().Be("PHP");
+    }
+
+    [Fact]
+    public void With_no_build_script_there_is_nothing_to_warn_about()
+    {
+        Touch("package.json", """{"dependencies":{"left-pad":"1"}}""");
+        Touch("composer.json", "{}");
+
+        var pack = Buildpacks.Detect(_dir, 80)!.Value;
+
+        pack.Stack.Should().Be("PHP");
+        pack.Warning.Should().BeNull();
+    }
+
+    [Fact]
+    public void A_frontend_beside_python_with_no_entry_file_gets_the_python_hint_rather_than_a_node_build_that_cannot_start()
+    {
+        Touch("package.json", FrontendOnly);
+        Touch("requirements.txt", "flask");
+
+        Buildpacks.Detect(_dir, 5000).Should().BeNull();
+        Buildpacks.DetectionHint(_dir).Should().Contain("looks like a Python project");
+    }
+
+    [Fact]
+    public void A_frontend_beside_django_gets_the_django_hint()
+    {
+        Touch("package.json", FrontendOnly);
+        Touch("requirements.txt", "django");
+        Touch("manage.py");
+
+        Buildpacks.Detect(_dir, 8000).Should().BeNull();
+        Buildpacks.DetectionHint(_dir).Should().Contain("Django");
+    }
+
+    // --- What the deploy log says about it -------------------------------------------------------
+
+    private static async Task<List<string>> DeployAndReadLog(Fakes.PipelineHarness h)
+    {
+        var deployment = h.QueueDeployment();
+        await h.RunAsync(deployment);
+
+        return await h.Db.DeploymentLogs.AsNoTracking()
+            .Where(l => l.DeploymentId == deployment.Id)
+            .OrderBy(l => l.Sequence).Select(l => l.Message).ToListAsync();
+    }
+
+    [Fact]
+    public async Task The_deploy_log_names_the_stack_that_was_built_and_what_it_left_undone()
+    {
+        using var h = new Fakes.PipelineHarness(sourceType: AppSourceType.GitRepository).WithGitSource();
+        File.WriteAllText(Path.Combine(h.WorkDir, "package.json"), FrontendOnly);
+        File.WriteAllText(Path.Combine(h.WorkDir, "composer.json"), "{}");
+
+        var log = await DeployAndReadLog(h);
+
+        log.Should().Contain("No Dockerfile — auto-detected PHP; using a generated build.");
+        log.Should().Contain("⚠ " + NodeStartRule.AssetsNotBuilt);
+        log.Should().NotContain(line => line.Contains("Node.js"));
+        File.ReadAllText(Path.Combine(h.WorkDir, "Dockerfile.harbora")).Should().Contain("FROM php:");
+    }
+
+    [Fact]
+    public async Task The_deploy_log_of_an_ordinary_node_app_is_what_it_always_was()
+    {
+        using var h = new Fakes.PipelineHarness(sourceType: AppSourceType.GitRepository).WithGitSource();
+        File.WriteAllText(Path.Combine(h.WorkDir, "package.json"), RealNodeApp);
+
+        var log = await DeployAndReadLog(h);
+
+        log.Should().Contain("No Dockerfile — auto-detected Node.js; using a generated build.");
+        log.Should().NotContain(line => line.StartsWith("⚠"));
+    }
+
+    [Fact]
+    public async Task A_compose_service_built_from_source_says_the_same_under_its_own_name()
+    {
+        using var h = new Fakes.PipelineHarness().WithComposeFile("""
+            services:
+              web:
+                build: .
+                ports:
+                  - "8080:8080"
+            """);
+        File.WriteAllText(Path.Combine(h.WorkDir, "package.json"), FrontendOnly);
+        File.WriteAllText(Path.Combine(h.WorkDir, "composer.json"), "{}");
+
+        var log = await DeployAndReadLog(h);
+
+        log.Should().Contain("Service 'web': detected PHP.");
+        log.Should().Contain("⚠ Service 'web': " + NodeStartRule.AssetsNotBuilt);
     }
 }

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Harbora.Shared.Inspection;
 
 namespace Harbora.Cli;
 
@@ -34,15 +35,6 @@ public static class Doctor
 
     private static readonly Regex ScriptPathPattern =
         new(@"[A-Za-z0-9_./-]+\.(?:mjs|cjs|js|jsx|ts|tsx|py|rb|sh)\b", RegexOptions.Compiled);
-
-    // Matches docs/cli-deploy.md §5 "How the build is chosen": Node, .NET, Go, PHP, Python, static.
-    private static readonly (string Stack, string[] Markers)[] StackMarkers =
-    [
-        ("Node (package.json)", ["package.json"]),
-        ("PHP (composer.json/index.php)", ["composer.json", "index.php"]),
-        ("Python (requirements.txt/pyproject.toml/Pipfile)", ["requirements.txt", "pyproject.toml", "Pipfile"]),
-        ("static (index.html)", ["index.html"])
-    ];
 
     // ---- manifest -----------------------------------------------------------------------------
 
@@ -175,22 +167,27 @@ public static class Doctor
     }
 
     /// <summary>
-    /// A .NET project (a <c>*.csproj</c> anywhere under the context) is checked separately from the
-    /// four exact-filename stacks: it is a glob, not a name, and unlike the others is not itself a
-    /// reason to fall back to a Dockerfile — see <c>docs/cli-deploy.md</c>'s own worked example
-    /// (DriveUnion) for why a .NET app with a front-end build step needs one anyway.
+    /// The stack the server's <c>Buildpacks.Detect</c> will choose, in its order, as
+    /// <c>docs/cli-deploy.md</c> §5 "How the build is chosen" describes it. This reports the build
+    /// before it happens, so a label that named a different stack from the one deployed would be
+    /// worse than no check. A <c>package.json</c> that can start nothing comes after every other
+    /// stack: see <see cref="NodeStartRule"/>.
     /// </summary>
     private static string? DetectStack(string contextDir)
     {
-        foreach (var (stack, markers) in StackMarkers)
-            if (markers.Any(m => File.Exists(Path.Combine(contextDir, m))))
-                return stack;
+        bool Has(params string[] names) => names.Any(n => File.Exists(Path.Combine(contextDir, n)));
+
+        var hasPackage = Has("package.json");
+        if (hasPackage && NodeStartRule.CanStart(contextDir)) return "Node (package.json)";
 
         if (Directory.EnumerateFiles(contextDir, "*.csproj", SearchOption.AllDirectories).Any())
             return ".NET (*.csproj)";
 
-        if (File.Exists(Path.Combine(contextDir, "go.mod")))
-            return "Go (go.mod)";
+        if (Has("go.mod")) return "Go (go.mod)";
+        if (Has("composer.json", "index.php")) return "PHP (composer.json/index.php)";
+        if (Has("requirements.txt", "pyproject.toml", "Pipfile")) return "Python (requirements.txt/pyproject.toml/Pipfile)";
+        if (hasPackage) return "Node (package.json)";
+        if (Has("index.html", "index.htm")) return "static (index.html)";
 
         return null;
     }

@@ -65,10 +65,15 @@ Harbora بدون Dockerfile هم stack را حدس می‌زند: Node (`package
 (`go.mod`)، PHP (`composer.json`/`index.php`)، Python (`requirements.txt`/`pyproject.toml`/
 `Pipfile`)، استاتیک (`index.html`). در این حالت `ENV PORT` هم خودکار تنظیم می‌شود.
 
+یک `package.json` که نه اسکریپت `start` دارد و نه کنارش `server.js` هست، چیزی را اجرا نمی‌کند؛ پس اگر
+.NET، Go، PHP یا Python هم در پروژه باشد کنار می‌رود و همان stack انتخاب می‌شود، چون این فایل مال
+فرانت‌اند آن اپ است.
+
 اما auto-detect فقط یک دستور می‌زند — برای .NET یعنی `dotnet publish`، برای Node یعنی `npm ci` و
 اجرای اسکریپت start. اگر پروژه‌تان **بیش از یک قدم** لازم دارد (مثلاً build فرانت‌اند جدا از publish
-بک‌اند)، auto-detect چیزی نیم‌ساخته تحویل می‌دهد — نه خطا، فقط یک اپ بدون CSS و بدون هیچ توضیحی در
-گزارش deploy دربارهٔ اینکه چرا. اینجا دقیقاً وقتی است که خودتان یک Dockerfile چندمرحله‌ای بنویسید.
+بک‌اند)، auto-detect چیزی نیم‌ساخته تحویل می‌دهد — نه خطا، فقط یک اپ بدون CSS. اگر `package.json`
+اسکریپت `build` داشته باشد، گزارش deploy یک هشدار دربارهٔ همین نشان می‌دهد. اینجا دقیقاً وقتی است که
+خودتان یک Dockerfile چندمرحله‌ای بنویسید.
 
 ## `$PORT`
 

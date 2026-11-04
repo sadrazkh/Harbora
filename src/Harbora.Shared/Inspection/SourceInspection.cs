@@ -72,7 +72,7 @@ public enum EnvAliasRole
     Database = 5
 }
 
-/// <param name="File">The file it was read from, relative to the inspected root.</param>
+/// <param name="File">The file it was read from, relative to the chosen root: <see cref="SourceInspection.RootDirectory"/> when there is one, otherwise the inspected root.</param>
 /// <param name="Reason">What was found there — <c>"pg" in dependencies</c> — shown beside the proposal so a guess can be checked.</param>
 public sealed record ServiceEvidence(string File, string Reason);
 
@@ -107,7 +107,7 @@ public sealed record InspectionNote(string Code, string Message, string MessageF
 /// </summary>
 /// <param name="RootDirectory">The sub-path the app lives in, or null for the root. Set when the root holds nothing recognisable but one folder does — a monorepo, or a zip with a single top-level folder.</param>
 /// <param name="RootCandidates">Every folder that looked like an app when more than one did. The screen offers these; the inspector does not choose.</param>
-/// <param name="Port">Null for a <see cref="DetectedAppKind.Worker"/>. An <c>EXPOSE</c> outranks an example file, which outranks the stack's default.</param>
+/// <param name="Port">Null for a <see cref="DetectedAppKind.Worker"/>. An <c>EXPOSE</c> outranks an example file, which outranks the stack's default. <see cref="DetectedStack.Static"/> is always 80, whatever an example file says, because its generated nginx never reads a port.</param>
 /// <param name="StartCommand">Set only when the stack's default would be wrong. Null means the image's own.</param>
 /// <param name="ReleaseCommand">A migration command this stack's tooling plainly uses, run once before traffic moves.</param>
 public sealed record SourceInspection(
