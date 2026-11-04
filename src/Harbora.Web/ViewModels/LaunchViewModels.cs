@@ -56,6 +56,7 @@ public sealed class LaunchConfirmForm
 /// <param name="Form">What is in the fields: the proposal's guesses, or what was just posted.</param>
 /// <param name="RootDomain">What an address ends in, or null when this panel has none to give.</param>
 /// <param name="Address">The address this app would get as things stand, or null when it would get none.</param>
+/// <param name="AddressIsReserved">It would get none because the platform keeps that name for itself.</param>
 /// <param name="Refusals">Why the last submit did not go through.</param>
 /// <param name="SecretsToRetype">A secret was typed and refused along with everything else, and is not drawn back.</param>
 public sealed record LaunchConfirmModel(
@@ -64,6 +65,7 @@ public sealed record LaunchConfirmModel(
     LaunchQuote Quote,
     string? RootDomain,
     string? Address,
+    bool AddressIsReserved,
     IReadOnlyList<SelectListItem> Environments,
     IReadOnlyList<Harbora.Application.Abstractions.ServiceRefusal> Refusals,
     bool SecretsToRetype)

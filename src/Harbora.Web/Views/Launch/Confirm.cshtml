@@ -129,6 +129,10 @@
                         @(isFa ? "آدرسش: " : "Its address: ")<bdi dir="ltr" class="break-all font-mono text-ink" data-launch-address>@address</bdi>
                     </p>
                 }
+                else if (Model.AddressIsReserved)
+                {
+                    <p class="mt-1.5 text-xs text-ink-muted @webOnly" data-launch-web-only>@(isFa ? "این اسم برای خود پنل نگه داشته شده و آدرس نمی‌گیرد. اسم دیگری بگذار." : "That name is kept for the panel itself and gets no address. Choose another.")</p>
+                }
                 else
                 {
                     <p class="mt-1.5 text-xs text-ink-muted @webOnly" data-launch-web-only>@(isFa ? "این پنل هنوز دامنه‌ی اصلی ندارد، پس اپ خودکار آدرس عمومی نمی‌گیرد." : "This panel has no root domain yet, so the app won't get a public address by itself.")</p>

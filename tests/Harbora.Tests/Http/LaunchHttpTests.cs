@@ -646,6 +646,18 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
     }
 
     [Fact]
+    public async Task A_name_the_platform_keeps_for_itself_says_that_and_does_not_blame_the_root_domain()
+    {
+        var (id, client, token) = await AtTheConfirmScreen();
+        Launches.ValidateRefusals = [new ServiceRefusal("No.", "نه.")];
+
+        var html = await BodyAsync(await client.PostFormAsync($"/launch/{id}/confirm", token, ("Name", "status-shop")));
+
+        html.Should().Contain("این اسم برای خود پنل نگه داشته شده");
+        html.Should().NotContain("دامنه‌ی اصلی ندارد");
+    }
+
+    [Fact]
     public async Task An_unknown_stack_says_it_does_not_know_rather_than_guessing()
     {
         var (view, proposal) = Confirmable(Inspection(DetectedStack.Unknown));
@@ -904,6 +916,17 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
     }
 
     [Fact]
+    public async Task A_port_typed_on_a_persian_keyboard_is_still_a_number()
+    {
+        var (id, client, token) = await AtTheConfirmScreen();
+
+        var response = await client.PostFormAsync($"/launch/{id}/confirm", token, ("Name", "shop"), ("ContainerPort", "۸۰۸۰"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Found);
+        Launches.Confirmed.Should().ContainSingle().Which.Choices.ContainerPort.Should().Be(8080);
+    }
+
+    [Fact]
     public async Task A_second_submit_lands_on_the_progress_page_and_creates_nothing_twice()
     {
         var (id, client, token) = await AtTheConfirmScreen();
@@ -1116,14 +1139,16 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
         html.Should().Contain("data-launch-skipped-note");
     }
 
-    [Fact]
-    public async Task A_host_with_no_scheme_still_opens_as_a_link()
+    [Theory]
+    [InlineData("shop.apps.example.com")]
+    [InlineData("httpbin.apps.example.com")]
+    public async Task A_host_with_no_scheme_still_opens_as_a_link(string host)
     {
-        var id = Given(View(LaunchStatus.Succeeded, appId: Guid.CreateVersion7(), publicUrl: "shop.apps.example.com"));
+        var id = Given(View(LaunchStatus.Succeeded, appId: Guid.CreateVersion7(), publicUrl: host));
 
         var html = await PageAsync(await Owner(), $"/launch/{id}");
 
-        html.Should().Contain("href=\"https://shop.apps.example.com\"");
+        html.Should().Contain($"href=\"https://{host}\"");
     }
 
     [Fact]
@@ -1505,6 +1530,21 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         _fixture.Deployments.Queued.Should().NotContain(r => r.AppId == appId);
+    }
+
+    [Fact]
+    public async Task A_new_version_can_be_past_the_form_limits_128_megabyte_default_too()
+    {
+        var appId = GivenApp(AppSourceType.Upload);
+        var client = await Owner();
+        var token = await client.AntiforgeryTokenFrom("/apps");
+
+        var response = await client.PostAsync($"/apps/{appId}/upload", Upload(token, Zip(129 * 1024 * 1024), "big.zip", "file"));
+
+        response.RedirectPath().Should().StartWith("/Deployments/Details");
+        var queued = _fixture.Deployments.Queued.Should().ContainSingle(r => r.AppId == appId).Subject;
+        new FileInfo(queued.SourceArchivePath!).Length.Should().Be(129 * 1024 * 1024);
+        File.Delete(queued.SourceArchivePath!);
     }
 
     [Fact]

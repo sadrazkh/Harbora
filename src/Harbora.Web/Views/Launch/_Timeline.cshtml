@@ -28,7 +28,7 @@
 
     // A host with no scheme still has to open as a link.
     var address = view.PublicUrl is { Length: > 0 } url
-        ? (url.StartsWith("http", StringComparison.OrdinalIgnoreCase) ? url : "https://" + url)
+        ? (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || url.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ? url : "https://" + url)
         : null;
 
     string? Moving() => (view.Status, isFa) switch

@@ -296,7 +296,7 @@ public sealed class LaunchController(
 
         var port = defaults.ContainerPort;
         if (kind != ServiceKind.Worker && !string.IsNullOrWhiteSpace(form.ContainerPort)
-            && !int.TryParse(form.ContainerPort.Trim(), System.Globalization.NumberStyles.None,
+            && !int.TryParse(WesternDigits(form.ContainerPort.Trim()), System.Globalization.NumberStyles.None,
                 System.Globalization.CultureInfo.InvariantCulture, out port))
         {
             port = defaults.ContainerPort;
@@ -355,6 +355,10 @@ public sealed class LaunchController(
 
     private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    /// <summary>A Persian keyboard types ۸۰۸۰, and that is as much a number as 8080 is.</summary>
+    private static string WesternDigits(string value) =>
+        new(value.Select(c => char.IsDigit(c) ? (char)('0' + (int)char.GetNumericValue(c)) : c).ToArray());
+
     private async Task<IActionResult> ConfirmScreenAsync(
         LaunchProposal proposal, LaunchConfirmForm form, IReadOnlyList<ServiceRefusal> refusals, bool secretsToRetype, CancellationToken ct)
     {
@@ -379,6 +383,7 @@ public sealed class LaunchController(
 
         return View("Confirm", new LaunchConfirmModel(
             proposal, form, quote, address.HasAddress ? rootDomain : null, address.Host,
+            address.Outcome == AppAddressOutcome.Reserved,
             await EnvironmentsAsync(ct), refusals, secretsToRetype));
     }
 
