@@ -96,6 +96,7 @@ FAILED_STEPS="$WORK/failed-steps"
 : > "$WORK/known-secrets"
 : > "$WORK/last-failure"
 : > "$WORK/current-launch"
+: > "$WORK/current-output"
 
 API_TOKEN=""
 ANNOTATIONS_USED=0
@@ -157,6 +158,11 @@ annotate() {
 report_failure() {
   local title="$1" fact="$2" launch deployment view
   annotate "$title" "$fact"
+
+  # What the command said, since the job's log takes a login to read.
+  if [ -s "$WORK/current-output" ] && [ -s "$(cat "$WORK/current-output")" ]; then
+    annotate "$title - what the command said" "$(tail -c 3000 "$(cat "$WORK/current-output")")"
+  fi
 
   launch="$(cat "$WORK/current-launch" 2>/dev/null || true)"
   [ -n "$launch" ] || return 0
@@ -227,6 +233,7 @@ step_case() {
   step "$title"
   : > "$WORK/last-failure"
   : > "$WORK/current-launch"
+  : > "$WORK/current-output"
   started="$(date +%s)"
   set +e
   ( set -e; "$fn" )
@@ -328,6 +335,7 @@ run_launch() {
   shift 2
   before="$(newest_launch)"
   OUT="$WORK/out/$label.flat"
+  printf '%s' "$WORK/out/$label.txt" > "$WORK/current-output"
   LAUNCH_EXIT=0
   ( cd "$dir" && timeout "$W_LAUNCH" "$HARBORA" launch --yes "$@" ) > "$WORK/out/$label.txt" 2>&1 || LAUNCH_EXIT=$?
   cat "$WORK/out/$label.txt"
@@ -400,6 +408,7 @@ set_variable_on_page() {
 # run_deploy <folder> <output label>: what a customer runs the next day. Leaves DEPLOY_EXIT and DEPLOY_ID.
 run_deploy() {
   local dir="$1" label="$2"
+  printf '%s' "$WORK/out/$label.txt" > "$WORK/current-output"
   DEPLOY_EXIT=0
   ( cd "$dir" && timeout "$W_LAUNCH" "$HARBORA" deploy ) > "$WORK/out/$label.txt" 2>&1 || DEPLOY_EXIT=$?
   cat "$WORK/out/$label.txt"
