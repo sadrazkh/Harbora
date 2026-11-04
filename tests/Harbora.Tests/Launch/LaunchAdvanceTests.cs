@@ -121,6 +121,20 @@ public sealed class LaunchAdvanceTests
         LaunchAdvance.Decide(Snapshot(LaunchStatus.Deploying)).Kind.Should().Be(LaunchMoveKind.QueueDeployment);
     }
 
+    [Fact]
+    public void Deploying_with_no_deployment_after_twenty_minutes_is_a_failure_at_deploy_and_not_a_page_that_goes_on_saying_so()
+    {
+        LaunchAdvance.Decide(Snapshot(LaunchStatus.Deploying, inStatus: TimeSpan.FromMinutes(20)))
+            .Kind.Should().Be(LaunchMoveKind.QueueDeployment);
+
+        var move = LaunchAdvance.Decide(Snapshot(LaunchStatus.Deploying, inStatus: TimeSpan.FromMinutes(21)));
+
+        move.Kind.Should().Be(LaunchMoveKind.Fail);
+        move.FailedStep.Should().Be(LaunchStepKeys.Deploy);
+        move.Message.Should().Contain("could not be started");
+        move.MessageFa.Should().Contain("شروع نشد");
+    }
+
     [Theory]
     [InlineData(DeploymentStatus.Queued)]
     [InlineData(DeploymentStatus.Building)]

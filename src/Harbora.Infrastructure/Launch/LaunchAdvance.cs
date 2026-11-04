@@ -64,6 +64,13 @@ public static class LaunchAdvance
     /// <summary>Above the inspection job's own 15-minute deadline: past this, its job was lost.</summary>
     public static readonly TimeSpan InspectingGiveUpAfter = TimeSpan.FromMinutes(20);
 
+    /// <summary>
+    /// A queue that keeps throwing something nobody expected fails no step of its own: the tick logs it
+    /// and comes back, while the page goes on saying it is getting it running. A real deployment's own
+    /// wait is not measured by this, only how long it can take to get one started at all.
+    /// </summary>
+    public static readonly TimeSpan QueueingGiveUpAfter = TimeSpan.FromMinutes(20);
+
     public static readonly TimeSpan ConfirmationLifetime = TimeSpan.FromHours(24);
 
     /// <summary>
@@ -151,7 +158,12 @@ public static class LaunchAdvance
     private static LaunchMove DecideDeploying(LaunchSnapshot launch)
     {
         if (launch.AppId is null) return AppGone();
-        if (launch.DeploymentId is null) return new LaunchMove(LaunchMoveKind.QueueDeployment);
+        if (launch.DeploymentId is null)
+            return launch.Now - launch.StatusChangedAt > QueueingGiveUpAfter
+                ? Fail(LaunchStepKeys.Deploy,
+                    $"The deployment could not be started in {QueueingGiveUpAfter.TotalMinutes:0} minutes. Try again, or deploy from the app's page.",
+                    $"استقرار در {QueueingGiveUpAfter.TotalMinutes:0} دقیقه شروع نشد. دوباره امتحان کن، یا از صفحهٔ اپ مستقرش کن.")
+                : new LaunchMove(LaunchMoveKind.QueueDeployment);
 
         if (launch.Deployment is null)
             return Fail(LaunchStepKeys.Deploy,

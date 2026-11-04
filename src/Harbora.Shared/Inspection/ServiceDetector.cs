@@ -36,7 +36,7 @@ internal static class ServiceDetector
 
         foreach (var dependency in facts.Dependencies)
         foreach (var kind in ServiceTable.KindsFor(dependency))
-            found.Add(kind, dependency.File, dependency.Reason, dependency.Runtime);
+            found.Add(kind, dependency.File, dependency.Reason, dependency.ReasonFa, dependency.Runtime);
 
         if (ServiceTable.UsesSqlite(facts)) notes.Add(InspectionNotes.SqliteNeedsVolume());
         if (ServiceTable.UsesSqlServer(facts)) notes.Add(InspectionNotes.SqlServerUnsupported());
@@ -62,7 +62,10 @@ internal static class ServiceDetector
             if (PrismaDatasource.IsMatch(line)) inDatasource = true;
             else if (line.StartsWith('}')) inDatasource = false;
             else if (inDatasource && PrismaProvider.Match(line) is { Success: true } provider)
-                AddEngine(provider.Groups[1].Value, $"datasource provider = \"{provider.Groups[1].Value}\"", PrismaSchema, found, notes);
+                AddEngine(provider.Groups[1].Value,
+                    $"datasource provider = \"{provider.Groups[1].Value}\"",
+                    $"در datasource نوشته provider = \"{provider.Groups[1].Value}\"",
+                    PrismaSchema, found, notes);
         }
     }
 
@@ -78,7 +81,7 @@ internal static class ServiceDetector
 
                 var image = ImageOf(match.Groups[1].Value.Trim());
                 if (ComposeImages.TryGetValue(RepositoryOf(image), out var kind))
-                    found.Add(kind, file, $"image: {image}", certain: true);
+                    found.Add(kind, file, $"image: {image}", $"ایمیج {image} را بالا می‌آورد", certain: true);
             }
         }
     }
@@ -128,45 +131,51 @@ internal static class ServiceDetector
             if (EnvAliases.DatabaseUrlNames.Contains(variable.Name))
             {
                 if (scheme is not null)
-                    AddEngine(scheme, $"{variable.Name} holds a {scheme}:// address", variable.File, found, notes);
+                    AddEngine(scheme,
+                        $"{variable.Name} holds a {scheme}:// address",
+                        $"{variable.Name} یک آدرس {scheme}:// دارد",
+                        variable.File, found, notes);
                 continue;
             }
 
             if (variable.Name == "DB_CONNECTION")
             {
-                AddEngine(variable.Value.Trim(), $"DB_CONNECTION={variable.Value.Trim()}", variable.File, found, notes);
+                AddEngine(variable.Value.Trim(),
+                    $"DB_CONNECTION={variable.Value.Trim()}",
+                    $"در فایل نمونه DB_CONNECTION={variable.Value.Trim()} است",
+                    variable.File, found, notes);
                 continue;
             }
 
             if (EnvAliases.ImpliedBy(variable.Name, scheme) is not { } kind) continue;
 
             var certain = EnvAliases.CertainByName.Contains(variable.Name) || EnvAliases.SchemeConfirms(kind, scheme);
-            found.Add(kind, variable.File, $"\"{variable.Name}\" in the example file", certain);
+            found.Add(kind, variable.File, $"\"{variable.Name}\" in the example file", $"«{variable.Name}» در فایل نمونه", certain);
         }
     }
 
     /// <summary>What a Prisma provider, a Laravel <c>DB_CONNECTION</c> and a URL's scheme each call an engine, which is nearly the same list.</summary>
-    private static void AddEngine(string name, string reason, string file, Findings found, List<InspectionNote> notes)
+    private static void AddEngine(string name, string reason, string reasonFa, string file, Findings found, List<InspectionNote> notes)
     {
         switch (name.ToLowerInvariant())
         {
             case "postgres" or "postgresql" or "pgsql":
-                found.Add(DetectedServiceKind.Postgres, file, reason, certain: true);
+                found.Add(DetectedServiceKind.Postgres, file, reason, reasonFa, certain: true);
                 break;
 
             // MariaDB speaks the MySQL protocol and its URLs say mysql://, including the one Harbora
             // itself hands out. A project already known to be on MariaDB has not picked a second engine.
             case "mysql" or "mysql2":
                 found.Add(found.Has(DetectedServiceKind.MariaDb) ? DetectedServiceKind.MariaDb : DetectedServiceKind.MySql,
-                    file, reason, certain: true);
+                    file, reason, reasonFa, certain: true);
                 break;
 
             case "mariadb":
-                found.Add(DetectedServiceKind.MariaDb, file, reason, certain: true);
+                found.Add(DetectedServiceKind.MariaDb, file, reason, reasonFa, certain: true);
                 break;
 
             case "mongodb" or "mongodb+srv":
-                found.Add(DetectedServiceKind.MongoDb, file, reason, certain: true);
+                found.Add(DetectedServiceKind.MongoDb, file, reason, reasonFa, certain: true);
                 break;
 
             case "sqlite":
@@ -189,11 +198,11 @@ internal static class ServiceDetector
 
         public bool Has(DetectedServiceKind kind) => _kinds.ContainsKey(kind);
 
-        public void Add(DetectedServiceKind kind, string file, string reason, bool certain)
+        public void Add(DetectedServiceKind kind, string file, string reason, string reasonFa, bool certain)
         {
             if (!_kinds.TryGetValue(kind, out var entry)) entry = ([], false);
 
-            var evidence = new ServiceEvidence(file, reason);
+            var evidence = new ServiceEvidence(file, reason, reasonFa);
             if (entry.Evidence.Count < MaxEvidencePerKind && !entry.Evidence.Contains(evidence)) entry.Evidence.Add(evidence);
 
             _kinds[kind] = (entry.Evidence, entry.Certain || certain);

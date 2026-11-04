@@ -2,6 +2,7 @@ using Harbora.Application.Abstractions;
 using Harbora.Domain.Billing;
 using Harbora.Domain.Common;
 using Harbora.Domain.Launch;
+using Harbora.Domain.Servers;
 using Harbora.Domain.Services;
 using Harbora.Domain.Settings;
 using Harbora.Domain.Tenancy;
@@ -111,8 +112,8 @@ public sealed partial class LaunchService
                 .ToList()
         };
 
-        // The operator's catalogue, not the shipped one: offering an engine they withdrew would only
-        // earn a refusal one click later.
+        // The operator's catalogue, not the shipped one, whose versions they can change. Every shipped
+        // engine stays in it: nothing an operator can do today takes one out.
         var catalog = await ServiceCatalogReader.EffectiveAsync(db, engine, ct);
         var options = catalog
             .Select(entry => new LaunchServiceOption(
@@ -224,13 +225,17 @@ public sealed partial class LaunchService
     /// form, but it lives in the web project and this does not: the rules below are its own, asked in
     /// its own order, and <c>LaunchSizeDefaultParityTests</c> holds the two together. Never "no limit":
     /// that is the one thing a create must not pick for somebody.
+    ///
+    /// <para>
+    /// The platform's default goes first and is held to the same rules, on any host. Taken unchecked it
+    /// could be a tier nobody priced, and the screen would then open on a refusal it had chosen by itself.
+    /// </para>
     /// </summary>
     private async Task<string?> DefaultSizeKeyAsync(Guid workspaceId, CancellationToken ct)
     {
         var platformDefault = await db.Settings.IgnoreQueryFilters().AsNoTracking()
             .Where(s => s.Key == SettingKeys.DefaultInstanceSize)
             .Select(s => s.Value).FirstOrDefaultAsync(ct);
-        if (!string.IsNullOrWhiteSpace(platformDefault)) return platformDefault;
 
         var plan = await PlanForAsync(workspaceId, ct);
         var allowedKeys = (plan?.AllowedSizeKeys ?? "")
@@ -248,24 +253,27 @@ public sealed partial class LaunchService
 
         var capacities = await capacity.GetAllAsync(ct);
 
-        foreach (var server in servers)
+        bool Selectable(Server server, InstanceSize size)
         {
             var reading = capacities.FirstOrDefault(c => c.ServerId == server.Id);
-            if (reading is { IsOnline: false }) continue;
+            if (reading is { IsOnline: false }) return false;
 
-            foreach (var size in sizes)
-            {
-                var offer = offers.FirstOrDefault(o => o.ServerId == server.Id
-                    && string.Equals(o.InstanceSizeKey, size.Key, StringComparison.OrdinalIgnoreCase));
+            var offer = offers.FirstOrDefault(o => o.ServerId == server.Id
+                && string.Equals(o.InstanceSizeKey, size.Key, StringComparison.OrdinalIgnoreCase));
 
-                if (allowedKeys.Count > 0 && !allowedKeys.Contains(size.Key)) continue;
-                if (!ServerRates.OffersNewWork(offer)) continue;
-                if (reading is not null && !reading.CanFit(size.MemoryBytes, size.CpuCores)) continue;
-                if (billing.Value.Enabled && ServerRates.ForWorkload(size, offer, BilledRunState.Running) is null) continue;
-
-                return size.Key;
-            }
+            if (allowedKeys.Count > 0 && !allowedKeys.Contains(size.Key)) return false;
+            if (!ServerRates.OffersNewWork(offer)) return false;
+            if (reading is not null && !reading.CanFit(size.MemoryBytes, size.CpuCores)) return false;
+            return !billing.Value.Enabled || ServerRates.ForWorkload(size, offer, BilledRunState.Running) is not null;
         }
+
+        var preferred = sizes.FirstOrDefault(s => string.Equals(s.Key, platformDefault, StringComparison.OrdinalIgnoreCase));
+        if (preferred is not null && servers.Any(server => Selectable(server, preferred))) return preferred.Key;
+
+        foreach (var server in servers)
+            foreach (var size in sizes)
+                if (Selectable(server, size))
+                    return size.Key;
 
         return null;
     }
@@ -309,7 +317,7 @@ public sealed partial class LaunchService
                 : new LaunchQuoteLine($"Database {line.Resource.Name}", $"دیتابیس {line.Resource.Name}", line.HourlyMinor))
             .ToList();
 
-        return new LaunchQuote(lines, quote.FirstHourMinor, quote.BalanceMinor, quote.Currency, quote.Exempt, quote.Refusal);
+        return new LaunchQuote(lines, quote.FirstHourMinor, quote.BalanceMinor, quote.Currency, quote.Exempt, quote.Refusal, quote.MoreCreditWouldHelp);
     }
 
     /// <summary>
@@ -374,7 +382,7 @@ public sealed partial class LaunchService
 
         foreach (var service in choices.Services)
         {
-            var wanted = string.IsNullOrWhiteSpace(service.Name) ? DerivedServiceName(choices.Name, service.Type) : service.Name.Trim();
+            var wanted = WantedServiceName(choices, service);
             var name = wanted;
             for (var n = 2; !taken.Add(DatabaseProvisioningService.Slugify(name)) || await ContainerNameTakenAsync(name, ct); n++)
                 name = $"{wanted}-{n}";
@@ -383,6 +391,9 @@ public sealed partial class LaunchService
 
         return names;
     }
+
+    private static string WantedServiceName(LaunchChoices choices, LaunchServiceChoice service) =>
+        string.IsNullOrWhiteSpace(service.Name) ? DerivedServiceName(choices.Name, service.Type) : service.Name.Trim();
 
     private Task<bool> ContainerNameTakenAsync(string name, CancellationToken ct)
     {

@@ -36,19 +36,26 @@ public sealed record CreatedBillableResource(
 /// <param name="BalanceMinor">The workspace's balance, or null when it has no wallet.</param>
 /// <param name="Exempt">Billing is off, or this is the provider's own workspace: nothing is charged.</param>
 /// <param name="Refusal">Why the creation would be refused, or null when it would be paid for.</param>
+/// <param name="MoreCreditWouldHelp">True only when the refusal is a balance too small to pay. See <see cref="CreationPaymentRequiredException.MoreCreditWouldHelp"/>.</param>
 public sealed record CreationQuote(
     IReadOnlyList<(CreatedBillableResource Resource, long? HourlyMinor)> Lines,
     long FirstHourMinor,
     long? BalanceMinor,
     string Currency,
     bool Exempt,
-    ServiceRefusal? Refusal);
+    ServiceRefusal? Refusal,
+    bool MoreCreditWouldHelp = false);
 
 /// <summary>A customer-facing refusal raised before a billable resource is persisted.</summary>
-public sealed class CreationPaymentRequiredException(string reason, string reasonFa)
+/// <param name="moreCreditWouldHelp">
+/// Whether topping up is the answer. Not for a tier nobody priced, a suspended workspace, or a spend limit
+/// its owner set on purpose: sending somebody to the billing page for those sends them nowhere.
+/// </param>
+public sealed class CreationPaymentRequiredException(string reason, string reasonFa, bool moreCreditWouldHelp = false)
     : InvalidOperationException(reason)
 {
     public string ReasonFa { get; } = reasonFa;
+    public bool MoreCreditWouldHelp { get; } = moreCreditWouldHelp;
 }
 
 /// <summary>
@@ -196,7 +203,7 @@ public sealed class ResourceCreationBilling(
         catch (CreationPaymentRequiredException ex)
         {
             return new CreationQuote(lines, total, balance, currency, Exempt: false,
-                new ServiceRefusal(ex.Message, ex.ReasonFa));
+                new ServiceRefusal(ex.Message, ex.ReasonFa), ex.MoreCreditWouldHelp);
         }
     }
 
@@ -300,7 +307,8 @@ public sealed class ResourceCreationBilling(
 
         throw new CreationPaymentRequiredException(
             $"The balance is {Money(balance)} {currency}, but {Money(required)} {currency} is required for the first hour. Top up the workspace; no resource was created.",
-            $"موجودی حساب {Money(balance)} {currency} است، اما برای ساعت اول {Money(required)} {currency} لازم است. ابتدا حساب فضای کاری را شارژ کنید؛ هیچ منبعی ساخته نشد.");
+            $"موجودی حساب {Money(balance)} {currency} است، اما برای ساعت اول {Money(required)} {currency} لازم است. ابتدا حساب فضای کاری را شارژ کنید؛ هیچ منبعی ساخته نشد.",
+            moreCreditWouldHelp: true);
     }
 
     private static void Apply(Wallet wallet, long amount)

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Harbora.Application.Abstractions;
 using Harbora.Domain.Authorization;
 using Harbora.Domain.Common;
@@ -122,7 +123,7 @@ public sealed partial class LaunchService
 
             // What was typed on the confirm screen was not kept (see LaunchJson.WriteChoices), so a
             // retry works from the example file and the generator, and names what it could not set.
-            await CreateWhatIsMissingAsync(launchId, choices!, new Dictionary<string, string?>(), clientIp);
+            await CreateWhatIsMissingAsync(launchId, choices!, new Dictionary<string, string?>(), clientIp, retrying: true);
         }
 
         return ServiceOutcome<LaunchView>.Success(await ViewAsync(launchId, CancellationToken.None));
@@ -159,7 +160,7 @@ public sealed partial class LaunchService
     /// silently deleted, and the launch stops with the step that refused.
     /// </summary>
     private async Task CreateWhatIsMissingAsync(
-        Guid launchId, LaunchChoices choices, IReadOnlyDictionary<string, string?> answers, string? clientIp)
+        Guid launchId, LaunchChoices choices, IReadOnlyDictionary<string, string?> answers, string? clientIp, bool retrying = false)
     {
         var ct = CancellationToken.None;
         var step = LaunchStepKeys.Services;
@@ -173,6 +174,8 @@ public sealed partial class LaunchService
             // 1. Databases. In choice order, so the ids on the row say which choices are done. The
             // server was settled before the first of these and every one is told it.
             var serviceIds = LaunchJson.ReadIds(launch.ServiceIdsJson);
+            if (retrying) await AdoptServicesAsync(launch, choices, serviceIds, ct);
+
             var names = await ServiceNamesAsync(
                 choices with { Services = choices.Services.Skip(serviceIds.Count).ToList() }, ct);
             var serverId = choices.ServerId;
@@ -198,7 +201,7 @@ public sealed partial class LaunchService
 
             // 2. The app. The token is handed over here and goes from the row with the same write.
             step = LaunchStepKeys.App;
-            var appId = launch.AppId;
+            var appId = launch.AppId ?? (retrying ? await OrphanedAppAsync(launch, choices, ct) : null);
             if (appId is null)
             {
                 var created = await apps.CreateAsync(AppRequest(launch, choices, inspection, serverId, token, clientIp), ct);
@@ -209,6 +212,10 @@ public sealed partial class LaunchService
                 }
 
                 appId = created.Value!.AppId;
+            }
+
+            if (launch.AppId is null)
+            {
                 var newAppId = appId;
                 await UpdateAsync(launchId, l =>
                 {
@@ -263,6 +270,44 @@ public sealed partial class LaunchService
             await FailCreatingAsync(launchId, step, reason, (ex as QuotaRefusedException)?.ReasonFa ?? $"ساختن متوقف شد: {reason}", answers, ct);
         }
     }
+
+    /// <summary>
+    /// A create commits and charges before its id reaches this row, so a panel that died in that gap comes
+    /// back to a launch that knows nothing of what it paid for, and creating it again would make
+    /// <c>{name}-2</c> and charge twice. So a retry looks first for what this launch would have made: its
+    /// name, or its name with the number the uniqueness rule puts on, in this workspace, since this launch
+    /// began, and not another launch's. In choice order, and stopping at the first it cannot find, because
+    /// the position of an id on the row is what says which choice it answers. Only ever on a retry: before
+    /// that, nothing of this name can be this launch's.
+    /// </summary>
+    private async Task AdoptServicesAsync(AppLaunch launch, LaunchChoices choices, List<Guid> serviceIds, CancellationToken ct)
+    {
+        var since = await db.ManagedServices.IgnoreQueryFilters().AsNoTracking()
+            .Where(s => s.WorkspaceId == launch.WorkspaceId && s.CreatedAt >= launch.CreatedAt)
+            .OrderBy(s => s.CreatedAt).Select(s => new { s.Id, s.Name, s.Type }).ToListAsync(ct);
+        var others = await db.AppLaunches.IgnoreQueryFilters().AsNoTracking()
+            .Where(l => l.Id != launch.Id && l.WorkspaceId == launch.WorkspaceId && l.ServiceIdsJson != null)
+            .Select(l => l.ServiceIdsJson!).ToListAsync(ct);
+
+        var known = serviceIds.Count;
+        foreach (var service in choices.Services.Skip(known))
+        {
+            var named = $"^{Regex.Escape(WantedServiceName(choices, service))}(-[0-9]+)?$";
+            var found = since.FirstOrDefault(s => s.Type == service.Type && !serviceIds.Contains(s.Id) && Regex.IsMatch(s.Name, named)
+                                                  && !others.Any(json => json.Contains(s.Id.ToString(), StringComparison.OrdinalIgnoreCase)));
+            if (found is null) break;
+            serviceIds.Add(found.Id);
+        }
+
+        var written = LaunchJson.Write(serviceIds);
+        if (serviceIds.Count > known) await UpdateAsync(launch.Id, l => l.ServiceIdsJson = written, ct);
+    }
+
+    private Task<Guid?> OrphanedAppAsync(AppLaunch launch, LaunchChoices choices, CancellationToken ct) =>
+        db.Apps.IgnoreQueryFilters().AsNoTracking()
+            .Where(a => a.WorkspaceId == launch.WorkspaceId && a.Name == choices.Name && a.CreatedAt >= launch.CreatedAt
+                        && !db.AppLaunches.IgnoreQueryFilters().Any(l => l.AppId == a.Id))
+            .OrderBy(a => a.CreatedAt).Select(a => (Guid?)a.Id).FirstOrDefaultAsync(ct);
 
     /// <summary>
     /// Sets what is not set yet, as one call. A generated secret is made here and nowhere else; an

@@ -660,6 +660,172 @@ public sealed class LaunchServiceTests
     }
 
     [Fact]
+    public async Task A_queue_that_keeps_throwing_something_unexpected_ends_as_a_failed_deploy()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(Bare());
+        await h.ConfirmAsync(id);
+        h.Row(id).Status.Should().Be(LaunchStatus.Deploying);
+
+        h.RefuseNextDeployment = new TimeoutException("the queue table is locked");
+        await h.TickAsync();
+        h.Row(id).Status.Should().Be(LaunchStatus.Deploying, "one launch's trouble is logged, and it is tried again");
+
+        h.Advance(TimeSpan.FromMinutes(21));
+        h.RefuseNextDeployment = new TimeoutException("the queue table is locked");
+        await h.TickAsync();
+
+        var row = h.Row(id);
+        row.Status.Should().Be(LaunchStatus.Failed);
+        row.FailedStep.Should().Be(LaunchStepKeys.Deploy);
+
+        h.RefuseNextDeployment = null;
+        (await h.Request().RetryAsync(id, null, default)).Value!.Status.Should().Be(LaunchStatus.Deploying,
+            "and running that step again starts its twenty minutes again");
+        await h.TickAsync();
+        h.Row(id).DeploymentId.Should().NotBeNull();
+    }
+
+    /// <summary>A panel that died between each create's commit and the write that puts its id on the row.</summary>
+    private static void ForgetWhatWasCreated(LaunchHarness h, Guid id) => h.ChangeRow(id, l =>
+    {
+        l.Status = LaunchStatus.Failed;
+        l.FailedStep = LaunchStepKeys.Services;
+        l.ServiceIdsJson = null;
+        l.AppId = null;
+        l.DeploymentId = null;
+    });
+
+    [Fact]
+    public async Task A_retry_after_a_crash_adopts_what_was_already_made_and_paid_for_rather_than_making_a_second()
+    {
+        using var h = new LaunchHarness();
+        h.Billing.Enabled = true;
+        using (var db = h.Store())
+        {
+            db.Wallets.Add(new Harbora.Domain.Billing.Wallet { WorkspaceId = h.WorkspaceId, BalanceMinor = 100_000 });
+            db.SaveChanges();
+        }
+        var id = await h.ReadyGitAsync(NodeWithPostgres());
+        await h.ConfirmAsync(id);
+
+        var service = h.Store().ManagedServices.IgnoreQueryFilters().Single().Id;
+        var app = h.Store().Apps.IgnoreQueryFilters().Single().Id;
+        var charged = h.Store().BillingLedger.IgnoreQueryFilters().Count();
+        ForgetWhatWasCreated(h, id);
+
+        var view = (await h.Request().RetryAsync(id, null, default)).Value!;
+
+        view.Status.Should().Be(LaunchStatus.WaitingForServices);
+        h.Store().ManagedServices.IgnoreQueryFilters().Should().ContainSingle().Which.Id.Should().Be(service);
+        h.Store().Apps.IgnoreQueryFilters().Should().ContainSingle().Which.Id.Should().Be(app);
+        h.Store().BillingLedger.IgnoreQueryFilters().Count().Should().Be(charged, "paying once was enough");
+        LaunchJson.ReadIds(h.Row(id).ServiceIdsJson).Should().Equal(service);
+        h.Row(id).AppId.Should().Be(app);
+        h.Store().AppManagedServices.IgnoreQueryFilters().Should().ContainSingle("what it found is attached once");
+    }
+
+    [Fact]
+    public async Task What_a_crash_left_under_a_numbered_name_is_found_too()
+    {
+        using var h = new LaunchHarness();
+        using (var db = h.Store())
+        {
+            // Why the first attempt took "-2": somebody else already has the plain name.
+            db.ManagedServices.Add(new ManagedService
+            {
+                WorkspaceId = h.OtherWorkspaceId, EnvironmentId = Guid.CreateVersion7(), ServerId = h.ServerA.Id,
+                Name = "shop-postgresql", Type = ManagedServiceType.PostgreSql, Version = "16",
+                ContainerName = DatabaseProvisioningService.ContainerPrefix + "shop-postgresql",
+                VolumeName = "v", Username = "u", DatabaseName = "d", EncryptedPassword = "p"
+            });
+            db.SaveChanges();
+        }
+        var id = await h.ReadyGitAsync(NodeWithPostgres());
+        await h.ConfirmAsync(id);
+        h.Store().ManagedServices.IgnoreQueryFilters().Should().Contain(s => s.Name == "shop-postgresql-2");
+        ForgetWhatWasCreated(h, id);
+
+        await h.Request().RetryAsync(id, null, default);
+
+        h.Store().ManagedServices.IgnoreQueryFilters().Count().Should().Be(2, "the other workspace's, and this launch's one");
+        h.Creates.DatabasesCreated.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task What_somebody_made_before_this_launch_began_is_theirs_and_is_not_adopted()
+    {
+        using var h = new LaunchHarness();
+        using (var db = h.Store())
+        {
+            db.ManagedServices.Add(new ManagedService
+            {
+                WorkspaceId = h.WorkspaceId, EnvironmentId = h.Environment!.Id, ServerId = h.ServerA.Id,
+                CreatedAt = DateTimeOffset.UtcNow.AddDays(-1),
+                Name = "shop-postgresql", Type = ManagedServiceType.PostgreSql, Version = "16",
+                ContainerName = DatabaseProvisioningService.ContainerPrefix + "shop-postgresql",
+                VolumeName = "v", Username = "u", DatabaseName = "d", EncryptedPassword = "p"
+            });
+            db.SaveChanges();
+        }
+        var id = await h.ReadyGitAsync(NodeWithPostgres());
+        h.Creates.RefuseApp = new ServiceRefusal("No.", "نه.");
+        await h.ConfirmAsync(id);
+        var made = LaunchJson.ReadIds(h.Row(id).ServiceIdsJson).Single();
+        h.ChangeRow(id, l => { l.ServiceIdsJson = null; l.FailedStep = LaunchStepKeys.Services; });
+
+        await h.Request().RetryAsync(id, null, default);
+
+        LaunchJson.ReadIds(h.Row(id).ServiceIdsJson).Should().Equal(made);
+    }
+
+    [Fact]
+    public async Task What_another_launch_made_of_the_same_repository_is_that_launchs()
+    {
+        using var h = new LaunchHarness();
+        var first = await h.ReadyGitAsync(NodeWithPostgres());
+        var second = await h.ReadyGitAsync(NodeWithPostgres());
+
+        // The first to be read is the second to be confirmed, so what the other made came after it began.
+        await h.ConfirmAsync(second);
+        await h.ConfirmAsync(first);
+        var mine = LaunchJson.ReadIds(h.Row(first).ServiceIdsJson).Single();
+        var theirs = LaunchJson.ReadIds(h.Row(second).ServiceIdsJson).Single();
+        var theirApp = h.Row(second).AppId;
+        ForgetWhatWasCreated(h, first);
+
+        await h.Request().RetryAsync(first, null, default);
+
+        LaunchJson.ReadIds(h.Row(first).ServiceIdsJson).Should().Equal(mine).And.NotContain(theirs);
+        h.Row(first).AppId.Should().NotBe(theirApp!.Value);
+    }
+
+    [Fact]
+    public async Task The_first_confirm_adopts_nothing_because_nothing_of_that_name_can_be_this_launchs_yet()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(NodeWithPostgres());
+        using (var db = h.Store())
+        {
+            // Made by hand in another tab, after this launch began and before it was confirmed.
+            db.ManagedServices.Add(new ManagedService
+            {
+                WorkspaceId = h.WorkspaceId, EnvironmentId = h.Environment!.Id, ServerId = h.ServerA.Id,
+                CreatedAt = DateTimeOffset.UtcNow.AddMinutes(1),
+                Name = "shop-postgresql", Type = ManagedServiceType.PostgreSql, Version = "16",
+                ContainerName = DatabaseProvisioningService.ContainerPrefix + "shop-postgresql",
+                VolumeName = "v", Username = "u", DatabaseName = "d", EncryptedPassword = "p"
+            });
+            db.SaveChanges();
+        }
+
+        await h.ConfirmAsync(id);
+
+        h.Creates.DatabasesCreated.Should().Be(1);
+        h.Store().ManagedServices.IgnoreQueryFilters().Should().Contain(s => s.Name == "shop-postgresql-2");
+    }
+
+    [Fact]
     public async Task A_create_interrupted_by_a_restart_is_handed_back_and_a_retry_finishes_it()
     {
         using var h = new LaunchHarness();
@@ -1688,6 +1854,62 @@ public sealed class LaunchServiceTests
         var id = await h.ReadyGitAsync(Bare());
 
         (await h.DefaultsAsync(id)).InstanceSizeKey.Should().Be("large");
+    }
+
+    [Fact]
+    public async Task A_platform_default_nobody_priced_is_passed_over_when_a_price_is_a_gate()
+    {
+        using var h = new LaunchHarness();
+        h.Billing.Enabled = true;
+        using (var db = h.Store())
+        {
+            db.Wallets.Add(new Harbora.Domain.Billing.Wallet { WorkspaceId = h.WorkspaceId, BalanceMinor = 100_000 });
+            db.InstanceSizes.Add(new InstanceSize { Key = "unpriced", Name = "Unpriced", SortOrder = 9, RunningRatePerHourMinor = null });
+            db.Settings.Add(new Setting { Key = SettingKeys.DefaultInstanceSize, Value = "unpriced" });
+            db.SaveChanges();
+        }
+        var id = await h.ReadyGitAsync(Bare());
+
+        var opensOn = (await h.DefaultsAsync(id)).InstanceSizeKey;
+
+        opensOn.Should().Be(LaunchHarness.SizeKey);
+        (await h.Request().QuoteAsync(id, await h.DefaultsAsync(id), default)).Refusal.Should().BeNull(
+            "the screen must not open on a refusal it chose by itself");
+    }
+
+    [Fact]
+    public async Task A_platform_default_nobody_priced_stays_when_billing_is_off_since_a_price_is_no_gate_then()
+    {
+        using var h = new LaunchHarness();
+        using (var db = h.Store())
+        {
+            db.InstanceSizes.Add(new InstanceSize { Key = "unpriced", Name = "Unpriced", SortOrder = 9, RunningRatePerHourMinor = null });
+            db.Settings.Add(new Setting { Key = SettingKeys.DefaultInstanceSize, Value = "unpriced" });
+            db.SaveChanges();
+        }
+        var id = await h.ReadyGitAsync(Bare());
+
+        (await h.DefaultsAsync(id)).InstanceSizeKey.Should().Be("unpriced");
+    }
+
+    [Theory]
+    [InlineData("no-such-tier")]
+    [InlineData("disabled")]
+    [InlineData("not-on-the-plan")]
+    public async Task A_platform_default_this_workspace_could_not_have_is_passed_over(string key)
+    {
+        using var h = new LaunchHarness();
+        using (var db = h.Store())
+        {
+            db.InstanceSizes.Add(new InstanceSize { Key = "disabled", Name = "D", IsEnabled = false, RunningRatePerHourMinor = 1 });
+            db.InstanceSizes.Add(new InstanceSize { Key = "not-on-the-plan", Name = "N", RunningRatePerHourMinor = 1 });
+            db.Plans.IgnoreQueryFilters().Single().AllowedSizeKeys = LaunchHarness.SizeKey;
+            db.Settings.Add(new Setting { Key = SettingKeys.DefaultInstanceSize, Value = key });
+            db.SaveChanges();
+        }
+        var id = await h.ReadyGitAsync(Bare());
+
+        (await h.DefaultsAsync(id)).InstanceSizeKey.Should().Be(LaunchHarness.SizeKey);
     }
 
     // ---- validating ----------------------------------------------------------------------------
