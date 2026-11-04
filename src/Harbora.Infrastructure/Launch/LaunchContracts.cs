@@ -177,8 +177,22 @@ public interface ILaunchService
     /// <summary>Null when it does not exist or is not this workspace's.</summary>
     Task<LaunchView?> GetAsync(Guid launchId, CancellationToken ct);
 
-    /// <summary>Null unless the launch is <see cref="LaunchStatus.AwaitingConfirmation"/>.</summary>
+    /// <summary>
+    /// Null unless the launch is <see cref="LaunchStatus.AwaitingConfirmation"/>. While a repository
+    /// holding several apps has no folder chosen, <c>Inspection.RootDirectory</c> is null and
+    /// <c>Inspection.RootCandidates</c> is not empty: the screen asks that one question and offers nothing
+    /// else, because nothing it could propose yet is about the app the person means.
+    /// </summary>
     Task<LaunchProposal?> ProposeAsync(Guid launchId, CancellationToken ct);
+
+    /// <summary>
+    /// Settles which folder of a several-app repository is being launched, and returns the proposal for
+    /// it. Reads what <see cref="InspectAsync"/> stored for each candidate while the tree still existed:
+    /// the tree is deleted after the inspection, so a folder picked later could otherwise never have been
+    /// read, and the launch would go ahead with no database, no variables and the wrong port. Can be
+    /// called again to change the answer, up to the moment it is confirmed. An unknown folder is refused.
+    /// </summary>
+    Task<ServiceOutcome<LaunchProposal>> ChooseRootAsync(Guid launchId, string candidate, CancellationToken ct);
 
     Task<LaunchQuote> QuoteAsync(Guid launchId, LaunchChoices choices, CancellationToken ct);
 
