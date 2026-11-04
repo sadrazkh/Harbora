@@ -394,7 +394,7 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
     public async Task The_form_limit_really_is_raised_past_its_128_megabyte_default()
     {
         // [RequestSizeLimit] alone is not enough, and nothing about it says so: the form reader has a
-        // limit of its own, reached while the antiforgery filter reads the form, as a bare 400.
+        // limit of its own, and past it the request ends on an error page that says nothing about size.
         // Sending more than the default is the only way to see it, so that is what this does.
         var client = await Owner();
         var token = await client.AntiforgeryTokenFrom("/launch");

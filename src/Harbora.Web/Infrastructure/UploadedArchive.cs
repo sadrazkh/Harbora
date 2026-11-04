@@ -19,7 +19,7 @@ public static class UploadedArchive
     /// An action taking one needs this twice. <c>[RequestSizeLimit]</c> is the server's limit on the
     /// body; <c>[RequestFormLimits]</c> is the form reader's limit on a multipart one, which is 128 MB
     /// by default and knows nothing about the other. With only the first, anything between the two
-    /// fails while the antiforgery filter reads the form, as a bare 400 that says nothing about size.
+    /// ends on an error page that says nothing about size: a 500, on the in-process host.
     /// </para>
     /// </summary>
     public const long MaxBytes = 512L * 1024 * 1024;

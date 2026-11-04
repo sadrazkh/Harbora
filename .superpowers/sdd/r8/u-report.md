@@ -29,12 +29,26 @@ Judgement calls worth a look:
 
 ## What was run
 
-@@RUNS@@
+On `90b8fff`, one after another, using the build and test commands in CONSTRAINTS:
+
+```
+BUILD_EXIT=0   0 Error(s), 2 Warning(s): both NU1903 on SSH.NET in Harbora.Postgres.Tests, not mine
+EXIT=0
+Passed!  - Failed: 0, Passed:  500, Skipped: 17, Total:  517 - Harbora.NodeAgent.Tests.dll
+Passed!  - Failed: 0, Passed:   15, Skipped:  0, Total:   15 - Harbora.NodeIngress.Tests.dll
+Passed!  - Failed: 0, Passed: 7541, Skipped:  0, Total: 7541 - Harbora.Tests.dll
+```
+
+That is `Harbora.Tests` up from the baseline of 7429 by 112, all of them `LaunchHttpTests`. No new compiler warnings.
+
+`node --test src/Harbora.Web/Scripts/tests/*.test.mjs`: 521 tests, 521 pass, 0 fail (baseline 500, plus the 21 in `launch.test.mjs`). `npm run build`: exit 0, run on its own with no `dotnet` command alongside it.
+
+After `90b8fff` the only code change is two comments that wrongly said a request past the form limit gets a 400 (a real post answered 500; see the end of this report). For that: build exit 0, and `LaunchHttpTests` `Passed: 112, Failed: 0`. The full suite was not run again for two comments.
 
 **The form limit was proved by removing it.** With `[RequestFormLimits]` deleted from `Start`, `The_form_limit_really_is_raised_past_its_128_megabyte_default` failed (`Failed: 1`); restored and rebuilt, it passed. That test posts a real 129 MB multipart body through the pipeline; a second one does the same to `/apps/{id}/upload`.
 
 **A real browser, by way of rendered pages.** A temporary test (not committed) saved each state as the real Razor views drew it over the fake, and I opened those in the app's browser pane, with `npm run build`'s CSS and script:
-- At 375 px, measured for every launch state including the folder question, plus first-run, apps and overview, with every `<details>` forced open: document, `#content-scroll` and `main` all 375 wide, nothing past the edge on any launch page. On `/apps` and `/apps/create` only elements already inside their own scrollers reported past the edge (the status filter, the image-address fold); no page scroll.
+- At 375 px, measured for every launch state including the folder question, plus first-run, apps and overview, with every `<details>` forced open: `#content-scroll` scrolls no wider than it is, and nothing is past the edge on any launch page. On `/apps` and `/apps/create` only elements already inside their own scrollers reported past the edge (the status filter, the image-address fold); no page scroll.
 - Typing the name moved the address (`my-cool-shop.apps.example.com`), a typed slug won, choosing Worker hid the two web-only lines, and Web brought them back.
 - Three ticks made one quote request, carrying the token and no `Values[...]`; a refused answer replaced the sentence and disabled the button (`fetch` stubbed).
 - The poll swapped from `Deploying` to `Succeeded`, icons rendered (0 unrendered placeholders), and no further request in the next six seconds (`fetch` stubbed).
@@ -59,7 +73,9 @@ Nothing was reshaped. In order of how much they will bite:
 4. **`LaunchView` lacks three things the page wanted.** `GitRef`: a failed read must draw the branch again, so it travels as `?branch=` on the redirect. A start time: "after a minute" is counted from when the page opened. Kind: read from `db.Apps` once a launch is terminal, to tell a bot from a web app with no address.
 5. **The upload line promises more than S's brief does.** «`node_modules` و `.env` را خودمان کنار می‌گذاریم» is S's job for zip entries only, and the input also accepts `.tar.gz` and `.tgz`, which come from a browser with no client-side filter. The sentence does say zip; a browser tar.gz with a real `.env` is the gap.
 
+Also from the coordinator: a check's `Key` may be `service:{id}` with the `ManagedService` id. Nothing here reads a check's key, and `_AppChecks` draws it as a data attribute, so no change was needed.
+
 ## Seen in passing, not touched
 
-- **Other routes cap at 128 MB without saying so.** No other route raises the form limit and there is no global `FormOptions`. `DatabasesController.Import` and `ImportDatabase` declare 2 GB and `BackupManagementActions.Upload` 8 GB with `[RequestSizeLimit]` alone. Removing `[RequestFormLimits]` here produced exactly that failure at 129 MB, so those imports very likely refuse at 128 MB with a bare 400. By reading and by analogy; I did not post to those routes.
+- **Other routes cap at 128 MB without saying so.** No other route raises the form limit and there is no global `FormOptions`. `DatabasesController.Import` declares 2 GB with `[RequestSizeLimit]` alone. A temporary test on the in-process host posted to `/databases/{id}/import` with a valid token: 1 KB reached the action (404, the id being made up), 129 MB answered 500. So a database import over 128 MB fails today with nothing said about size. `ImportDatabase` (2 GB) and `BackupManagementActions.Upload` (8 GB) have the same shape; those two I only read.
 - **Other ways into the 19-field form.** The top bar's «منبع جدید» menu, `Projects/Details`, the Monitoring empty state and the apps rail still go to `/apps/create`. They were not in the brief. The top bar is on every page, so it is the one I would change next; it is one row.
