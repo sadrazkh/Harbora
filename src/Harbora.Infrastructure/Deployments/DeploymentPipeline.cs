@@ -434,6 +434,12 @@ public sealed class DeploymentPipeline(
             }
 
             var env = BuildEnv(app, server.IsLocal);
+            // The port traffic is sent to, told to the app. The tutorial and `harbora doctor` have always
+            // said this happens, and only the Node and Python templates did it, so an app with its own
+            // Dockerfile reading $PORT got nothing. An app's own PORT wins: this is a default.
+            if (ServicePlan.HasPublicTraffic(app.Kind))
+                env.TryAdd("PORT", app.ContainerPort.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
             var labels = new Dictionary<string, string>
             {
                 ["harbora.managed"] = "true",
