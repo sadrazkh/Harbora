@@ -58,6 +58,11 @@ internal static class InspectionNotes
         NodeStartRule.AssetsNotBuilt,
         "package.json اینجا اسکریپت build دارد ولی ایمیجی که خودکار ساخته می‌شود آن را اجرا نمی‌کند، پس فایل‌های فرانت‌اند ساخته نمی‌شوند. برای ساختنشان یک Dockerfile اضافه کن.");
 
+    public static InspectionNote PublicVariablesReadAtBuild() => new(
+        "public-variables-read-at-build",
+        "Variables such as VITE_ are read when the site is built, not when it runs. What you enter here goes into the site's files, where any visitor can read it, and changing it later takes a new deploy.",
+        "متغیرهایی مثل VITE_ هنگام ساخت خوانده می‌شوند، نه هنگام اجرا. مقداری که اینجا می‌دهی داخل فایل‌های سایت می‌رود و هر بازدیدکننده‌ای می‌تواند آن را ببیند، و برای عوض کردنش باید دوباره دیپلوی کنی.");
+
     public static InspectionNote SqliteNeedsVolume() => new(
         "sqlite-needs-volume",
         "This app uses SQLite, which keeps its data in a file. That file is lost on the next deploy unless a volume holds it.",

@@ -45,10 +45,15 @@ public static class SourceInspector
         if (tree.HasFile(".env") || app.HasFile(".env")) notes.Add(InspectionNotes.EnvFileIgnored());
 
         var stack = StackDetector.Detect(app);
+        var facts = ProjectFacts.Read(app, stack);
+
+        // After the stack, because the kind needs the files it read, and before the rest, because
+        // whether a package.json is a frontend depends on the kind and the start command.
+        var (kind, startCommand) = KindDetector.Detect(app, stack, facts);
+        stack = StackDetector.WithKnownKind(app, stack, kind, startCommand);
         notes.AddRange(StackDetector.NotesFor(app, stack, severalApps));
 
         var example = ExampleEnvFiles.Read(app, out var unreadableExamples);
-        var facts = ProjectFacts.Read(app, stack);
 
         // A compose file starts its own databases, so nothing is proposed beside it, and the names
         // in its example file are its own business rather than something an attachment could set.
@@ -57,7 +62,9 @@ public static class SourceInspector
         var (envVars, databaseUnclear) = EnvVarClassifier.Classify(example, services, ownServices);
         if (databaseUnclear) notes.Add(InspectionNotes.DatabaseUnclear());
 
-        var (kind, startCommand) = KindDetector.Detect(app, stack, facts);
+        if (stack == DetectedStack.Frontend &&
+            envVars.Any(v => v.Disposition == EnvVarDisposition.NeedsAnswer && PublicBuildVariables.IsPublic(v.Name)))
+            notes.Add(InspectionNotes.PublicVariablesReadAtBuild());
 
         foreach (var file in facts.UnreadableFiles.Concat(unreadableExamples))
             notes.Add(InspectionNotes.ManifestUnreadable(file));

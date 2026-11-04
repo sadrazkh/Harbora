@@ -401,10 +401,34 @@ values in the app's **Environment Variables**.
    nothing, so it gives way to .NET, Go, PHP or Python when one of those is present: it is that
    app's frontend. The generated image does not build that frontend, and the deploy log says so
    when there is a `build` script; add a Dockerfile if it needs building.
+
+   With none of those present and a `build` script, it is a frontend (a Vite app, say): the build
+   runs, a failed build fails the deployment, and the first `index.html` found in `dist`, `build`,
+   `out` or `.output/public`, or shallowly under `dist` and `build`, is served by nginx on the app's
+   container port, with unknown paths falling back to `index.html`. Gatsby's `public` counts where a
+   `gatsby-config` sits beside it. No `index.html` also fails the deployment. A `Worker`, or an app
+   with its own start command, stays Node instead.
+
+   A `start` script that is exactly a template's dev server does not count as a start when there is
+   a `build` script: `react-scripts start`, `react-app-rewired start`, `craco start`, `ng serve`,
+   `gatsby develop`, `vue-cli-service serve`, `vite`, `webpack serve` and `webpack-dev-server`. Add a
+   flag, as in `ng serve --host 0.0.0.0`, and it counts again.
 4. Otherwise the deployment fails with a message saying exactly this
 
 Auto-detected builds set `ENV PORT` to the app's container port, so `process.env.PORT` and the
 equivalents work without configuration.
+
+Build-time variables, on a generated build:
+
+- **Public names** (`VITE_*`, `REACT_APP_*`, `NEXT_PUBLIC_*`, `PUBLIC_*`, `VUE_APP_*`, `GATSBY_*`,
+  `NUXT_PUBLIC_*`) reach the build on the Node and frontend images, from the app's variables and its
+  config groups, with no need to mark them. Their values end up in files every visitor can read, and
+  changing one takes a new deploy.
+- **Any other variable marked as available at build** reaches the build on the Node, .NET, Go, PHP
+  and Python images as an `ARG`, never an `ENV`. Its value stays readable in `docker history`. A static
+  site has no build step, and a frontend's build takes public names only, even over a mark.
+
+A Dockerfile of your own gets the variables marked as available at build, and declares them itself.
 
 ---
 

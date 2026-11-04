@@ -19,8 +19,26 @@ public static class NodeStartRule
         "The package.json here has a build script, and the generated image does not run it: the frontend's assets are not built. To build them, add a Dockerfile.";
 
     /// <summary>
+    /// A template's <c>start</c> that only runs a dev server, as a template writes it. Exact, with no
+    /// flags: <c>ng serve --host 0.0.0.0</c> is somebody who deliberately made it reachable, and it may
+    /// be working today.
+    /// </summary>
+    private static readonly HashSet<string> DevServers = new(StringComparer.Ordinal)
+    {
+        "react-scripts start", "react-app-rewired start", "craco start",
+        "ng serve",
+        "gatsby develop",
+        "vue-cli-service serve",
+        "vite",
+        "webpack serve", "webpack-dev-server"
+    };
+
+    /// <summary>
     /// True for a <c>scripts.start</c>, or a <c>server.js</c> beside the file, which is what
-    /// <c>npm start</c> runs when there is no script.
+    /// <c>npm start</c> runs when there is no script. A <c>start</c> in <see cref="DevServers"/> beside a
+    /// <c>build</c> script does not count: these cannot serve in a container, because they exit when
+    /// stdin closes or bind to localhost, so nothing that works today moves. (That is from memory, and
+    /// a real Create React App project on CI is what confirms it.)
     ///
     /// <para>
     /// A <c>package.json</c> it cannot read has no start script, whether malformed, over the inspector's
@@ -34,7 +52,9 @@ public static class NodeStartRule
     public static bool HasBuildScript(string directory) => HasBuildScript(new SourceTree(directory));
 
     internal static bool CanStart(SourceTree folder) =>
-        folder.HasFile("server.js") || NodeManifest.HasScript(folder, "start");
+        folder.HasFile("server.js") ||
+        (NodeManifest.Script(folder, "start") is { } start &&
+         !(DevServers.Contains(start.Trim()) && HasBuildScript(folder)));
 
-    internal static bool HasBuildScript(SourceTree folder) => NodeManifest.HasScript(folder, "build");
+    internal static bool HasBuildScript(SourceTree folder) => NodeManifest.Script(folder, "build") is not null;
 }

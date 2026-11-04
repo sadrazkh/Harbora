@@ -23,6 +23,7 @@ public class SourceInspectorParityTests : InspectorTreeTests
         "PHP" => DetectedStack.Php,
         "Python" => DetectedStack.Python,
         "Static (Nginx)" => DetectedStack.Static,
+        Buildpacks.FrontendStack => DetectedStack.Frontend,
         var other => throw new InvalidOperationException($"A new buildpack, {other}: teach the inspector about it.")
     };
 
@@ -30,7 +31,13 @@ public class SourceInspectorParityTests : InspectorTreeTests
     {
         var inspection = Inspect();
         var judged = inspection.RootDirectory is null ? Root : Path.Combine(Root, inspection.RootDirectory);
-        var pack = Buildpacks.Detect(judged, 3000);
+
+        // With the kind and start command the proposal carries, since that is what the app is created
+        // with and so what the pipeline will be asking about.
+        var pack = Buildpacks.Detect(
+            judged, 3000,
+            inspection.Kind == DetectedAppKind.Worker ? ServiceKind.Worker : ServiceKind.Web,
+            inspection.StartCommand);
 
         inspection.Stack.Should().Be(FromBuildpack(pack), because);
 
@@ -78,6 +85,9 @@ public class SourceInspectorParityTests : InspectorTreeTests
     [InlineData("""{"scripts":{"build":"vite build"}}""")]
     [InlineData("""{"scripts":{"start":"node a.js","build":"vite build"}}""")]
     [InlineData("""{"scripts":{"start":""}}""")]
+    [InlineData("""{"scripts":{"start":"react-scripts start","build":"react-scripts build"}}""")]
+    [InlineData("""{"scripts":{"start":"ng serve --host 0.0.0.0","build":"ng build"}}""")]
+    [InlineData("""{"scripts":{"start":"vite"}}""")]
     [InlineData("{}")]
     [InlineData("not json")]
     public void Every_combination_beside_each_kind_of_package_json_detects_the_same_stack(string packageJson)
@@ -88,6 +98,29 @@ public class SourceInspectorParityTests : InspectorTreeTests
         [
             "svc/App.csproj", "go.mod", "composer.json", "requirements.txt", "main.py", "index.html", "server.js"
         ], packageJson);
+    }
+
+    [Theory]
+    [InlineData("Procfile", "worker: node dist/jobs.js\n")]
+    [InlineData("Procfile", "web: node dist/index.js\n")]
+    [InlineData("Procfile", "clock: node clock.js\n")]
+    public void A_frontend_shaped_package_agrees_with_what_a_procfile_says(string file, string content)
+    {
+        Write("package.json", """{"scripts":{"build":"vite build"}}""");
+        Write(file, content);
+
+        InspectorShouldAgreeWithThePipeline(content);
+    }
+
+    [Theory]
+    [InlineData("""{"scripts":{"build":"tsc"},"dependencies":{"telegraf":"4"}}""")]
+    [InlineData("""{"scripts":{"build":"tsc"},"dependencies":{"grammy":"1","express":"4"}}""")]
+    [InlineData("""{"scripts":{"build":"tsc","worker":"node w.js"},"dependencies":{"bullmq":"5"}}""")]
+    public void A_frontend_shaped_package_agrees_with_what_its_libraries_say_about_its_kind(string packageJson)
+    {
+        Write("package.json", packageJson);
+
+        InspectorShouldAgreeWithThePipeline(packageJson);
     }
 
     [Fact]

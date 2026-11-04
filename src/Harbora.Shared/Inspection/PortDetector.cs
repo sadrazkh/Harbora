@@ -9,6 +9,7 @@ namespace Harbora.Shared.Inspection;
 ///
 /// <list type="bullet">
 /// <item><b>Static: 80, always.</b> The generated image is plain nginx with <c>EXPOSE 80</c>; it never reads the port it is given, so neither an example file nor a preference can change this.</item>
+/// <item><b>Frontend: 80.</b> The generated nginx listens on whatever it is given, so any number works, and this is the proposal rather than a limit. A <c>PORT=</c> in a frontend's example file is its dev server's, which never runs here, so it is not consulted.</item>
 /// <item><b>PHP: 80.</b> The buildpack rewrites Apache's <c>Listen 80</c> to the configured port, so any number works, and 80 is Apache's own and <c>App.ContainerPort</c>'s default.</item>
 /// <item><b>.NET: 8080.</b> The buildpack sets <c>ASPNETCORE_URLS</c>, so any number works, and 8080 is what ASP.NET's images have used since .NET 8.</item>
 /// <item><b>Go: 8080, Node: 3000.</b> The buildpack sets <c>PORT</c>, so the number is only a convention: the one each community's own code falls back to. These are not framework defaults; the framework is not consulted.</item>
@@ -36,7 +37,7 @@ internal static class PortDetector
         SourceTree app, DetectedStack stack, DetectedAppKind kind, IReadOnlyList<ExampleVar> example, ProjectFacts facts)
     {
         if (kind == DetectedAppKind.Worker) return null;
-        if (stack == DetectedStack.Static) return 80;
+        if (stack is DetectedStack.Static or DetectedStack.Frontend) return 80;
 
         if (stack == DetectedStack.Dockerfile && ExposedPort(app) is { } exposed) return exposed;
         if (ExamplePort(example) is { } declared) return declared;

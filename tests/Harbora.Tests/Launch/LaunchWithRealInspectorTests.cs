@@ -6,6 +6,7 @@ using Harbora.Domain.Services;
 using Harbora.Infrastructure.Launch;
 using Harbora.Infrastructure.Services;
 using Harbora.Shared.Inspection;
+using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 namespace Harbora.Tests.Launch;
@@ -180,5 +181,65 @@ public sealed class LaunchWithRealInspectorTests
         service.Type.Should().Be(type);
         service.Aliases!.Select(a => a.Name).Should().BeEquivalentTo(names);
         proposal.EnvFields.Where(f => f.Disposition == EnvVarDisposition.NeedsAnswer).Should().BeEmpty();
+    }
+
+    private const string ViteShaped =
+        """{"name":"site","scripts":{"dev":"vite","build":"vite build"},"devDependencies":{"vite":"5"}}""";
+
+    [Fact]
+    public async Task A_vite_app_is_proposed_as_a_frontend_on_the_web_with_no_start_command()
+    {
+        using var h = new LaunchHarness();
+        var id = await UploadAsync(h, "my-site-0123456789abcdef0123456789abcdef.zip", new()
+        {
+            ["package.json"] = ViteShaped,
+            ["index.html"] = "<html></html>",
+            [".env.example"] = "VITE_API_URL=\nVITE_TITLE=Shop\n"
+        });
+
+        var proposal = await h.Request().ProposeAsync(id, default);
+
+        proposal!.Inspection.Stack.Should().Be(DetectedStack.Frontend);
+        proposal.Defaults.Kind.Should().Be(ServiceKind.Web);
+        proposal.Defaults.ContainerPort.Should().Be(80);
+        proposal.Defaults.Command.Should().BeNull();
+        proposal.Defaults.ReleaseCommand.Should().BeNull();
+        proposal.Defaults.Services.Should().BeEmpty();
+        proposal.Inspection.Notes.Should().ContainSingle(n => n.Code == "public-variables-read-at-build");
+        proposal.EnvFields.Single(f => f.Key == "VITE_TITLE").SuggestedValue.Should().Be("Shop");
+    }
+
+    [Theory]
+    [InlineData("web: node dist/index.js\n", ServiceKind.Web, "node dist/index.js")]
+    [InlineData("worker: node dist/jobs.js\n", ServiceKind.Worker, "node dist/jobs.js")]
+    public async Task A_procfiles_start_command_reaches_the_app_and_keeps_the_build_node(
+        string procfile, ServiceKind kind, string command)
+    {
+        const string packageJson = """{"name":"api","scripts":{"build":"tsc"}}""";
+        using var h = new LaunchHarness();
+        var id = await UploadAsync(h, "my-api-0123456789abcdef0123456789abcdef.zip", new()
+        {
+            ["package.json"] = packageJson,
+            ["Procfile"] = procfile
+        });
+
+        var proposal = await h.Request().ProposeAsync(id, default);
+        proposal!.Inspection.Stack.Should().Be(DetectedStack.Node);
+        proposal.Defaults.Command.Should().Be(command);
+
+        var confirmed = await h.Request().ConfirmAsync(id, proposal.Defaults, null, default);
+        confirmed.Ok.Should().BeTrue(string.Join("; ", confirmed.Refusals.Select(r => r.Message)));
+
+        var app = h.Store().Apps.IgnoreQueryFilters().Single();
+        app.StartCommand.Should().Be(command);
+        app.Kind.Should().Be(kind);
+
+        // And what the pipeline does with exactly those two fields, over the same files.
+        var tree = Path.Combine(h.WorkDir, "_tree");
+        Directory.CreateDirectory(tree);
+        File.WriteAllText(Path.Combine(tree, "package.json"), packageJson);
+
+        Harbora.Infrastructure.Deployments.Buildpacks.Detect(tree, app.ContainerPort, app.Kind, app.StartCommand)!.Value
+            .Stack.Should().Be("Node.js");
     }
 }
