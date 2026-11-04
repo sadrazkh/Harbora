@@ -82,7 +82,9 @@ internal static class StackDetector
 
         // A frontend's package.json beside a Laravel or Flask app wins detection and builds the wrong
         // thing: `npm start` in an image with no PHP. Parity says Node, so the person has to be told.
-        if (stack == DetectedStack.Node && (app.HasFile("go.mod") || HasAny(app, PhpMarkers) || HasAny(app, PythonManifests)))
+        if (stack == DetectedStack.Node &&
+            (app.HasFile("go.mod") || HasAny(app, PhpMarkers) || HasAny(app, PythonManifests) ||
+             app.FileNames().Any(n => n.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))))
             yield return InspectionNotes.StackAmbiguous();
     }
 

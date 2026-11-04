@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FluentAssertions;
+using Harbora.Shared;
 using Harbora.Shared.Inspection;
 using Xunit;
 
@@ -131,6 +132,18 @@ public class SourceInspectorTests : InspectorTreeTests
         result.Stack.Should().Be(DetectedStack.Unknown);
         Codes(result).Should().Contain("several-apps-found").And.NotContain("no-stack-recognised",
             "the note that says several were found is the true one; nothing here is unrecognised");
+    }
+
+    [Fact]
+    public void A_root_directory_or_candidate_is_one_the_panel_will_accept()
+    {
+        Write("repo-main/api/package.json", "{}");
+        Write("repo-main/my web/package.json", "{}");
+
+        var candidates = Inspect().RootCandidates;
+
+        candidates.Should().Equal("repo-main/api", "repo-main/my web");
+        candidates.Should().OnlyContain(c => AppRootDirectory.Validate(c) == PathRejection.None);
     }
 
     [Fact]
@@ -366,6 +379,32 @@ public class SourceInspectorTests : InspectorTreeTests
 
         result.Stack.Should().Be(DetectedStack.Python);
         Codes(result).Should().Contain("django-unsupported");
+    }
+
+    [Theory]
+    [InlineData("composer.json")]
+    [InlineData("index.php")]
+    [InlineData("go.mod")]
+    [InlineData("requirements.txt")]
+    [InlineData("App.csproj")]
+    public void A_package_json_beside_another_languages_project_builds_as_node_and_says_so(string other)
+    {
+        Write("package.json", "{}");
+        Write(other);
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.Node);
+        Codes(result).Should().Contain("stack-ambiguous");
+    }
+
+    [Fact]
+    public void A_package_json_alone_is_not_ambiguous()
+    {
+        Write("package.json", "{}");
+        Write("tools/Gen/Gen.csproj", Csproj());
+
+        Codes(Inspect()).Should().NotContain("stack-ambiguous");
     }
 
     [Fact]

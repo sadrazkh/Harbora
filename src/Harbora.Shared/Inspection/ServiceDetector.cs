@@ -141,7 +141,7 @@ internal static class ServiceDetector
             if (EnvAliases.ImpliedBy(variable.Name, scheme) is not { } kind) continue;
 
             var certain = EnvAliases.CertainByName.Contains(variable.Name) || EnvAliases.SchemeConfirms(kind, scheme);
-            found.Add(kind, variable.File, $"{variable.Name} is named there", certain);
+            found.Add(kind, variable.File, $"\"{variable.Name}\" in the example file", certain);
         }
     }
 

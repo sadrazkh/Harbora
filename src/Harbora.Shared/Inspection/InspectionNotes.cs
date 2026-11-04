@@ -65,8 +65,8 @@ internal static class InspectionNotes
 
     public static InspectionNote DatabaseUnclear() => new(
         "database-unclear",
-        "The example file names a database (DB_HOST and the like) but nothing says which engine it is. Add the one this app uses below, then fill those values in if they are still asked for.",
-        "فایل نمونه اسم یک دیتابیس را آورده (مثل DB_HOST) ولی چیزی نمی‌گوید کدام نوع است. همانی را که این اپ استفاده می‌کند پایین اضافه کن، و اگر آن مقدارها هنوز پرسیده می‌شوند پرشان کن.");
+        "The example file names a database (DB_HOST and the like) but nothing says which engine it is. Choose the one this app uses, and fill those values in if they are still asked for.",
+        "فایل نمونه اسم یک دیتابیس را آورده (مثل DB_HOST) ولی چیزی نمی‌گوید کدام نوع است. همانی را که این اپ استفاده می‌کند انتخاب کن، و اگر آن مقدارها هنوز پرسیده می‌شوند پرشان کن.");
 
     public static InspectionNote ManifestUnreadable(string file) => new(
         "manifest-unreadable",
