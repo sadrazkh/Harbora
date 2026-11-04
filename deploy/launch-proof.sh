@@ -27,7 +27,9 @@
 #   16  a real Create React App project is a frontend, and its dev server really cannot serve
 #   17  a Node build reads a public variable nobody ticked, and the image keeps none of it
 #   18  a Python build sees a variable only once it is marked
-#   19  nothing in the launch path logged an error of its own
+#   19  a plain PHP app reaches MySQL through DB_HOST and its friends
+#   20  a real Laravel project, generated now, migrates and serves
+#   21  nothing in the launch path logged an error of its own
 #
 # Run it BY HAND on any throwaway Linux host (it installs Docker if it has to):
 #
@@ -764,10 +766,10 @@ case_wrong_database_host() {
   dir="$(fixture wrong-database-host)"
   run_launch wrong-database-host "$dir"
 
-  # The design: its log is a warning rather than a failure, because a line in a log can be about
-  # anything. So it is Succeeded, and the warning has to be there and has to be the right one.
-  must_eq "harbora launch's exit code" "$LAUNCH_EXIT" 0
-  must_eq "the launch's status" "$(view_field status)" Succeeded
+  # A page answering 200 while the log says it cannot reach its database is not a success: nothing
+  # about the container is wrong, and the warning is the only thing that knows. So it must not end green.
+  must_eq "harbora launch's exit code" "$LAUNCH_EXIT" 2
+  must_eq "the launch's status" "$(view_field status)" SucceededWithProblems
   must_eq "the logs check" "$(check_status logs)" Warning
   detail="$(check_detail logs)"
   case "$detail" in
@@ -778,7 +780,7 @@ case_wrong_database_host() {
   url="$(view_field publicUrl)"
   must_eq "GET / through Traefik" "$(http_get "$url/" "$WORK/out/wrong-db.body.json")" 200
   must_eq "the app's own account of its database" "$(jq -r .database "$WORK/out/wrong-db.body.json")" false
-  fact "wrong-database-host: Succeeded with the logs check at Warning, naming the loopback address it could not reach, while the database it ignored answered."
+  fact "wrong-database-host: exit 2 and SucceededWithProblems because of the logs check, which names the loopback address it could not reach, while the database it ignored answered."
 }
 
 case_python_worker() {
@@ -1084,6 +1086,79 @@ case_python_marked() {
   fact "python-marked-var: a pip install step saw nothing until the variable was marked AvailableAtBuild, then saw its value; the image's ENV does not hold it, and its docker history $history_says showing it (single-stage, as Buildpacks.ArgLines says)."
 }
 
+case_php_pdo() {
+  local dir url body
+  dir="$(fixture php-pdo)"
+
+  # What --yes can do: it takes the proposal as it stands, and there is no flag to tick an engine the
+  # inspector did not find. So this project says which in the one place a PHP project can, its composer
+  # requirements, and it needs no --set: the four names are the attachment's to fill.
+  run_launch php-pdo "$dir"
+  must_eq "harbora launch's exit code" "$LAUNCH_EXIT" 0
+  must_eq "the launch's status" "$(view_field status)" Succeeded
+  all_checks_passed running restarts url logs
+  must_eq "one database check, passed" "$(service_checks)" Passed
+
+  url="$(view_field publicUrl)"
+  body="$WORK/out/php-pdo.body.json"
+  must_eq "GET / through Traefik" "$(http_get "$url/" "$body")" 200
+  cat "$body"; echo
+  jq -e '.ok == true and .one == 1' "$body" >/dev/null \
+    || fail "The PHP app could not query MySQL through DB_HOST, DB_USER, DB_PASSWORD and DB_NAME: $(jq -c . "$body" 2>/dev/null || head -c 500 "$body")"
+  case "$(jq -r .dbHost "$body")" in
+    ""|null|localhost|127.0.0.1) fail "DB_HOST reached the PHP app as '$(jq -r .dbHost "$body")'." ;;
+    *) ok "DB_HOST reached the PHP app as a real host." ;;
+  esac
+  fact "php-pdo: a plain PHP app on the generated image ran SELECT 1 against the MySQL it was given, through DB_HOST, DB_USER, DB_PASSWORD and DB_NAME, with no --set."
+}
+
+case_laravel() {
+  local dir url body log_file
+  dir="$WORK/apps/laravel-real"
+
+  # Generated now, because that is what a person has. Locked for the PHP the generated image runs: a
+  # project locked on a newer PHP than the image is a different question, which this does not ask. The
+  # one change is what somebody with MySQL makes: its example file says so, as Laravel's docs have it.
+  docker run --rm -v "$WORK/apps:/apps" -w /apps composer:2 sh -c '
+    composer create-project --no-interaction --no-progress --no-install --no-scripts "laravel/laravel:^12.0" laravel-real &&
+    cd laravel-real &&
+    composer config platform.php 8.3.30 &&
+    composer install --no-interaction --no-progress --no-scripts
+  ' > "$WORK/out/laravel-create.txt" 2>&1 \
+    || fail "composer create-project failed: $(tail -n 12 "$WORK/out/laravel-create.txt" | cut -c1-300)"
+  [ -f "$dir/artisan" ] || fail "composer create-project made no artisan."
+
+  sed -i -e 's/^DB_CONNECTION=sqlite/DB_CONNECTION=mysql/' -e 's/^# DB_/DB_/' "$dir/.env.example"
+  cat >> "$dir/routes/web.php" <<'ROUTE'
+
+// Added by the proof. What the framework itself can say about the database it was given.
+Route::get('/proof', fn () => [
+    'driver' => Illuminate\Support\Facades\DB::connection()->getDriverName(),
+    'one' => Illuminate\Support\Facades\DB::selectOne('select 1 as one')->one,
+    'migrations' => Illuminate\Support\Facades\DB::table('migrations')->count(),
+]);
+ROUTE
+
+  run_launch laravel-real "$dir"
+  must_eq "harbora launch's exit code" "$LAUNCH_EXIT" 0
+  must_eq "the launch's status" "$(view_field status)" Succeeded
+
+  log_file="$WORK/out/laravel-real.deploy.log"
+  deployment_log "$(view_field deploymentId)" > "$log_file"
+  grep -qF "php artisan migrate --force" "$log_file" || fail "The deploy log never shows the release task running the migrations."
+
+  url="$(view_field publicUrl)"
+  must_eq "GET /" "$(http_get "$url/" "$WORK/out/laravel-root.html")" 200
+  grep -qi 'laravel' "$WORK/out/laravel-root.html" || fail "GET / is not Laravel's page: $(head -c 300 "$WORK/out/laravel-root.html")"
+
+  body="$WORK/out/laravel-proof.json"
+  must_eq "GET /proof" "$(http_get "$url/proof" "$body")" 200
+  must_eq "the framework's database driver" "$(jq -r .driver "$body")" mysql
+  must_eq "SELECT 1 through the framework" "$(jq -r .one "$body")" 1
+  [ "$(jq -r .migrations "$body")" -ge 1 ] || fail "The migrations table is empty: the release task did not reach this database. $(cat "$body")"
+  fact "A real Laravel project from composer create-project: composer installed on the generated image, the release task migrated real MySQL, / is Laravel's page through public/, and the framework reads $(jq -r .migrations "$body") migrations back."
+}
+
 case_panel_log() {
   local noise
   # Each of these is a launch that moved on past something a person would want to know, or a query the
@@ -1108,7 +1183,9 @@ step_case "15 — a failed build says why on its last line" case_frontend_failur
 step_case "16 — a real Create React App project" case_cra
 step_case "17 — a Node build reads a public variable nobody ticked" case_node_build_var
 step_case "18 — a Python build sees a variable only once it is marked" case_python_marked
-step_case "19 — nothing in the launch path logged an error of its own" case_panel_log
+step_case "19 — a plain PHP app reaches MySQL through DB_HOST and its friends" case_php_pdo
+step_case "20 — a real Laravel project, generated now, migrates and serves" case_laravel
+step_case "21 — nothing in the launch path logged an error of its own" case_panel_log
 
 # ---------------------------------------------------------------------------------------------
 # The verdict
