@@ -656,6 +656,25 @@ fact "The CLI built from this commit signs in and talks to the panel over real T
 # The cases. Each is its own subshell; see step_case.
 # ---------------------------------------------------------------------------------------------
 
+# Nothing in a launch needs a bucket, and the installer starts the store regardless. Here because its
+# image once stopped every fresh install at the first pull, so the replacement has to be seen working:
+# the healthcheck runs its mc, and a bucket is made by the panel's own helper from the same image.
+case_object_store() {
+  object_store_healthy() { [ "$(docker inspect -f '{{.State.Health.Status}}' harbora-minio 2>/dev/null)" = "healthy" ]; }
+  wait_until 120 "the object store's healthcheck passes" object_store_healthy
+
+  local token status bucket
+  bucket="proof-bucket-$RUN_ID"
+  token="$(antiforgery_token /storage)"
+  status="$(web_post /storage/buckets "$token" "__RequestVerificationToken=$token" "name=$bucket")"
+  case "$status" in
+    302|303) ;;
+    *) fail "POST /storage/buckets answered HTTP $status, not a redirect." ;;
+  esac
+  must_eq "buckets called $bucket" "$(psql_panel "SELECT count(*) FROM \"StorageBuckets\" WHERE \"Name\"='$bucket' AND \"Status\"=1")" 1
+  fact "The object store from the install is healthy, and the panel's helper made a bucket on it with the same image's mc."
+}
+
 case_node_postgres() {
   local dir url body status secret
   dir="$(fixture node-postgres)"
@@ -1075,6 +1094,7 @@ case_panel_log() {
   fact "The panel logged no error from the launch tick, the checks, an unhandled request or a failed query across all of the above."
 }
 
+step_case "5b — the object store the install started takes a bucket" case_object_store
 step_case "6 — the main case: a Node app and Postgres, nothing set up by hand" case_node_postgres
 step_case "7 — an app that crashes must not read as a success" case_crashes
 step_case "8 — an app that ignores its database must be caught by its log" case_wrong_database_host

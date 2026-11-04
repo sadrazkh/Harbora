@@ -38,7 +38,7 @@ public sealed class ObjectStorageOptions
     /// image to keep current.
     /// </summary>
     public string ClientImage { get; set; } =
-        "quay.io/minio/minio@sha256:9535594ad4122b7a78c6632788a989b96d9199b483d3bd71a5ceae73a922cdfa";
+        "ghcr.io/coollabsio/minio@sha256:69b55a1c1c5dc285ce04db96689f5b2102317fc77a50680a1874ca6efd1c87f9";
 
     /// <summary>
     /// The Docker network the helper joins. The storage server's name only resolves there; without
