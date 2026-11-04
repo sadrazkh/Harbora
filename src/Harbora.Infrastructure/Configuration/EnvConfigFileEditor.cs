@@ -154,7 +154,8 @@ public sealed class EnvConfigFileEditor : IConfigFileEditor
         return result;
     }
 
-    private static bool IsValidKey(string key) =>
+    /// <summary>Whether this can be a variable's name at all: a letter or underscore, then letters, digits and underscores.</summary>
+    public static bool IsValidKey(string key) =>
         key.Length > 0 && (char.IsLetter(key[0]) || key[0] == '_') &&
         key.All(c => char.IsLetterOrDigit(c) || c == '_');
 

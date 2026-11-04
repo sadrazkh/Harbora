@@ -480,6 +480,14 @@ public static class DependencyInjection
             Functions.RabbitMqBrokerConnectionFactory>();
         services.AddHostedService<Functions.QueueFunctionConsumerHost>();
 
+        // Launch: "here is my code, make it work". Only reading the source is a job; everything after
+        // the confirm screen is moved by the ticker, because a job waiting on a provision would occupy
+        // the worker that provision needs. IAppVerifier is deliberately not a constructor dependency.
+        services.AddSingleton<Launch.ILaunchSourceReader, Launch.SourceInspectorReader>();
+        services.AddScoped<Launch.ILaunchService, Launch.LaunchService>();
+        services.AddScoped<IJobHandler, Launch.LaunchInspectJobHandler>();
+        services.AddHostedService<Launch.LaunchTicker>();
+
         // Tenancy quotas + node capacity (PaaS).
         services.AddScoped<IQuotaService, Tenancy.QuotaService>();
         services.AddScoped<INodeCapacityService, Tenancy.NodeCapacityService>();

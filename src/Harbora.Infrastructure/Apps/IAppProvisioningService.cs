@@ -57,6 +57,14 @@ public sealed record AppCreateRequest
     public string? CronExpression { get; init; }
     public bool PreviewsEnabled { get; init; }
     public string? Command { get; init; }
+
+    /// <summary>
+    /// What a long-running container starts with instead of its image's own command, for a source whose
+    /// default would be wrong (a <c>worker:</c> line in a Procfile). <see cref="Command"/> is the scheduled
+    /// job's and is dropped for anything else.
+    /// </summary>
+    public string? StartCommand { get; init; }
+
     public Guid? ServerId { get; init; }
     public string? InstanceSizeKey { get; init; }
 

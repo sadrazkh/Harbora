@@ -1,5 +1,7 @@
+using System.Text.Json;
 using Harbora.Application.Abstractions;
 using Harbora.Domain.Services;
+using Harbora.Infrastructure.Configuration;
 
 namespace Harbora.Infrastructure.Services;
 
@@ -58,6 +60,7 @@ public static class ManagedServiceAttachEnv
         var prefix = AttachKeys.PrefixFor(ms.Alias);
 
         var result = new List<(string Key, string Value, bool IsSecret)>(wanted.Count * 2);
+        var computed = new Dictionary<string, (string Stored, bool IsSecret)>(wanted.Count, StringComparer.Ordinal);
         foreach (var (key, value) in wanted)
         {
             // A value that embeds the plaintext password is secret and must go back to being
@@ -69,8 +72,43 @@ public static class ManagedServiceAttachEnv
 
             result.Add((key, stored, isSecret));
             result.Add(($"{prefix}{key}", stored, isSecret));
+            computed[key] = (stored, isSecret);
         }
+
+        // The names this app's own example env file reads (MONGO_URI, DB_HOST). Computed here beside
+        // the rest rather than copied onto the app, which is the whole point: a password rotation
+        // reaches them too. Bare, with no alias prefix, because the bare name is what the app reads;
+        // and they are only one more entry to the merge, so an app's own variable still outranks them.
+        foreach (var alias in ReadAliases(ms.EnvAliasesJson))
+            if (computed.TryGetValue(alias.SourceKey, out var source))
+                result.Add((alias.Name, source.Stored, source.IsSecret));
 
         return result;
     }
+
+    /// <summary>
+    /// Every usable alias on an attachment. Malformed JSON, a blank entry or a name no shell could read
+    /// is dropped rather than thrown: this runs inside a deployment, and one bad column must not be the
+    /// reason an app stops deploying.
+    /// </summary>
+    public static IReadOnlyList<AttachEnvAlias> ReadAliases(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return [];
+
+        try
+        {
+            return (JsonSerializer.Deserialize<List<AttachEnvAlias?>>(json) ?? [])
+                .OfType<AttachEnvAlias>()
+                .Where(a => a.SourceKey is { Length: > 0 } && EnvConfigFileEditor.IsValidKey(a.Name ?? ""))
+                .ToList();
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    /// <summary>What <see cref="AppManagedService.EnvAliasesJson"/> holds; null for none, the ordinary case.</summary>
+    public static string? WriteAliases(IReadOnlyList<AttachEnvAlias>? aliases) =>
+        aliases is { Count: > 0 } ? JsonSerializer.Serialize(aliases) : null;
 }

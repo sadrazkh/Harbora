@@ -30,7 +30,8 @@ public sealed class LibGit2GitService : IGitService
             Commands.Checkout(repo, reference);
 
             var commit = repo.Head.Tip ?? reference.Tip;
-            log.Report($"Checked out {gitRef} @ {commit.Sha[..7]}");
+            var branch = CheckedOutName(repo, reference, gitRef);
+            log.Report($"Checked out {branch} @ {commit.Sha[..7]}");
             return new GitCheckout(
                 commit.Sha,
                 commit.MessageShort,
@@ -42,8 +43,25 @@ public sealed class LibGit2GitService : IGitService
                 // the working tree instead of deriving it from a string.
                 repo.Info.WorkingDirectory?
                     .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                ?? workingDir);
+                ?? workingDir,
+                branch);
         }, ct);
+    }
+
+    /// <summary>
+    /// The name of what is now checked out. Not <c>repo.Head.FriendlyName</c>: a checkout of a
+    /// remote-tracking branch detaches HEAD, and that reads "(no branch)". A tag stays what was asked for.
+    /// </summary>
+    private static string CheckedOutName(Repository repo, Branch reference, string gitRef)
+    {
+        if (reference.IsRemote)
+        {
+            var name = reference.FriendlyName;
+            var remote = reference.RemoteName;
+            return name.StartsWith(remote + "/", StringComparison.Ordinal) ? name[(remote.Length + 1)..] : name;
+        }
+
+        return repo.Info.IsHeadDetached ? gitRef : reference.FriendlyName;
     }
 
     public Task<IReadOnlyList<GitRef>> ListRefsAsync(string cloneUrl, string? credentialToken, CancellationToken ct)
@@ -64,6 +82,9 @@ public sealed class LibGit2GitService : IGitService
 
     private static Branch ResolveRef(Repository repo, string gitRef, string? token, IProgress<string> log)
     {
+        // Blank asks for the default branch outright, which is what a fresh clone is standing on.
+        if (string.IsNullOrWhiteSpace(gitRef)) return repo.Head;
+
         // Prefer a matching branch; fall back to a tag; else default branch.
         var branch = repo.Branches[$"origin/{gitRef}"] ?? repo.Branches[gitRef];
         if (branch is not null) return branch;
