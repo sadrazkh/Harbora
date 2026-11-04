@@ -125,14 +125,3 @@ public sealed record SourceInspection(
     public static SourceInspection Nothing { get; } =
         new(DetectedStack.Unknown, DetectedAppKind.Web, null, [], null, null, null, [], [], []);
 }
-
-/// <summary>
-/// Reads a source tree and says what it appears to need. Pure over the file system: no network, no
-/// process, no database, so it runs identically on the panel and in the CLI and is tested with
-/// nothing but a temporary folder.
-/// </summary>
-public static class SourceInspector
-{
-    /// <param name="root">An existing directory. A tree it cannot make sense of yields <see cref="SourceInspection.Nothing"/> and a note, never an exception.</param>
-    public static SourceInspection Inspect(string root) => SourceInspection.Nothing;
-}
