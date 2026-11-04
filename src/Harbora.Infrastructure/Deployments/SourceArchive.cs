@@ -4,7 +4,9 @@ using System.IO.Compression;
 namespace Harbora.Infrastructure.Deployments;
 
 /// <summary>
-/// Unpacks a source archive uploaded by <c>harbora deploy</c>.
+/// Unpacks a source archive: a gzipped tar pushed by <c>harbora deploy</c>, or a zip somebody dropped
+/// on <c>/launch</c>. Which one is decided by its first bytes rather than its name, so everything that
+/// already hands a <c>SourceArchivePath</c> to the pipeline works for both with no other change.
 ///
 /// This is the one place where a user's bytes are written to the panel's filesystem, so it is
 /// deliberately paranoid: entry paths are resolved and checked to stay inside the destination
@@ -22,11 +24,54 @@ public static class SourceArchive
 
     public sealed record Result(int Files, long Bytes);
 
-    public static async Task<Result> ExtractAsync(Stream gzippedTar, string destination, CancellationToken ct)
+    public static async Task<Result> ExtractAsync(Stream archive, string destination, CancellationToken ct)
     {
         Directory.CreateDirectory(destination);
         var root = Path.GetFullPath(destination);
 
+        // Both formats have to be looked at first, and a zip's directory is at its end: a stream that
+        // cannot seek is put somewhere that can. Every caller today hands over a file, so this costs
+        // nothing unless somebody later passes a request body straight through.
+        await using var spool = archive.CanSeek ? null : await SpoolAsync(archive, ct);
+        var source = spool ?? archive;
+
+        return await LooksLikeZipAsync(source, ct)
+            ? await ExtractZipAsync(source, root, ct)
+            : await ExtractTarGzAsync(source, root, ct);
+    }
+
+    private static async Task<FileStream> SpoolAsync(Stream source, CancellationToken ct)
+    {
+        var spool = new FileStream(Path.GetTempFileName(), FileMode.Open, FileAccess.ReadWrite, FileShare.None,
+            81920, FileOptions.Asynchronous | FileOptions.DeleteOnClose);
+        await source.CopyToAsync(spool, ct);
+        spool.Position = 0;
+        return spool;
+    }
+
+    /// <summary>
+    /// <c>50 4B</c> is a zip; everything else goes down the tar path, where gzip junk and an empty body
+    /// already end in the sentence a person can act on. The stream is put back where it was found.
+    /// </summary>
+    private static async Task<bool> LooksLikeZipAsync(Stream source, CancellationToken ct)
+    {
+        var start = source.Position;
+        var magic = new byte[2];
+        var read = await source.ReadAtLeastAsync(magic, magic.Length, throwOnEndOfStream: false, ct);
+        source.Position = start;
+        return read == magic.Length && magic[0] == 0x50 && magic[1] == 0x4B;
+    }
+
+    /// <summary>
+    /// What a person can do about it, instead of "unable to read beyond the end of the stream" as a
+    /// deployment error. An empty folder, a truncated upload and a body in neither format all land here.
+    /// </summary>
+    private static InvalidOperationException NotAnArchive(Exception? inner = null) => new(
+        "The uploaded source archive is empty or not a valid .tar.gz or .zip. Check that the " +
+        "folder you pushed actually contains files.", inner);
+
+    private static async Task<Result> ExtractTarGzAsync(Stream gzippedTar, string root, CancellationToken ct)
+    {
         await using var gz = new GZipStream(gzippedTar, CompressionMode.Decompress);
         await using var reader = new TarReader(gz, leaveOpen: true);
 
@@ -42,12 +87,7 @@ public static class SourceArchive
             }
             catch (Exception ex) when (ex is EndOfStreamException or InvalidDataException)
             {
-                // An empty folder, a truncated upload or a body that isn't a gzipped tar all land
-                // here. Say so plainly instead of surfacing "unable to read beyond the end of the
-                // stream" as a deployment error.
-                throw new InvalidOperationException(
-                    "The uploaded source archive is empty or not a valid .tar.gz. Check that the " +
-                    "folder you pushed actually contains files.", ex);
+                throw NotAnArchive(ex);
             }
             if (entry is null) break;
 
@@ -83,6 +123,96 @@ public static class SourceArchive
         }
 
         return new Result(files, bytes);
+    }
+
+    /// <summary>
+    /// The same guards as the tar path, with one more reason to be careful: a zip states each entry's
+    /// size in a header nothing checks, so the ceiling is counted from what actually comes out of the
+    /// decompressor rather than read from the entry.
+    /// </summary>
+    private static async Task<Result> ExtractZipAsync(Stream source, string root, CancellationToken ct)
+    {
+        try
+        {
+            using var zip = new ZipArchive(source, ZipArchiveMode.Read, leaveOpen: true);
+
+            if (zip.Entries.Count > MaxEntries)
+                throw new InvalidOperationException($"Archive has more than {MaxEntries:N0} entries.");
+
+            var files = 0;
+            long bytes = 0;
+            var buffer = new byte[81920];
+
+            foreach (var entry in zip.Entries)
+            {
+                if (IsZipLink(entry)) continue;
+
+                // Resolved before anything is skipped: "../../.env" is an escape, not a file to ignore.
+                var target = ResolveSafePath(root, entry.FullName);
+                if (target is null || IsLeftOutOfAnUpload(entry.FullName)) continue;
+
+                if (IsZipDirectory(entry.FullName))
+                {
+                    Directory.CreateDirectory(target);
+                    continue;
+                }
+
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                await using var input = entry.Open();
+                await using var file = File.Create(target);
+                int read;
+                while ((read = await input.ReadAsync(buffer, ct)) > 0)
+                {
+                    bytes += read;
+                    if (bytes > MaxUncompressedBytes)
+                        throw new InvalidOperationException(
+                            $"Archive expands to more than {MaxUncompressedBytes / (1024 * 1024)} MB.");
+                    await file.WriteAsync(buffer.AsMemory(0, read), ct);
+                }
+
+                files++;
+            }
+
+            // A zip of nothing but node_modules and .env is, for a build, an empty folder.
+            if (files == 0) throw NotAnArchive();
+            return new Result(files, bytes);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or EndOfStreamException)
+        {
+            throw NotAnArchive(ex);
+        }
+    }
+
+    private static bool IsZipDirectory(string entryName) => entryName.EndsWith('/') || entryName.EndsWith('\\');
+
+    /// <summary>
+    /// A zip records a Unix mode in the top half of its external attributes, and that is the only place
+    /// a symbolic link shows: extracted plainly it becomes a file whose content is the link's target.
+    /// </summary>
+    private static bool IsZipLink(ZipArchiveEntry entry)
+    {
+        const int fileTypeMask = 0xF000, symbolicLink = 0xA000;
+        return ((entry.ExternalAttributes >> 16) & fileTypeMask) == symbolicLink;
+    }
+
+    /// <summary>
+    /// What the CLI filters out on the client. A browser upload has no such step, and a <c>.env</c>
+    /// usually holds real keys, so it stops here: at any depth, because a GitHub zip puts everything
+    /// under one top-level folder. Only zips: the tar path is the CLI's, which has already done this.
+    /// </summary>
+    private static bool IsLeftOutOfAnUpload(string entryName)
+    {
+        var segments = entryName.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length == 0) return false;
+
+        if (segments.Any(s => s.Equals(".git", StringComparison.OrdinalIgnoreCase)
+                              || s.Equals("node_modules", StringComparison.OrdinalIgnoreCase)))
+            return true;
+
+        // A folder that happens to be called ".env" holds no keys of its own; only a file does.
+        return !IsZipDirectory(entryName)
+            && (segments[^1].Equals(".env", StringComparison.OrdinalIgnoreCase)
+                || segments[^1].Equals(".env.local", StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>

@@ -359,6 +359,7 @@ public sealed class AppProvisioningService(
         Command = request.Kind == ServiceKind.Cron && !string.IsNullOrWhiteSpace(request.Command)
             ? request.Command.Trim()
             : null,
+        StartCommand = string.IsNullOrWhiteSpace(request.StartCommand) ? null : request.StartCommand.Trim(),
         // Only meaningful for a service built from a repository — there is no branch to preview
         // otherwise.
         PreviewsEnabled = request.PreviewsEnabled && UsesRepository(request.SourceType),
