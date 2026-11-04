@@ -129,6 +129,47 @@ public class BuildpackTests : IDisposable
     }
 
     [Fact]
+    public void A_python_worker_named_by_its_procfile_needs_no_entry_file()
+    {
+        // A Procfile's `worker: python worker.py` beside a requirements.txt, the plainest worker there
+        // is, was refused for having no app.py.
+        Touch("requirements.txt", "redis");
+        Touch("worker.py");
+
+        var pack = Buildpacks.Detect(_dir, 5000, ServiceKind.Worker, startCommand: "python worker.py")!.Value;
+
+        pack.Stack.Should().Be("Python");
+        pack.Entry.Should().Be("python worker.py");
+        pack.Dockerfile.Should().Contain("RUN pip install --no-cache-dir -r requirements.txt");
+        pack.Dockerfile.Should().NotContain("CMD", "the container is started with the command, and nothing in the image would run");
+        pack.Dockerfile.Should().NotContain("EXPOSE");
+    }
+
+    [Fact]
+    public void A_recognised_entry_file_keeps_its_cmd_beside_a_start_command()
+    {
+        Touch("requirements.txt", "flask");
+        Touch("app.py");
+
+        var pack = Buildpacks.Detect(_dir, 5000, ServiceKind.Web, startCommand: "gunicorn app:app")!.Value;
+
+        pack.Entry.Should().Be("app.py");
+        pack.Dockerfile.Should().Contain("""CMD ["python", "app.py"]""");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void With_no_start_command_a_python_project_with_no_entry_file_is_still_refused(string? startCommand)
+    {
+        Touch("requirements.txt", "redis");
+        Touch("worker.py");
+
+        Buildpacks.Detect(_dir, 5000, ServiceKind.Worker, startCommand).Should().BeNull();
+    }
+
+    [Fact]
     public void DetectionHint_names_what_was_looked_for_when_a_Python_project_has_no_entry_file()
     {
         Touch("requirements.txt", "flask");

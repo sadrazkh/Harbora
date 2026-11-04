@@ -72,7 +72,7 @@ public static class Buildpacks
         if (FindCsproj(contextPath) is { } csproj) return BesidePackage(DotNet(csproj, port, marked));
         if (Has("go.mod")) return BesidePackage(Go(port, marked));
         if (HasAny("composer.json", "index.php")) return BesidePackage(Php(contextPath, port, marked));
-        if (HasAny("requirements.txt", "pyproject.toml", "Pipfile")) return BesidePackage(Python(contextPath, port, kind, marked));
+        if (HasAny("requirements.txt", "pyproject.toml", "Pipfile")) return BesidePackage(Python(contextPath, port, kind, marked, startCommand));
         if (hasPackage)
         {
             return kind == ServiceKind.Web && string.IsNullOrWhiteSpace(startCommand) && NodeStartRule.HasBuildScript(contextPath)
@@ -322,10 +322,15 @@ public static class Buildpacks
     }
 
     // --- Python ---
-    private static BuildpackResult? Python(string ctx, int port, ServiceKind kind, string[] args)
+    private static BuildpackResult? Python(string ctx, int port, ServiceKind kind, string[] args, string? startCommand)
     {
         var entry = PythonEntryCandidates.FirstOrDefault(f => File.Exists(Path.Combine(ctx, f)));
-        if (entry is null) return null; // No guessing — an image that can't start is worse than none.
+
+        // No guessing, because an image that can't start is worse than none. A start command is not a
+        // guess, though: it is what the container runs in place of the image's CMD, so `worker: python
+        // worker.py` in a Procfile, the commonest way a worker says what it is, needs no entry file.
+        var command = string.IsNullOrWhiteSpace(startCommand) ? null : startCommand.Trim();
+        if (entry is null && command is null) return null;
 
         var install = File.Exists(Path.Combine(ctx, "requirements.txt"))
             ? "RUN pip install --no-cache-dir -r requirements.txt"
@@ -353,9 +358,9 @@ public static class Buildpacks
             lines.Add($"EXPOSE {port}");
         }
 
-        lines.Add($"CMD [\"python\", \"{entry}\"]");
+        if (entry is not null) lines.Add($"CMD [\"python\", \"{entry}\"]");
 
-        return new BuildpackResult(string.Join('\n', lines), "Python", entry, BuildArgNames: Declared(args));
+        return new BuildpackResult(string.Join('\n', lines), "Python", entry ?? command, BuildArgNames: Declared(args));
     }
 
     /// <summary>Public entry for a forced static-site (Nginx) build, used by StaticSite deploys.</summary>

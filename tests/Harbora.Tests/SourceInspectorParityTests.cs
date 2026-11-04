@@ -154,6 +154,36 @@ public class SourceInspectorParityTests : InspectorTreeTests
     }
 
     [Theory]
+    [InlineData("requirements.txt", "worker: python worker.py\n", DetectedAppKind.Worker, "python worker.py")]
+    [InlineData("pyproject.toml", "worker: python worker.py\n", DetectedAppKind.Worker, "python worker.py")]
+    [InlineData("Pipfile", "worker: python worker.py\n", DetectedAppKind.Worker, "python worker.py")]
+    public void A_procfile_is_a_python_project_with_no_entry_file_saying_what_to_run(
+        string manifest, string procfile, DetectedAppKind kind, string command)
+    {
+        Write(manifest);
+        Write("worker.py");
+        Write("Procfile", procfile);
+
+        InspectorShouldAgreeWithThePipeline(procfile);
+
+        var inspection = Inspect();
+        inspection.Stack.Should().Be(DetectedStack.Python);
+        inspection.Kind.Should().Be(kind);
+        inspection.StartCommand.Should().Be(command);
+        inspection.Notes.Should().NotContain(n => n.Code == "no-stack-recognised");
+    }
+
+    [Fact]
+    public void A_procfile_naming_neither_process_leaves_a_python_project_with_no_entry_file_unbuildable()
+    {
+        Write("requirements.txt");
+        Write("Procfile", "clock: python clock.py\n");
+
+        InspectorShouldAgreeWithThePipeline("nothing says what to run");
+        Inspect().Stack.Should().Be(DetectedStack.Unknown);
+    }
+
+    [Theory]
     [InlineData("requirements.txt")]
     [InlineData("pyproject.toml")]
     [InlineData("Pipfile")]

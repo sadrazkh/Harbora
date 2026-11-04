@@ -57,13 +57,23 @@ internal static class StackDetector
     /// <summary>
     /// The one part of <c>Buildpacks.Detect</c> that needs the app's kind and start command, which the
     /// inspector only knows after reading the project files. A worker, or anything with its own start
-    /// command, does not care that <c>npm start</c> has nothing to run.
+    /// command, does not care that <c>npm start</c> has nothing to run, and a Python project with one
+    /// has no need of an entry file.
     /// </summary>
-    public static DetectedStack WithKnownKind(SourceTree app, DetectedStack stack, DetectedAppKind kind, string? startCommand) =>
-        stack == DetectedStack.Node && kind == DetectedAppKind.Web && string.IsNullOrWhiteSpace(startCommand) &&
-        !NodeStartRule.CanStart(app) && NodeStartRule.HasBuildScript(app)
+    public static DetectedStack WithKnownKind(SourceTree app, DetectedStack stack, DetectedAppKind kind, string? startCommand)
+    {
+        var hasCommand = !string.IsNullOrWhiteSpace(startCommand);
+        if (stack == DetectedStack.Unknown && hasCommand && IsPythonWithNoEntry(app)) return DetectedStack.Python;
+
+        return stack == DetectedStack.Node && kind == DetectedAppKind.Web && !hasCommand &&
+               !NodeStartRule.CanStart(app) && NodeStartRule.HasBuildScript(app)
             ? DetectedStack.Frontend
             : stack;
+    }
+
+    /// <summary>A Python project the image would have nothing to run for, unless something else says what to run.</summary>
+    public static bool IsPythonWithNoEntry(SourceTree app) =>
+        HasAny(app, PythonManifests) && !HasAny(app, PythonEntries);
 
     /// <summary>Something directly in this folder says the app is here. Project files further down do not count: see <see cref="LooksLikeAnApp"/>.</summary>
     public static bool HoldsSomething(SourceTree folder) =>
