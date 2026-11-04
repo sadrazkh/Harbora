@@ -82,7 +82,7 @@ public sealed partial class LaunchService
 
         // Every name, including the ones an attachment sets: somebody who unticks Postgres because their
         // database is elsewhere has to have somewhere to put its address. The screen sorts by disposition.
-        var fields = inspection.EnvVars
+        var fields = inspection.EnvVars.Concat(UnnamedConnections(inspection))
             .Select(v => new LaunchEnvField(
                 v.Name, v.Disposition,
                 v.Disposition == EnvVarDisposition.KeepExample ? v.ExampleValue : null,
@@ -131,26 +131,46 @@ public sealed partial class LaunchService
     /// A variable only a person can answer is usually a third party's credential, so the safer wrong
     /// guess is to mask it; a name that plainly is one is masked and anything else is left readable.
     /// A generated one is always secret, and the example file's own value never makes anything secret.
-    /// The address of somebody's own database has its password in it, whatever it is called.
+    ///
+    /// <para>
+    /// A connection name goes the other way round, secret unless it plainly holds a harmless part: what
+    /// somebody types for <c>DATABASE_URL</c> or <c>MONGODB_URI</c> has their database's password in it,
+    /// and neither name says so. What this answers is what <see cref="LaunchEnvField.IsSecret"/> carries.
+    /// </para>
     /// </summary>
     private static bool IsSecretByDefault(DetectedEnvVar variable) => variable.Disposition switch
     {
         EnvVarDisposition.GeneratedSecret => true,
-        EnvVarDisposition.NeedsAnswer or EnvVarDisposition.AliasOfAttach or EnvVarDisposition.ProvidedByAttach =>
-            HoldsAConnectionAddress(variable)
+        EnvVarDisposition.ProvidedByAttach or EnvVarDisposition.AliasOfAttach => !IsPlainConnectionPart(variable),
+        EnvVarDisposition.NeedsAnswer => variable.Role == EnvAliasRole.Url
             || SecretNameParts.Any(part => variable.Name.Contains(part, StringComparison.OrdinalIgnoreCase)),
         _ => false
     };
 
     private static readonly string[] SecretNameParts = ["KEY", "TOKEN", "SECRET", "PASSWORD", "PASS", "CREDENTIAL"];
 
-    private static bool HoldsAConnectionAddress(DetectedEnvVar variable) =>
-        variable.Role == EnvAliasRole.Url
-        || (variable.Disposition == EnvVarDisposition.ProvidedByAttach
-            && (variable.Name.EndsWith("_URL", StringComparison.Ordinal)
-                || variable.Name.EndsWith("_URI", StringComparison.Ordinal)
-                || variable.Name.EndsWith("_DSN", StringComparison.Ordinal)
-                || variable.Name.StartsWith("ConnectionStrings__", StringComparison.Ordinal)));
+    /// <summary>How an attach name, which carries no role of its own, says it holds a host, a port, a user or a database's name.</summary>
+    private static readonly string[] PlainPartEndings = ["HOST", "PORT", "USER", "USERNAME", "DATABASE", "DB", "NAME"];
+
+    private static bool IsPlainConnectionPart(DetectedEnvVar variable) => variable.Role is { } role
+        ? role is EnvAliasRole.Host or EnvAliasRole.Port or EnvAliasRole.User or EnvAliasRole.Database
+        : PlainPartEndings.Any(ending => variable.Name.EndsWith(ending, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// A project with <c>pg</c> in its dependencies and no example file names no variable at all, so
+    /// somebody who unticks Postgres would have nowhere to give their own database's address until the app's
+    /// page. Each detected service with no name of its own gets the one name its attachment would set for
+    /// the whole address, from the same table that alias resolution reads.
+    /// </summary>
+    private static IEnumerable<DetectedEnvVar> UnnamedConnections(SourceInspection inspection)
+    {
+        var given = inspection.EnvVars.Select(v => v.Name).ToHashSet(StringComparer.Ordinal);
+
+        foreach (var service in inspection.Services.Where(s => inspection.EnvVars.All(v => v.Service != s.Kind)))
+            if (AttachEnvRoles.SourceKeyFor(AttachEnvRoles.TypeFor(service.Kind), EnvAliasRole.Url) is { } address && given.Add(address))
+                yield return new DetectedEnvVar(address, EnvVarDisposition.ProvidedByAttach, null, service.Kind, null,
+                    service.Evidence.FirstOrDefault()?.File ?? "");
+    }
 
     /// <summary>
     /// Every spelling in the example env file of something this engine's attachment provides, turned

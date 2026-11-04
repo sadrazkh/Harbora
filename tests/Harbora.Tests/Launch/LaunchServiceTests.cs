@@ -847,23 +847,25 @@ public sealed class LaunchServiceTests
         await h.ConfirmAsync(id);
         h.Row(id).FailedStep.Should().Be(LaunchStepKeys.App);
 
-        LaunchStepView Databases() =>
-            h.Request().GetAsync(id, default).GetAwaiter().GetResult()!.Steps.Single(s => s.Key == LaunchStepKeys.Services);
+        async Task<LaunchStepView> DatabasesAsync() =>
+            (await h.Request().GetAsync(id, default))!.Steps.Single(s => s.Key == LaunchStepKeys.Services);
 
         var serviceId = h.Store().ManagedServices.IgnoreQueryFilters().Single().Id;
 
-        Databases().State.Should().Be(LaunchStepState.Running, "it is still provisioning, whatever stopped the launch");
-        Databases().Detail.Should().Contain("shop-postgresql");
-        Databases().LinkPath.Should().Be($"/databases/{serviceId}");
+        var step = await DatabasesAsync();
+        step.State.Should().Be(LaunchStepState.Running, "it is still provisioning, whatever stopped the launch");
+        step.Detail.Should().Contain("shop-postgresql");
+        step.LinkPath.Should().Be($"/databases/{serviceId}");
 
         h.ServicesAre(ServiceStatus.Failed, "image pull failed");
-        Databases().State.Should().Be(LaunchStepState.Failed);
-        Databases().Detail.Should().Contain("image pull failed");
-        Databases().DetailFa.Should().Contain("image pull failed");
-        Databases().LinkPath.Should().Be($"/databases/{serviceId}");
+        step = await DatabasesAsync();
+        step.State.Should().Be(LaunchStepState.Failed);
+        step.Detail.Should().Contain("image pull failed");
+        step.DetailFa.Should().Contain("image pull failed");
+        step.LinkPath.Should().Be($"/databases/{serviceId}");
 
         h.ServicesAre(ServiceStatus.Running);
-        Databases().State.Should().Be(LaunchStepState.Done);
+        (await DatabasesAsync()).State.Should().Be(LaunchStepState.Done);
     }
 
     [Fact]
@@ -1618,7 +1620,8 @@ public sealed class LaunchServiceTests
         service.Aliases.Should().Equal(new AttachEnvAlias("DB_HOST", "PGHOST"));
 
         proposal.EnvFields.Select(f => f.Key).Should().BeEquivalentTo(
-            ["DATABASE_URL", "DB_HOST", "JWT_SECRET", "LOG_LEVEL", "STRIPE_SECRET_KEY"]);
+            ["DATABASE_URL", "DB_HOST", "JWT_SECRET", "LOG_LEVEL", "STRIPE_SECRET_KEY", "REDIS_URL"],
+            "the Redis it guessed at names nothing of its own in the example file, and may be somebody's own");
         var fields = proposal.EnvFields.ToDictionary(f => f.Key);
         fields["DATABASE_URL"].Disposition.Should().Be(EnvVarDisposition.ProvidedByAttach);
         fields["DATABASE_URL"].Service.Should().Be(ManagedServiceType.PostgreSql);

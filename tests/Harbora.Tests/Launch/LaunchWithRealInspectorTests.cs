@@ -524,6 +524,150 @@ public sealed class LaunchWithRealInspectorTests
         (await NotSetLineAsync(h, id)).Should().Contain("DATABASE_URL");
     }
 
+    [Theory]
+    [InlineData("DATABASE_URL", true)]
+    [InlineData("DATABASE_DSN", true)]
+    [InlineData("ConnectionStrings__DefaultConnection", true)]
+    [InlineData("PGPASSWORD", true)]
+    [InlineData("PGHOST", false)]
+    [InlineData("PGPORT", false)]
+    [InlineData("PGUSER", false)]
+    [InlineData("PGDATABASE", false)]
+    public async Task An_attach_name_is_secret_unless_it_plainly_holds_a_harmless_part(string name, bool secret)
+    {
+        using var h = new LaunchHarness();
+        var id = await UploadAsync(h, "my-shop-0123456789abcdef0123456789abcdef.zip", new()
+        {
+            ["package.json"] = NodeWithPostgres,
+            [".env.example"] = name + "=\n"
+        });
+
+        var field = (await h.Request().ProposeAsync(id, default))!.EnvFields.Single(f => f.Key == name);
+
+        field.Disposition.Should().Be(EnvVarDisposition.ProvidedByAttach);
+        field.IsSecret.Should().Be(secret);
+    }
+
+    [Theory]
+    [InlineData("POSTGRES_URL", true)]
+    [InlineData("POSTGRES_PASSWORD", true)]
+    [InlineData("DB_URL", true)]
+    [InlineData("DB_PASS", true)]
+    [InlineData("POSTGRES_HOST", false)]
+    [InlineData("DB_PORT", false)]
+    [InlineData("DB_USERNAME", false)]
+    [InlineData("POSTGRES_DB", false)]
+    [InlineData("DATABASE_NAME", false)]
+    public async Task An_alias_is_judged_by_the_part_of_the_connection_it_holds(string name, bool secret)
+    {
+        using var h = new LaunchHarness();
+        var id = await UploadAsync(h, "my-shop-0123456789abcdef0123456789abcdef.zip", new()
+        {
+            ["package.json"] = NodeWithPostgres,
+            [".env.example"] = name + "=\n"
+        });
+
+        var field = (await h.Request().ProposeAsync(id, default))!.EnvFields.Single(f => f.Key == name);
+
+        field.Disposition.Should().Be(EnvVarDisposition.AliasOfAttach);
+        field.IsSecret.Should().Be(secret);
+    }
+
+    [Fact]
+    public async Task Every_name_any_attachment_sets_is_plainly_a_harmless_part_or_secret_with_none_left_to_chance()
+    {
+        // The names that hold a password or could: anything new in that table has to be placed on purpose.
+        string[] plainlyHarmless =
+        [
+            "PGHOST", "PGPORT", "PGUSER", "PGDATABASE",
+            "MYSQL_HOST", "MYSQL_PORT", "MYSQL_USER", "MYSQL_DATABASE",
+            "DB_HOST", "DB_PORT", "DB_USER", "DB_DATABASE",
+            "REDIS_HOST", "REDIS_PORT",
+            "MONGO_HOST", "MONGO_PORT", "MONGO_USER", "MONGO_DATABASE",
+            "RABBITMQ_HOST", "RABBITMQ_PORT", "RABBITMQ_USER",
+            "NATS_HOST", "NATS_PORT", "NATS_USER",
+            "MEILI_HOST", "MEILI_PORT"
+        ];
+
+        using var h = new LaunchHarness();
+        foreach (var (kind, names) in AttachEnvNames.All)
+        {
+            var id = await h.ReadyGitAsync(new SourceInspection(
+                DetectedStack.Node, DetectedAppKind.Web, null, [], 3000, null, null, [LaunchFixtures.Certain(kind)],
+                names.Select(n => LaunchFixtures.Var(n, EnvVarDisposition.ProvidedByAttach, null, kind)).ToList(), []));
+
+            foreach (var field in (await h.Request().ProposeAsync(id, default))!.EnvFields)
+                field.IsSecret.Should().Be(!plainlyHarmless.Contains(field.Key), field.Key);
+        }
+    }
+
+    [Theory]
+    [InlineData("pg", "DATABASE_URL", ManagedServiceType.PostgreSql)]
+    [InlineData("mysql2", "DATABASE_URL", ManagedServiceType.MySql)]
+    [InlineData("mongoose", "MONGODB_URI", ManagedServiceType.MongoDb)]
+    [InlineData("ioredis", "REDIS_URL", ManagedServiceType.Redis)]
+    public async Task A_service_with_no_example_file_still_has_somewhere_to_type_its_address(string dependency, string name, ManagedServiceType type)
+    {
+        using var h = new LaunchHarness();
+        var id = await UploadAsync(h, "app-0123456789abcdef0123456789abcdef.zip", new()
+        {
+            ["package.json"] = $$$"""{"scripts":{"start":"node s.js"},"dependencies":{"{{{dependency}}}":"1.0.0"}}""",
+            ["s.js"] = ""
+        });
+
+        var proposal = await h.Request().ProposeAsync(id, default);
+
+        var field = proposal!.EnvFields.Should().ContainSingle().Subject;
+        field.Key.Should().Be(name);
+        field.Disposition.Should().Be(EnvVarDisposition.ProvidedByAttach);
+        field.Service.Should().Be(type);
+        field.IsSecret.Should().BeTrue();
+        field.SourceFile.Should().Be("package.json");
+        field.SuggestedValue.Should().BeNull();
+        proposal.Defaults.EnvVars.Should().BeEmpty("with the engine ticked there is nothing to ask");
+
+        (await h.Request().ConfirmAsync(id, proposal.Defaults with
+        {
+            Services = [],
+            EnvVars = [new LaunchEnvChoice(name, "someones://own/address", field.IsSecret)]
+        }, null, default)).Ok.Should().BeTrue();
+
+        WhatTheAppGets(h)[name].Should().Be("someones://own/address");
+    }
+
+    [Fact]
+    public async Task With_its_engine_ticked_that_address_is_attached_and_not_said_to_be_missing()
+    {
+        using var h = new LaunchHarness();
+        var id = await UploadAsync(h, "app-0123456789abcdef0123456789abcdef.zip", new()
+        {
+            ["package.json"] = NodeWithPostgres
+        });
+        var defaults = await h.DefaultsAsync(id);
+
+        (await h.Request().ConfirmAsync(id, defaults with
+        {
+            EnvVars = [new LaunchEnvChoice("DATABASE_URL", null, IsSecret: true)]
+        }, null, default)).Ok.Should().BeTrue();
+
+        h.Store().EnvironmentVariables.IgnoreQueryFilters().Should().BeEmpty();
+        (await NotSetLineAsync(h, id)).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Two_engines_sharing_one_address_name_get_one_field_and_a_name_of_its_own_needs_no_other()
+    {
+        using var h = new LaunchHarness();
+        var both = await UploadAsync(h, "both-0123456789abcdef0123456789abcdef.zip", new()
+        {
+            ["package.json"] = """{"scripts":{"start":"node s.js"},"dependencies":{"pg":"8","mysql2":"3","ioredis":"5"}}""",
+            [".env.example"] = "REDIS_HOST=\n"
+        });
+
+        (await h.Request().ProposeAsync(both, default))!.EnvFields.Select(f => f.Key)
+            .Should().BeEquivalentTo(["REDIS_HOST", "DATABASE_URL"], "Redis already has a name of its own here");
+    }
+
     [Fact]
     public async Task A_javascript_monorepo_asks_which_app_and_each_answer_is_about_that_app()
     {
