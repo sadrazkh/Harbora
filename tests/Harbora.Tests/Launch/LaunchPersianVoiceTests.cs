@@ -29,7 +29,7 @@ public sealed class LaunchPersianVoiceTests
 
     /// <summary>The plural imperatives and the polite word that goes with them. Whole words: جدید and شاید end the same way.</summary>
     private static readonly Regex Plural = new(
-        "(?<![ء-يٰ-ۓ‌])(نکنید|کنید|بدهید|بسازید|بگذارید|ببینید|بخوانید|ببرید|بیندازید|بودید|لطفاً)(?![ء-يٰ-ۓ‌])",
+        "(?<![\u0621-\u064A\u0670-\u06D3\u200C])(نکنید|کنید|بدهید|بسازید|بگذارید|ببینید|بخوانید|ببرید|بیندازید|بودید|لطفاً)(?![\u0621-\u064A\u0670-\u06D3\u200C])",
         RegexOptions.CultureInvariant);
 
     public static TheoryData<string> Files()

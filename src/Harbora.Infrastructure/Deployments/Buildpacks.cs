@@ -338,6 +338,8 @@ public static class Buildpacks
     /// PHP app, because a plain <c>index.php</c> calling PDO needs its driver just as much, and because all
     /// of them then share this one slow layer on a host. Only <c>git</c> and <c>unzip</c> are for composer
     /// alone. The <c>-dev</c> packages stay: removing them would take the libraries these need at runtime.
+    /// What the base image compiles in is from memory rather than from <c>php -m</c>, since nothing here
+    /// can run it; a real project on CI confirms it.
     /// </summary>
     private const string PhpExtensionsStep =
         """
