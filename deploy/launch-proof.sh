@@ -145,7 +145,9 @@ annotate() {
   elif [ "$ANNOTATIONS_USED" -le 20 ]; then level=warning
   else level=notice
   fi
-  body="$(printf '%s' "$body" | scrub)"
+  body="$(printf '%s' "$body" | sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' | scrub)"
+  # An annotation with nothing in it is dropped, and silence would read as "nothing to report".
+  [ -n "$body" ] || body="(nothing)"
   body="${body:0:3800}"
   body="${body//'%'/%25}"; body="${body//$'\r'/%0D}"; body="${body//$'\n'/%0A}"
   title="${title//'%'/%25}"; title="${title//':'/%3A}"; title="${title//','/%2C}"
@@ -179,7 +181,7 @@ report_host_state() {
   command -v docker >/dev/null 2>&1 || return 0
   annotate "the panel's log - errors first" "$( { docker logs harbora-panel 2>&1 | grep -E '^[0-9:]+ (fail|crit): ' | tail -c 2200; \
     echo '--- the last lines ---'; docker logs --tail 15 harbora-panel 2>&1 | cut -c1-200; } 2>/dev/null || true)"
-  annotate "traefik's log - errors" "$(docker logs harbora-traefik 2>&1 | grep -E ' (ERR|WRN) |level=(error|warn)' | cut -c1-400 | tail -c 3700 || true)"
+  annotate "traefik's log - errors" "$(docker logs harbora-traefik 2>&1 | sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' | grep -E ' (ERR|WRN) ' | cut -c1-400 | tail -c 3700 || true)"
   annotate "docker ps -a" "$(docker ps -a --format '{{.Names}}  {{.Image}}  {{.Status}}' 2>/dev/null | cut -c1-160 | tail -c 3700 || true)"
 }
 
@@ -543,9 +545,6 @@ bash "$WORK/install.sh" install </dev/null 2>&1 | tee "$WORK/install.log" || ins
 [ "$install_exit" -eq 0 ] || fail "install.sh exited $install_exit. Its last lines: $(tail -n 25 "$WORK/install.log" | cut -c1-300)"
 
 # Its exit code is not evidence: it calls `verify_install || true` and prints the banner either way.
-if grep -q 'Installation finished WITH ERRORS' "$WORK/install.log"; then
-  fail "install.sh reported its own verification failures: $(grep '✗' "$WORK/install.log" | tail -8)"
-fi
 [ -f "$COMPOSE_DIR/.env" ] || die "install.sh finished but there is no .env at $COMPOSE_DIR/.env."
 
 installed_sha="$(git -C "$APP_DIR" rev-parse HEAD)"
@@ -597,6 +596,40 @@ case "$issuer" in
   *) die "The panel's certificate was not issued by Pebble. Issuer: '$issuer'." ;;
 esac
 fact "Traefik took the panel's certificate over ACME HTTP-01, and nothing below uses curl -k."
+
+# Asked after the certificate, so that it is the channel's answer rather than the missing certificate's.
+# A failure here fails the run and stops nothing: no launch goes through this router, and a run takes
+# half an hour, so what it can still say about the launch is worth having.
+case_install_verified() {
+  if grep -q 'Installation finished WITH ERRORS' "$WORK/install.log"; then
+    log "What install.sh said was wrong:"
+    grep '✗' "$WORK/install.log" | sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' | tail -n 8 || true
+    log "/dynamic as Traefik sees it:"
+    docker exec harbora-traefik ls -la /dynamic || true
+    log "Traefik's errors:"
+    docker logs harbora-traefik 2>&1 | sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' | grep -E ' (ERR|WRN) ' | tail -n 15 | cut -c1-300 || true
+    fail "install.sh reported its own verification failures: $(grep '✗' "$WORK/install.log" | sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' | tail -n 8)"
+  fi
+  ok "install.sh's own verification passed."
+}
+
+# The node channel's host carries one router, and that router requires a client certificate: no request
+# gets an HTTP answer, whatever install.sh could see before the certificate existed.
+case_node_channel_refuses() {
+  local node_domain code rc=0
+  node_domain="$(sed -n 's/^NODE_DOMAIN=//p' "$COMPOSE_DIR/.env" | head -1)"
+  [ -n "$node_domain" ] || fail "The install wrote no NODE_DOMAIN."
+  [ -f "$COMPOSE_DIR/traefik/dynamic/node-agent.yml" ] || fail "The node channel's router was never rendered."
+  code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "https://${node_domain}/api/node-agent/v1/channel" 2>/dev/null)" || rc=$?
+  log "A request to the node channel with no client certificate: curl exit $rc, HTTP $code"
+  case "$rc" in
+    35|56) ok "It refuses a connection with no client certificate." ;;
+    *) fail "The node channel at $node_domain answered a request with no client certificate: curl exit $rc, HTTP $code. Traefik: $(docker logs harbora-traefik 2>&1 | sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' | grep -E ' (ERR|WRN) ' | tail -n 6 | cut -c1-300)" ;;
+  esac
+}
+
+step_case "3b — what install.sh verified about itself" case_install_verified
+step_case "3c — the node channel asks for a client certificate" case_node_channel_refuses
 
 # ---------------------------------------------------------------------------------------------
 step "4 — create the owner through the first-run wizard"
