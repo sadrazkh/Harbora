@@ -148,7 +148,7 @@ public sealed class LaunchCommand : AsyncCommand<LaunchCommand.Settings>
             Say("", "grey", "Nothing was created.");
             return 1;
         }
-        catch (HttpRequestException ex)
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
             // Not the panel saying no. ApiClient's sentence for this blames an app name, and a launch
             // has none; and this is what a flaky connection looks like far more often than not.
@@ -168,7 +168,7 @@ public sealed class LaunchCommand : AsyncCommand<LaunchCommand.Settings>
             Whole($"  Look at this launch on the panel: {LaunchPlan.LaunchPage(api.Server, id)}");
             return 1;
         }
-        catch (HttpRequestException ex)
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
             Say("✗", "red", $"Lost touch with the panel, so how far this got is not known. ({ex.Message})");
             Whole($"  Look at this launch on the panel: {LaunchPlan.LaunchPage(api.Server, id)}");
@@ -192,7 +192,18 @@ public sealed class LaunchCommand : AsyncCommand<LaunchCommand.Settings>
                 return null;
             }
 
-            var packed = await SourcePacker.PackAsync(run.Dir, ProjectConfig.Load(run.Dir), ct);
+            SourcePacker.Packed packed;
+            try
+            {
+                packed = await SourcePacker.PackAsync(run.Dir, ProjectConfig.Load(run.Dir), ct);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // A file open in something else, usually. Nothing has left the machine.
+                Say("✗", "red", $"Could not read {run.Dir}: {ex.Message}");
+                return null;
+            }
+
             try
             {
                 if (packed.Files == 0)

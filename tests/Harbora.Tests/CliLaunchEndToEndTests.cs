@@ -70,7 +70,18 @@ public sealed class CliLaunchEndToEndTests : IClassFixture<LaunchPanelFixture>, 
     private FakeLaunchService Launches => _fixture.Launches;
     private Guid Id => Launches.NextStartId;
 
-    private ApiClient Api() => new(Server, _token, _fixture.Panel.Server.CreateHandler());
+    private ApiClient Api(Func<HttpRequestMessage, bool>? breaksOn = null) => breaksOn is null
+        ? new(Server, _token, _fixture.Panel.Server.CreateHandler())
+        : new(Server, _token, new Unreliable(_fixture.Panel.Server.CreateHandler(), breaksOn));
+
+    /// <summary>The real thing, with a connection that drops whenever the test says it does.</summary>
+    private sealed class Unreliable(HttpMessageHandler inner, Func<HttpRequestMessage, bool> breaksOn) : DelegatingHandler(inner)
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+            breaksOn(request)
+                ? throw new HttpRequestException("The SSL connection could not be established.")
+                : base.SendAsync(request, ct);
+    }
 
     /// <summary>A person, and everything they were asked.</summary>
     private sealed class Person : ILaunchPrompts
@@ -120,7 +131,8 @@ public sealed class CliLaunchEndToEndTests : IClassFixture<LaunchPanelFixture>, 
         FollowEvery = TimeSpan.FromMilliseconds(1)
     };
 
-    private async Task<(int Exit, string Output)> LaunchAsync(LaunchRun run, ILaunchPrompts? person = null, CancellationToken ct = default)
+    private async Task<(int Exit, string Output)> LaunchAsync(
+        LaunchRun run, ILaunchPrompts? person = null, CancellationToken ct = default, Func<HttpRequestMessage, bool>? breaksOn = null)
     {
         var previous = AnsiConsole.Console;
         var writer = new StringWriter();
@@ -131,7 +143,7 @@ public sealed class CliLaunchEndToEndTests : IClassFixture<LaunchPanelFixture>, 
             Out = new AnsiConsoleOutput(writer)
         });
 
-        try { return (await LaunchCommand.RunAsync(Api(), run, person, ct), Regex.Replace(writer.ToString(), @"\s+", " ").Trim()); }
+        try { return (await LaunchCommand.RunAsync(Api(breaksOn), run, person, ct), Regex.Replace(writer.ToString(), @"\s+", " ").Trim()); }
         finally { AnsiConsole.Console = previous; }
     }
 
@@ -755,6 +767,10 @@ public sealed class CliLaunchEndToEndTests : IClassFixture<LaunchPanelFixture>, 
         using var stop = new CancellationTokenSource();
         var running = LaunchAsync(Run(), null, stop.Token);
         while (Launches.Confirmed.Count == 0 && !running.IsCompleted) await Task.Delay(1);
+
+        // A look after the confirm's own one: the answer has come back and it is following.
+        var seen = Launches.Reads;
+        while (Launches.Reads == seen && !running.IsCompleted) await Task.Delay(1);
         await stop.CancelAsync();
 
         var (exit, output) = await running;
@@ -782,7 +798,7 @@ public sealed class CliLaunchEndToEndTests : IClassFixture<LaunchPanelFixture>, 
         using var stop = new CancellationTokenSource();
 
         var running = LaunchAsync(Run(), null, stop.Token);
-        while (Launches.Started.Count == 0 && !running.IsCompleted) await Task.Delay(1);
+        while (Launches.Reads == 0 && !running.IsCompleted) await Task.Delay(1);
         await stop.CancelAsync();
 
         var (exit, output) = await running;
@@ -790,6 +806,65 @@ public sealed class CliLaunchEndToEndTests : IClassFixture<LaunchPanelFixture>, 
         exit.Should().Be(1, output);
         output.Should().Contain("Stopped. Nothing was created.");
         Launches.Abandoned.Should().ContainSingle();
+    }
+
+    // ---- a connection that drops --------------------------------------------------------------------------
+
+    [Fact]
+    public async Task An_upload_cut_off_by_the_connection_says_to_try_again_and_blames_nothing_it_does_not_know_about()
+    {
+        var (exit, output) = await LaunchAsync(Run(), breaksOn: r => r.RequestUri!.AbsolutePath.EndsWith("/launch/archive"));
+
+        exit.Should().Be(1);
+        output.Should().Contain("Try again").And.Contain("Nothing was created.").And.Contain("SSL connection");
+        output.Should().NotContain("app name", "a launch has none: the sentence the other upload route uses would send somebody the wrong way");
+        Launches.Started.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_moment_of_lost_connection_while_following_is_not_news()
+    {
+        var deploymentId = Guid.CreateVersion7();
+        GivenALaunch(ending: [Deploying(deploymentId), Succeeded(GivenAnApp("shop-blip"), deploymentId, Running)]);
+
+        var looks = 0;
+        var (exit, output) = await LaunchAsync(Run(), breaksOn: r =>
+        {
+            if (r.Method != HttpMethod.Get || !Launches.Confirmed.Any() || !r.RequestUri!.AbsolutePath.Contains("/launch/")) return false;
+            return ++looks is >= 2 and <= 4;
+        });
+
+        exit.Should().Be(0, output);
+        output.Should().NotContain("SSL connection");
+        output.Should().Contain("https://shop.apps.example.com");
+    }
+
+    [Fact]
+    public async Task A_panel_that_stops_answering_while_it_is_followed_is_said_out_loud_and_is_not_a_success()
+    {
+        var deploymentId = Guid.CreateVersion7();
+        GivenALaunch(ending: [Deploying(deploymentId)]);
+
+        var (exit, output) = await LaunchAsync(Run(), breaksOn: r =>
+            r.Method == HttpMethod.Get && Launches.Confirmed.Any() && r.RequestUri!.AbsolutePath.Contains("/launch/"));
+
+        exit.Should().Be(1, output);
+        output.Should().Contain("what happened next is not known");
+        output.Should().Contain("The launch carries on without you.");
+        output.Should().Contain($"{Server}/launch/{Id}");
+        Launches.Abandoned.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_connection_lost_before_the_confirm_says_how_far_it_got_is_not_known_rather_than_guessing()
+    {
+        GivenALaunch();
+
+        var (exit, output) = await LaunchAsync(Run(), breaksOn: r => r.RequestUri!.AbsolutePath.EndsWith("/confirm"));
+
+        exit.Should().Be(1, output);
+        output.Should().Contain("how far this got is not known");
+        output.Should().Contain($"{Server}/launch/{Id}");
     }
 
     // ---- the endings ---------------------------------------------------------------------------------------

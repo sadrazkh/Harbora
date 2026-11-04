@@ -219,6 +219,9 @@ public sealed class FakeLaunchService
     public List<Guid> Retried { get; } = [];
     public List<Guid> Abandoned { get; } = [];
 
+    /// <summary>How many times a launch has been looked at, by anything.</summary>
+    public int Reads { get; private set; }
+
     /// <summary>What <c>StartAsync</c> refuses with next, or null to succeed.</summary>
     public ServiceRefusal? StartRefusal { get; set; }
 
@@ -239,6 +242,7 @@ public sealed class FakeLaunchService
         {
             _launches.Clear();
             Started.Clear(); ChosenRoots.Clear(); Quoted.Clear(); Validated.Clear(); Confirmed.Clear(); Retried.Clear(); Abandoned.Clear();
+            Reads = 0;
             StartRefusal = null; StartThrows = false; NextStartId = Guid.CreateVersion7();
             ValidateRefusals = []; ConfirmRefusals = []; RetryRefusals = []; AbandonAllowed = true;
             StatusAfterRefusedConfirm = null;
@@ -266,6 +270,7 @@ public sealed class FakeLaunchService
     {
         lock (_gate)
         {
+            Reads++;
             if (!_launches.TryGetValue(id, out var entry) || entry.WorkspaceId != workspaceId) return null;
             if (entry.Next.TryDequeue(out var next)) entry.View = next;
             return entry.View;
