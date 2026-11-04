@@ -22,27 +22,67 @@ Files, all under `src/Harbora.Shared/Inspection/`:
 | `KindDetector.cs`, `PortDetector.cs`, `ReleaseCommands.cs` | Web or worker, port, migration command |
 | `InspectionNotes.cs` | Every note, in both languages |
 
-Tests: `tests/Harbora.Tests/SourceInspectorTests.cs`, `SourceInspectorServiceTests.cs`, `SourceInspectorEnvTests.cs`, `SourceInspectorParityTests.cs`.
+Tests: `tests/Harbora.Tests/SourceInspectorTests.cs`, `SourceInspectorServiceTests.cs`, `SourceInspectorEnvTests.cs`, `SourceInspectorParityTests.cs`, `GeneratedDockerfileTests.cs`, and additions to `BuildpackTests.cs`, `CliDoctorTests.cs` and `Launch/LaunchWithRealInspectorTests.cs`.
+
+## Third follow-up: dev servers, and build variables on every image
+
+The coordinator made both decisions, reversing two lines of their own instruction, because the owner's request was that the app just works.
+
+### A dev server is not a start
+
+`NodeStartRule.CanStart` now has a short list of exact commands: `react-scripts start`, `react-app-rewired start`, `craco start`, `ng serve`, `gatsby develop`, `vue-cli-service serve`, `vite`, `webpack serve`, `webpack-dev-server`. A `scripts.start` that matches one, once trimmed, does not count as a start when a `build` script exists.
+
+- **Without a `build` script,** nothing changes.
+- **With any flag or prefix,** nothing changes: `ng serve --host 0.0.0.0`, `vite --host` and `CI=true react-scripts start` all stay Node.
+- **It flows through everything that asks `CanStart`:** a real Create React App project is now a frontend, a Laravel repo with `start: vite` is PHP with its `artisan` release command, and `harbora doctor` reports the same.
+- **A `server.js` beside a dev-server `start` still counts,** as the rule was worded, so that stays Node and fails as it does today, because `npm start` runs the script and not the file. It is pinned. I judged a visible failure better than serving `dist` and silently dropping a server the person wrote.
+- **An app with its own start command stays Node,** and so does one with a Procfile `web:` line.
+
+**One thing I added so this works: Gatsby.** `gatsby build` writes to `public/`, which the output step never looked in, so `gatsby develop` on the list would have turned a crash loop into a build failure saying "this is not a site". The step now also takes `public/index.html` where a `gatsby-config.*` sits beside it. Everywhere else `public/index.html` is the source's own template (Create React App's and Vue CLI's), and serving that would be a blank page reported as a success, so it stays refused without the config. Both directions are tested under a real shell.
+
+**The claim in the code comment is from memory.** "These cannot serve in a container, because they exit when stdin closes or bind to localhost, so nothing that works today moves" is the coordinator's reasoning. I am least sure of `vue-cli-service serve`: as I recall it binds `0.0.0.0` and reads `PORT`, and may be running today as a dev server. If so, it moves to nginx. That should still work, and it is a production build instead of a dev one, but the sentence would then be too strong. The same doubt applies to `webpack serve`, whose default host I do not remember.
+
+### Build variables reach every generated image
+
+One helper, `Buildpacks.ArgLines`, is used by every template with a build step. It emits `ARG` lines for the names being passed, and nothing at all when there are none.
+
+| Image | What it declares and is passed | Where the `ARG`s go |
+|---|---|---|
+| Node | marked names and public names, marked or not | before the install |
+| Frontend | public names only, plus public names in the example files | after the install |
+| .NET | marked names | build stage, before `dotnet publish` |
+| Go | marked names | build stage, before `go mod download` |
+| PHP | marked names | before `composer install` |
+| Python | marked names | before `pip install` |
+| Static | nothing | no build step |
+| A hand-written Dockerfile | what it always got: marked names; its text is untouched | its own |
+
+`ARG` only, never `ENV`, and a code comment says an `ARG` value stays readable in `docker history`. Names that an `ARG` line cannot hold (`BAD-NAME`, `X\nRUN rm -rf /`) are dropped. `VUE_APP_`, `GATSBY_` and `NUXT_PUBLIC_` joined the public prefixes.
+
+`Detect` gained a third trailing parameter, `markedVariables`, and `BuildpackResult.PublicBuildArgsOnly` became `BuildArgNames`, which says what the image declared. The pipeline passes those names and no others. Both call sites go through one `GeneratedBuildArgs`.
+
+**The byte-for-byte promise was tested before it was at risk.** `GeneratedDockerfileTests` pins ten templates as literal text. It was run and committed against the unchanged code (10 of 10, commit `3c40424`), and only then were the templates changed. A stray newline in `ArgLines` fails 9 of them; the tenth is Static, which does not use it.
+
+**Three readings to check:**
+
+1. **The frontend keeps its stricter rule.** You said "on every buildpack", and earlier you said never to bake a non-public variable into a static site. I kept the second for that image, because what it builds goes to every visitor, so a marked `NPM_TOKEN` still does not reach a frontend's build and private packages there need a Dockerfile. It is a small change in `Frontend()` if you meant otherwise.
+2. **On Node the `ARG`s go before the install, not just the build.** A marked `NPM_TOKEN` is no use any later. The price is a reinstall when a value changes. The frontend has only public names, so it keeps them after the install.
+3. **Static declares nothing,** although you said every template. It has no step that could read one, and a declaration could only put a value in the image's metadata for no benefit.
+
+**What this changes for apps already deployed:**
+
+- **A secret already marked `AvailableAtBuild` on a generated single-stage image** (Node, PHP, Python) now lands in that image's `docker history` on its next deploy. Before, the mark did nothing, so nobody with such a variable has seen this consequence. This is what you specified, and those customers were not told.
+- **An app with marked variables, or on Node with public ones,** gets a changed Dockerfile and so one cold build, and its build now sees values it never saw. An app with neither keeps its image exactly.
 
 ## Second follow-up: a frontend is built and served
 
 The coordinator relayed this as the owner's request: a Vite-style frontend with a `build` script, no `start`, no `server.js` and no Dockerfile used to build as Node and crash-loop on `npm start`. It now gets a new `Frontend (Nginx)` build, in `Buildpacks.Detect`, `StackDetector` and `harbora doctor`.
 
-### Read this first: Create React App does not reach the new path
-
-**Create React App's own template has a `start` script: `react-scripts start`.** "Everything that wins today still wins" and "`build` plus a `start` stays Node" therefore keep a real CRA project on the Node image, running its dev server. From memory, not run: `react-scripts start` exits when stdin closes unless `CI=true`, so in a container it would stop at once and restart for ever. That is the crash loop this work was meant to end, on one of the two project types named in the request.
-
-The same applies to Angular (`ng serve`) and Gatsby (`gatsby develop`), and to older Astro templates (`astro dev`). Vite's own templates, Vue CLI (`serve` and `build`) and SvelteKit have no `start`, so they do reach it.
-
-I kept to the rule as given. `Create_React_App_as_generated_keeps_its_dev_server_start_and_stays_node` pins today's behaviour, and the "CRA-shaped" test is honestly named `CraShapedWithoutItsStart`.
-
-**Decision for the owner:** treat a `start` script that only runs a known dev server as no start. It would be a short list in `NodeStartRule.CanStart`, and it reverses a line of the instruction, so I did not do it.
-
 ### The rule
 
 A `package.json` that cannot start, with no other stack's marker, and with a non-blank `scripts.build`, on a `Web` kind with no start command, is a frontend. Everything else is unchanged and in the same order. A package with neither a start nor a build script stays Node and fails as it does today.
 
-`Detect` gained two trailing optional parameters: `startCommand` and `publicVariables`.
+`Detect` gained two trailing optional parameters here: `startCommand` and `publicVariables`.
 
 - **Single-container call site:** passes `app.Kind` and `app.StartCommand`.
 - **Compose call site:** passes `service.IsWeb` as the kind, and `service.Command` joined as the start command.
@@ -69,6 +109,7 @@ RUN found=""; \
       index="$(find dist build -mindepth 2 -maxdepth 4 -type f -name index.html 2>/dev/null | sort | head -n 1)"; \
       if [ -n "$index" ]; then found="$(dirname "$index")"; fi; \
     fi; \
+    if [ -z "$found" ] && [ -f public/index.html ] && ls gatsby-config.* >/dev/null 2>&1; then found="public"; fi; \
     if [ -z "$found" ]; then \
       echo "The build finished without producing an index.html, so this is not a site. It needs a start script in package.json, or a Dockerfile." >&2; \
       exit 1; \
@@ -101,11 +142,11 @@ EXPOSE 8123
 **What I found:**
 
 - `BuildArgsFor` sends only `EnvironmentVariable` rows marked `AvailableAtBuild`. Config groups never reach it.
-- A build arg only reaches a build if the Dockerfile declares an `ARG`. **No generated Dockerfile declares one**, so `AvailableAtBuild` has done nothing on any buildpack; it only works with a customer's own Dockerfile. That is from Docker's documented behaviour and reading the templates, not from a run.
+- A build arg only reaches a build if the Dockerfile declares an `ARG`. **No generated Dockerfile declared one**, so `AvailableAtBuild` did nothing on any buildpack; it only worked with a customer's own Dockerfile. That is from Docker's documented behaviour and reading the templates, not from a run. The third follow-up fixed this.
 
-**What I did, for this image only:**
+**What I did for this image:**
 
-- A new `PublicBuildArgsFor` reads `EffectiveEnvironmentBuilder.Compute`, the same merge the container gets, and keeps names starting `VITE_`, `REACT_APP_`, `NEXT_PUBLIC_` or `PUBLIC_`. So app variables and config groups reach the build, with no need to tick anything.
+- A new `PublicBuildArgsFor` reads `EffectiveEnvironmentBuilder.Compute`, the same merge the container gets, and keeps the public-prefixed names. So app variables and config groups reach the build, with no need to tick anything.
 - The Dockerfile declares `ARG` for those names and for public names in the example env files. Example values are never used.
 - For this image, these replace `BuildArgsFor` entirely. A variable with no public prefix is not passed, even if marked `AvailableAtBuild`, and is not declared.
 - The `ARG`s are in the build stage only, after the install, so a changed value does not reinstall everything and the shipped image has only what the framework wrote into the site.
@@ -113,10 +154,9 @@ EXPOSE 8123
 
 **What remains unreachable:**
 
-1. **Other frameworks' prefixes:** `VUE_APP_*`, `NUXT_PUBLIC_*`, `GATSBY_*`, `NG_APP_*` and `EXPO_PUBLIC_*`, under the "never bake" rule. `VUE_APP_*` matters most, because Vue CLI projects do reach this path. Adding one is one string in `PublicBuildVariables`, and only the owner should widen that line.
-2. **Private packages:** `NPM_TOKEN` and the like, so `npm install` of a private package fails here. Such a project needs a Dockerfile.
+1. **Other frameworks' prefixes:** `NG_APP_*`, `EXPO_PUBLIC_*` and the like, under the "never bake" rule. Adding one is one string in `PublicBuildVariables`.
+2. **Private packages on a frontend:** `NPM_TOKEN` and the like, so `npm install` of a private package fails here. Such a project needs a Dockerfile. See the first reading under the third follow-up.
 3. **A changed value without a new build:** a restart does nothing, and a rollback keeps the old value. The note and the docs say a new deploy is needed. I did not check every panel page that offers a restart.
-4. **Every other buildpack, unchanged:** a Next.js app with a `start` is on the Node image, whose `npm run build` sees no `NEXT_PUBLIC_*`, marked or not, so it silently has the wrong value. This is the same bug on a different path. Fixing it means changing the Node image, which the instruction said must build as it does today. **It deserves its own decision.**
 
 ### The inspector
 
@@ -142,8 +182,12 @@ Nothing here has been built, since there is no Docker on this machine.
 4. **A failing build, and a build with no `index.html`.** The deployment must fail, and the sentence must be readable at the end of the log.
 5. **A build arg on the real engine,** both local and through `RemoteDockerEngine`'s `X-Build-Args`. `VITE_X` should appear in the built JS. A non-public value marked `AvailableAtBuild` should appear nowhere in the image or its history.
 6. **A second deploy after changing `VITE_X`,** with `BuildCache`'s `--cache-from` on a multi-stage build: the new value must land.
-7. **The output step on Alpine.** My shell tests ran under Git's `sh` on Windows, not busybox `ash`, and busybox's `find`, `sort`, `dirname` and `cp -R` are assumed to behave the same.
-8. **A real Create React App project,** to confirm or correct what I recalled about it above.
+7. **The output step on Alpine.** My shell tests ran under Git's `sh` on Windows, not busybox `ash`, and busybox's `find`, `sort`, `dirname`, `ls` and `cp -R` are assumed to behave the same.
+8. **A real Create React App project, in the fixture list.** It should now build and be served. To confirm the reasoning behind the dev-server list, also run the old path once if it is cheap: `react-scripts start` on the Node image should stop at once in a container.
+9. **A Next.js app with a `start` and `NEXT_PUBLIC_API` set, not ticked.** The client bundle must hold the value. This is the bug the third follow-up fixes on the Node image.
+10. **A marked variable on the .NET, Go, PHP and Python images.** A `RUN` step must see it, and the running container must not have it from this route. On .NET and Go it must not be in the final image's `docker history`; on the single-stage images it will be.
+11. **A Gatsby project and a Vue CLI project.** `sharp` on Alpine is the likely trouble for Gatsby. For Vue CLI, `VUE_APP_*` should land in the bundle.
+12. **`vue-cli-service serve` and `webpack serve` on the old path,** if it is cheap, because I am unsure the claim in `CanStart` holds for them.
 
 ## Follow-up: a frontend's `package.json` no longer decides the build
 
@@ -182,14 +226,20 @@ A malformed `package.json` counts as having no start script. That only changes t
 
 Commands were the ones in CONSTRAINTS, with `MSBUILDDISABLENODEREUSE=1` and `-p:UseSharedCompilation=false`.
 
-- **Build (final code, `e79f4a1`):** `dotnet build Harbora.slnx --no-restore`: exit 0, 0 errors, 2 warnings. The log's warning lines are all `NU1903` for `SSH.NET` in `tests/Harbora.Postgres.Tests`, a restore warning about a package this work does not touch. No compiler warnings.
+- **Build (final code, `84100d3`):** `dotnet build Harbora.slnx --no-restore`: exit 0, 0 errors, 2 warnings. The log's warning lines are all `NU1903` for `SSH.NET` in `tests/Harbora.Postgres.Tests`, a restore warning about a package this work does not touch. No compiler warnings.
 - **Full suite (same code; only this report was committed after it):** `dotnet test Harbora.slnx --no-build`: exit 0.
-  - `Harbora.Tests.dll`: Passed 8730, Failed 0, Skipped 0. This branch now holds `r8/int` (S, V and U), so the number includes their tests. I did not run `r8/int` alone, so I cannot say how many of those are mine. Earlier runs on this branch before the merge: 8016, then 8071.
+  - `Harbora.Tests.dll`: Passed 8838, Failed 0, Skipped 0. This branch holds `r8/int` (S, V and U), so the number includes their tests. I did not run `r8/int` alone, so I cannot say how many of those are mine. Earlier full runs on this branch: 8016, 8071, and 8730 after the merge.
   - `Harbora.NodeAgent.Tests.dll`: Passed 500, Skipped 17, Failed 0.
   - `Harbora.NodeIngress.Tests.dll`: Passed 15, Failed 0.
   - `Harbora.Postgres.Tests.dll`: Skipped 117, Passed 0. No Postgres here, and nothing of mine is in that lane.
   - `grep -c Harbora.Tests.dll` printed 2.
-- **Tests the frontend rule touches, before that:** `SourceInspector`, `BuildpackTests`, `CliDoctorTests`, `GitCheckoutTests`, `TelegramBotTemplateTests` and `Launch` by filter: 1172 total, 1172 passed. A few tests were added after that run and are in the full run above.
+- **Tests the third follow-up touches, before that:** `SourceInspector`, `BuildpackTests`, `GeneratedDockerfileTests`, `BuildArg`, `CliDoctorTests`, `GitCheckoutTests`, `TelegramBotTemplateTests` and `Launch` by filter: 1288 total, 1288 passed.
+- **The byte-for-byte pins, on the unchanged templates first:** `GeneratedDockerfileTests` before any template changed: 10 total, 10 passed.
+- **The third follow-up's guards can fail, four faults in two builds:**
+  - An empty dev-server list, Node ignoring public names, and the pipeline passing every marked and public variable whatever the image declared: `SourceInspector`, `BuildpackTests`, `GeneratedDockerfileTests` and `CliDoctorTests` gave 885 total, 852 passed, 33 failed. The failures included the dev-server cases in the Buildpack, inspector and doctor tests, `On_node_a_marked_variable_and_an_unmarked_public_one_reach_the_build_and_nothing_else_does`, `On_python_only_the_mark_decides`, `A_static_site_is_handed_nothing_since_nothing_could_read_it` and `A_variable_with_no_public_prefix_never_reaches_the_build_even_if_marked_for_it`. The parity tests did not fail on the empty list, and could not: the rule is shared code, so both sides change together.
+  - A stray newline from `ArgLines`: `GeneratedDockerfileTests` gave 59 total, 44 passed, 15 failed, including 9 of the 10 byte-for-byte pins. My first attempt at this fault did not apply, and that run's 59 passes are not counted.
+  - All reverted with `git checkout`, the files touched, and the solution rebuilt before the full run.
+- **Tests the frontend rule touches, at the second follow-up:** `SourceInspector`, `BuildpackTests`, `CliDoctorTests`, `GitCheckoutTests`, `TelegramBotTemplateTests` and `Launch` by filter: 1172 total, 1172 passed. A few tests were added after that run and are in the full run above.
 - **The frontend guards can fail, three faults in two builds:**
   - Frontend rule removed from `Buildpacks.Detect` only: `SourceInspector`, `BuildpackTests` and `CliDoctorTests` gave 777 total, 743 passed, 34 failed. The failures included the parity tests (`Every_combination_beside_each_kind_of_package_json_detects_the_same_stack` and both new frontend-shaped ones) and `Doctor_names_the_stack_the_server_builds_for_every_combination_of_markers`.
   - `startCommand` ignored by `Detect`, and the public-prefix filter removed from `PublicBuildArgsFor`, with `LaunchWithRealInspector` added to the filter: 787 total, 780 passed, 7 failed. They included `A_build_with_its_own_start_command_stays_node_since_npm_start_never_runs`, `A_typescript_backend_with_its_own_start_command_stays_node_through_the_pipeline`, `A_compose_service_with_its_own_command_stays_node`, the Procfile `web:` case of the launch test and the parity test, and `A_variable_with_no_public_prefix_never_reaches_the_build_even_if_marked_for_it`.
@@ -207,8 +257,8 @@ Commands were the ones in CONSTRAINTS, with `MSBUILDDISABLENODEREUSE=1` and `-p:
 ## Unverified
 
 - **A real build of the new cases:** no Laravel, Flask or ASP.NET repository with a frontend, and no Vite app, was built or started. There is no Docker here. The tests prove which Dockerfile is generated, what is logged and what is passed as build args, not that the image builds or the app then runs. The list for agent P is above.
-- **Create React App's behaviour:** what I said about `react-scripts start` is from memory.
-- **The generated Dockerfile's text as a whole:** the listing above is the template, and no real parser has read it.
+- **The dev-server claim:** that these commands cannot serve in a container is from memory, and I doubt it for `vue-cli-service serve` and `webpack serve`. A real Create React App project is on P's list.
+- **The generated Dockerfiles' text as a whole:** the frontend listing above is the template, and no real parser has read any `ARG` line in any template. That an undeclared build arg is not consumed, and a declared one is visible to `RUN`, is Docker's documented behaviour, not something I ran.
 - **File links:** `An_example_file_that_is_a_link_is_not_followed_even_to_somewhere_inside_the_tree` returns early on this machine, because creating a file symlink needs administrator rights here. It passes without proving anything until it runs on CI. The folder-link tests are real here: they use a junction and assert the link exists.
 - **Linux:** nothing was run on Linux, which is where the panel runs. Parity on the project chosen among several rests on directory listing order being stable between two reads there.
 - **The time tests:** the `A_file_built_to_be_slow_is_not` cases were not shown to fail against the old patterns. My mutation of the old Procfile pattern did not apply, and I did not retry it. That those patterns were quadratic is reasoning, not a measurement.
@@ -242,11 +292,10 @@ Commands were the ones in CONSTRAINTS, with `MSBUILDDISABLENODEREUSE=1` and `-p:
 - **Aliases:** a few more, such as `MEILISEARCH_API_KEY`, `MARIADB_*`, `MYSQL_URL`, `MONGO_DB`. Without them the screen would ask a person for a key Harbora generated.
 - **Engines:** Prisma `sqlserver` and Laravel `sqlsrv` give the SQL Server note. `DATABASE_URL=sqlite:…` gives the SQLite note.
 - **Dockerfile:** `Dockerfile.harbora` counts as a Dockerfile, as it does in the pipeline.
+- **Gatsby's output:** `public/` where a `gatsby-config.*` sits beside it, since the dev-server list would otherwise break it.
 - **Not added:** `ext-pdo_pgsql` is missing from the brief's table beside `ext-pdo_mysql`. I kept to the table; it is one string in `ServiceTable` if wanted.
 
 ## Things in the pipeline this surfaced (not changed)
-
-- **`AvailableAtBuild` does nothing on a generated image.** No buildpack but the new one declares an `ARG`, so the box only works with a customer's own Dockerfile. See "What remains unreachable" above.
 
 - **`FindCsproj` walks into `vendor/` and `node_modules/`**, ahead of `go.mod` and `composer.json`. It also filters on the full path, so a checkout path containing `/bin/` or `/obj/` would find no project at all. The new rule makes it matter slightly more: a frontend with no start script and a `.csproj` inside an uploaded `node_modules` now builds as .NET. It would have failed as Node anyway.
 - **The .NET buildpack uses SDK and runtime 9.0.** I would expect a `net10.0` project to fail at build. I read this in the Dockerfile template and did not run it.
