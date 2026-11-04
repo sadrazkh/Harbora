@@ -1153,8 +1153,10 @@ case_python_marked() {
   if docker inspect "$image" --format '{{json .Config.Env}}' | grep -qF "BUILD_MARK"; then
     fail "BUILD_MARK is in the image's ENV: it should only ever be an ARG."
   fi
-  # The accepted price, on a single-stage image, written down in Buildpacks.ArgLines. Not a failure.
+  # A record rather than an assertion: Buildpacks.ArgLines says a single-stage image's history can show
+  # a marked value, and what it really shows depends on the daemon.
   if docker history --no-trunc "$image" 2>/dev/null | grep -qF "$value"; then history_says="is"; else history_says="is not"; fi
+  history_says="$history_says (Docker $(docker version --format '{{.Server.Version}}' 2>/dev/null))"
   retire_app "$app_id"
   fact "python-marked-var: a pip install step saw nothing until the variable was marked AvailableAtBuild, then saw its value; the image's ENV does not hold it, and its docker history $history_says showing it (single-stage, as Buildpacks.ArgLines says)."
 }

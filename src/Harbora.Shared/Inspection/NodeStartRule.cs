@@ -37,9 +37,11 @@ public static class NodeStartRule
     /// True for a <c>scripts.start</c>, or a <c>server.js</c> beside the file, which is what
     /// <c>npm start</c> runs when there is no script. A <c>start</c> in <see cref="DevServers"/> beside a
     /// <c>build</c> script does not count: a site that has a build should be built and served, not run
-    /// from its development server. Most of these cannot serve in a container at all (they exit when
-    /// stdin closes or bind to localhost). <c>vue-cli-service serve</c> may run today, and moves to the
-    /// built site on its next deploy. All of that is from memory; a real project on CI confirms it.
+    /// from its development server. That is a choice rather than a necessity. <c>react-scripts start</c>
+    /// was run on real Docker by <c>deploy/launch-proof.sh</c> with stdin closed, and it stays up and
+    /// serves its page, so an app on one of these commands may be running today, and moves to the built
+    /// site on its next deploy. What it stops being is a file-watching compiler in a container sized for a
+    /// web server.
     ///
     /// <para>
     /// A <c>package.json</c> it cannot read has no start script, whether malformed, over the inspector's
