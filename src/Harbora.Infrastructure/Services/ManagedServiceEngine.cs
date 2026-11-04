@@ -442,7 +442,7 @@ public sealed class ManagedServiceEngine(
     public async Task<string?> TestConnectionAsync(Guid serviceId, CancellationToken ct)
     {
         var svc = await db.ManagedServices.FirstOrDefaultAsync(s => s.Id == serviceId, ct);
-        if (svc is null) return "That database no longer exists.";
+        if (svc is null) return Networking.ConnectionProbe.ServiceGone;
 
         if (Networking.ConnectionProbe.WhyUnsupported(svc.Type) is { } unsupported) return unsupported;
 

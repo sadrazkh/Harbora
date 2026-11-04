@@ -253,6 +253,66 @@
             </div>
         </section>
 
+        @* ---- Is it working? ----
+           What a green deployment does not say: whether it stayed up, whether its databases answer,
+           whether its address works from outside. The last answer is stored, so reading this page
+           starts nothing; the button is what starts a container per database. Never checked is a
+           sentence and the button rather than an empty box, which would read as "nothing wrong". *@
+        @{
+            var verification = Model.Verification;
+            var verificationState = verification switch
+            {
+                null => "never",
+                { IsComplete: false } => "waiting",
+                { HasFailures: true } => "problems",
+                _ => "done"
+            };
+        }
+        <section id="app-checks" class="rounded-xl border border-line bg-surface p-4 scroll-mt-20" data-verification-state="@verificationState">
+            <div class="mb-3 flex flex-wrap items-start justify-between gap-2">
+                <div class="min-w-0">
+                    <div class="font-semibold">@(isFa ? "سالم کار می‌کند؟" : "Is it working?")</div>
+                    @if (verification is not null)
+                    {
+                        <div class="mt-0.5 text-xs text-ink-faint" data-verification-ran>
+                            @(isFa ? "آخرین بررسی:" : "Last checked:")
+                            @Harbora.Web.Infrastructure.Dates.Ago(verification.CompletedAt ?? verification.StartedAt, DateTimeOffset.UtcNow, isFa)
+                        </div>
+                    }
+                </div>
+                @* It waits for the answer, which can be a while with databases to ask, and each press
+                   starts containers. So the button says it is busy and cannot be pressed twice. *@
+                <form asp-controller="Apps" asp-action="Verify" asp-route-id="@app.Id" method="post"
+                      onsubmit="var b=this.querySelector('[data-verify-now]');b.disabled=true;b.querySelector('span').textContent='@(isFa ? "در حال بررسی…" : "Checking…")';">
+                    <button type="submit" class="btn-secondary py-2 px-3 text-sm" data-verify-now>
+                        <i data-lucide="shield-check" class="h-4 w-4"></i><span>@(isFa ? "بررسی کن" : "Check now")</span>
+                    </button>
+                </form>
+            </div>
+            @if (verification is null)
+            {
+                <p class="text-xs text-ink-muted" data-verification-never>
+                    @(isFa
+                        ? "هنوز بررسی نشده. هاربورا نگاه می‌کند اپ روشن است و بالا مانده یا نه، دیتابیس‌هایش از شبکهٔ اپ جواب می‌دهند یا نه، آدرسش از بیرون کار می‌کند یا نه، و لاگش از چیزی شکایت دارد یا نه."
+                        : "It has not been checked yet. Harbora looks at whether it is running and has stayed up, whether its databases answer on its network, whether its address works from outside, and whether its log is complaining.")
+                </p>
+            }
+            else
+            {
+                <partial name="Design/_AppChecks" model="verification.Checks" />
+                @if (!verification.IsComplete)
+                {
+                    @* A press only reads what is true now, so a wait does not end by itself on this page.
+                       Pressing again after the wait is what turns it into a verdict, so the page says so. *@
+                    <p class="mt-2 text-xs text-ink-muted" data-verification-waiting>
+                        @(isFa
+                            ? "بعضی بررسی‌ها هنوز منتظرند. نیم دقیقهٔ دیگر دوباره بررسی کنید تا نتیجهٔ نهایی را ببینید."
+                            : "Some checks are still waiting. Check again in half a minute for the final answer.")
+                    </p>
+                }
+            }
+        </section>
+
         @* ---- Specifics ----
            What the panel already stored about this app, read out loud instead of left for someone
            to piece together from the resize form, the deployment list and the domains table: its

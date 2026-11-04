@@ -719,7 +719,11 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
         }
         finally
         {
-            try { await client.Containers.RemoveContainerAsync(container.ID, new ContainerRemoveParameters { Force = true }, ct); }
+            // Not ct. When a caller's timeout is what stopped the wait, ct is already cancelled, and
+            // removing with it never reaches the daemon: the container would stay behind on the host,
+            // with whatever credentials the one-off was given still in its environment.
+            using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            try { await client.Containers.RemoveContainerAsync(container.ID, new ContainerRemoveParameters { Force = true }, cleanup.Token); }
             catch { /* best effort */ }
         }
     }

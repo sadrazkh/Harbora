@@ -291,7 +291,9 @@ public sealed partial class AppsController(
     /// push notification came from the provider, and this page is one an operator has every reason
     /// to be showing somebody while they set a repository up.
     /// </param>
-    public async Task<IActionResult> Details(Guid id, [FromQuery] bool revealSecret, CancellationToken ct)
+    public async Task<IActionResult> Details(
+        Guid id, [FromQuery] bool revealSecret,
+        [FromServices] Harbora.Infrastructure.Verification.IAppVerifier verifier, CancellationToken ct)
     {
         ViewBag.RevealWebhookSecret = revealSecret;
 
@@ -612,7 +614,8 @@ public sealed partial class AppsController(
             UptimeCheck = uptimeCheck,
             RecentUptimeResults = recentUptimeResults,
             BackupVolumes = backupVolumes,
-            HasBackupRepository = hasBackupRepository
+            HasBackupRepository = hasBackupRepository,
+            Verification = await verifier.GetLatestAsync(app.Id, ct)
         });
     }
 
