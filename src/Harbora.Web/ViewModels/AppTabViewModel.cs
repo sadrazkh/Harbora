@@ -167,6 +167,13 @@ public sealed class AppOverviewViewModel : AppTabViewModel
     /// somewhere for it to go.
     /// </summary>
     public bool HasBackupRepository { get; init; }
+
+    /// <summary>
+    /// The last answer to "is it working?", or null when nobody has asked yet. Read from what was
+    /// stored rather than asked here: asking starts a container per database, which is what the button
+    /// on the card is for and not something a page load should do.
+    /// </summary>
+    public Harbora.Infrastructure.Verification.AppVerificationReport? Verification { get; init; }
 }
 
 /// <summary>
