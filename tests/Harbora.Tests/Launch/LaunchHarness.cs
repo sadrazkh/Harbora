@@ -171,7 +171,7 @@ internal sealed class LaunchHarness : IDisposable
 
         return new LaunchService(
             db, apps, databases, attachments, configuration, deployments, Provisioner, Git, Jobs, protector,
-            new SecretRedactor(), Audit, user, Clock, access, Scheduler, new NoReadings(), creationBilling,
+            new SecretRedactor(), Audit, user, Clock, access, Scheduler, quota, new NoReadings(), creationBilling,
             Options.Create(new HarboraRuntimeOptions { WorkDir = WorkDir }), billing, Reader, provider, Logs);
     }
 
@@ -309,6 +309,12 @@ internal sealed class LaunchHarness : IDisposable
         public (long Memory, double Cpu, string? Pool) LastAsked { get; private set; }
         public PlacementResult? RefusePlacement { get; set; }
 
+        /// <summary>Every question asked of a chosen host, in order.</summary>
+        public List<(Guid Server, long Memory, double Cpu)> CheckAsked { get; } = [];
+
+        /// <summary>How much memory a chosen host has room for. Null is all of it.</summary>
+        public long? RoomOnAChosenHost { get; set; }
+
         /// <summary>What it answers from now on, one per question, the last one for ever after.</summary>
         public void PlaceOn(params Guid[] servers)
         {
@@ -328,7 +334,10 @@ internal sealed class LaunchHarness : IDisposable
         public Task<PlacementResult> CheckAsync(Guid serverId, long memoryBytes, double cpu, CancellationToken ct)
         {
             Checked.Add(serverId);
-            return Task.FromResult(PlacementResult.Placed(serverId));
+            CheckAsked.Add((serverId, memoryBytes, cpu));
+            return Task.FromResult(memoryBytes > RoomOnAChosenHost
+                ? PlacementResult.Fail("That server has no room for this.", "آن سرور برای این جا ندارد.")
+                : PlacementResult.Placed(serverId));
         }
     }
 

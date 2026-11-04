@@ -51,6 +51,7 @@ public sealed partial class LaunchService(
     ISystemClock clock,
     ProjectAccessService access,
     ISchedulerService scheduler,
+    IQuotaService quota,
     INodeCapacityService capacity,
     ResourceCreationBilling creationBilling,
     IOptions<HarboraRuntimeOptions> runtime,

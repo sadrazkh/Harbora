@@ -1025,6 +1025,130 @@ public sealed class LaunchServiceTests
         h.Store().ManagedServices.IgnoreQueryFilters().Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task A_chosen_host_is_asked_about_all_of_it_together_because_the_form_always_chooses_one()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(TwoDatabases());
+        var choices = await h.DefaultsAsync(id) with { ServerId = h.ServerB.Id };
+
+        (await h.Request().ValidateConfirmAsync(id, choices, default)).Should().BeEmpty();
+
+        h.Scheduler.CheckAsked.Should().Contain((h.ServerB.Id, 3 * (1L << 30), 3.0), "two databases and the app");
+    }
+
+    [Fact]
+    public async Task A_chosen_host_that_fits_each_but_not_all_is_refused_before_anything_exists_and_charged()
+    {
+        using var h = new LaunchHarness();
+        h.Billing.Enabled = true;
+        using (var db = h.Store())
+        {
+            db.Wallets.Add(new Harbora.Domain.Billing.Wallet { WorkspaceId = h.WorkspaceId, BalanceMinor = 100_000 });
+            db.SaveChanges();
+        }
+        var id = await h.ReadyGitAsync(TwoDatabases());
+        var choices = await h.DefaultsAsync(id) with { ServerId = h.ServerB.Id };
+        h.Scheduler.RoomOnAChosenHost = 2L << 30;
+
+        (await h.Request().ValidateConfirmAsync(id, choices, default)).Should().ContainSingle(r => r.MessageFa == "آن سرور برای این جا ندارد.");
+
+        var outcome = await h.Request().ConfirmAsync(id, choices, null, default);
+
+        outcome.Ok.Should().BeFalse();
+        h.Row(id).Status.Should().Be(LaunchStatus.AwaitingConfirmation);
+        h.Store().ManagedServices.IgnoreQueryFilters().Should().BeEmpty();
+        h.Store().Apps.IgnoreQueryFilters().Should().BeEmpty();
+        h.Store().BillingLedger.IgnoreQueryFilters().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_quote_on_a_host_without_room_is_still_about_that_host()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(TwoDatabases());
+        var choices = await h.DefaultsAsync(id) with { ServerId = h.ServerB.Id };
+        h.Scheduler.RoomOnAChosenHost = 1;
+
+        await h.Request().QuoteAsync(id, choices, default);
+
+        h.Scheduler.Placements.Should().Be(0, "somebody chose it, so nothing else is asked for instead");
+    }
+
+    [Fact]
+    public async Task A_server_id_that_is_no_server_is_no_choice_at_all_the_way_the_create_services_read_it()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(Bare());
+
+        await h.ConfirmAsync(id, c => c with { ServerId = Guid.CreateVersion7() });
+
+        h.Store().Apps.IgnoreQueryFilters().Single().ServerId.Should().Be(h.ServerA.Id);
+    }
+
+    [Theory]
+    [InlineData(1, 0, "service")]
+    [InlineData(0, 2, "memory")]
+    public async Task A_plan_with_room_for_each_but_not_all_is_refused_before_anything_exists(int maxServices, int maxMemoryGb, string what)
+    {
+        using var h = new LaunchHarness();
+        using (var db = h.Store())
+        {
+            var plan = db.Plans.IgnoreQueryFilters().Single();
+            plan.MaxServices = maxServices;
+            plan.MaxMemoryBytes = maxMemoryGb * (1L << 30);
+            db.SaveChanges();
+        }
+        var id = await h.ReadyGitAsync(TwoDatabases());
+        var choices = await h.DefaultsAsync(id);
+
+        var refusals = await h.Request().ValidateConfirmAsync(id, choices, default);
+
+        refusals.Should().ContainSingle().Which.Message.Should().ContainEquivalentOf(what);
+        refusals[0].MessageFa.Should().NotBe(refusals[0].Message);
+
+        (await h.Request().ConfirmAsync(id, choices, null, default)).Ok.Should().BeFalse();
+        h.Row(id).Status.Should().Be(LaunchStatus.AwaitingConfirmation);
+        h.Store().ManagedServices.IgnoreQueryFilters().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_plan_that_is_already_full_says_so_once()
+    {
+        using var h = new LaunchHarness();
+        using (var db = h.Store())
+        {
+            db.Plans.IgnoreQueryFilters().Single().MaxApps = 1;
+            db.Apps.Add(new App
+            {
+                WorkspaceId = h.WorkspaceId, ServerId = h.ServerA.Id, EnvironmentId = h.Environment!.Id,
+                Name = "already", Slug = "already", SourceType = AppSourceType.PrebuiltImage, PrebuiltImage = "x:1"
+            });
+            db.SaveChanges();
+        }
+        var id = await h.ReadyGitAsync(Bare());
+
+        (await h.Request().ValidateConfirmAsync(id, await h.DefaultsAsync(id), default)).Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task A_plan_that_sells_past_its_caps_is_not_refused_by_the_batch_either()
+    {
+        using var h = new LaunchHarness();
+        h.Billing.Enabled = true;
+        using (var db = h.Store())
+        {
+            var plan = db.Plans.IgnoreQueryFilters().Single();
+            plan.MaxServices = 1;
+            plan.AllowsOverage = true;
+            db.Wallets.Add(new Harbora.Domain.Billing.Wallet { WorkspaceId = h.WorkspaceId, BalanceMinor = 100_000 });
+            db.SaveChanges();
+        }
+        var id = await h.ReadyGitAsync(TwoDatabases());
+
+        (await h.Request().ValidateConfirmAsync(id, await h.DefaultsAsync(id), default)).Should().BeEmpty();
+    }
+
     // ---- naming --------------------------------------------------------------------------------
 
     [Fact]

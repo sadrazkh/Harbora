@@ -247,24 +247,46 @@ public sealed partial class LaunchService
     /// instead of placing the first database wherever suits it alone and then discovering that the app
     /// does not fit beside it, or that a database's placement knows nothing of a plan's pool. The
     /// answer is written into what is confirmed, so a retry stays on the same host.
+    ///
+    /// <para>
+    /// A chosen host is asked the same question, and the form always posts one. Each create checks only
+    /// itself, so on a small host every one of them would pass here, the first database would be created
+    /// and charged, and the next refused: a partial launch that trying again cannot help. The choice stays
+    /// on a refusal, so that what the screen goes on to quote is still about the host it shows. An id that
+    /// is no server is read the way the create services read it, as no choice at all.
+    /// </para>
     /// </summary>
     private async Task<SettledServer> SettleServerAsync(Guid workspaceId, LaunchChoices choices, CancellationToken ct)
     {
-        if (choices.ServerId is { } chosen) return new SettledServer(chosen, null);
+        var (memory, cpu) = await AllOfItAsync(choices, ct);
 
+        if (choices.ServerId is { } chosen && await db.Servers.AsNoTracking().AnyAsync(s => s.Id == chosen, ct))
+        {
+            var fits = await scheduler.CheckAsync(chosen, memory, cpu, ct);
+            return new SettledServer(chosen, fits.Ok ? null : NoRoom(fits));
+        }
+
+        var plan = await PlanForAsync(workspaceId, ct);
+        var pool = string.IsNullOrWhiteSpace(plan?.NodePool) ? null : plan!.NodePool;
+
+        var placed = await scheduler.PlaceAsync(memory, cpu, pool, ct);
+        return placed.Ok
+            ? new SettledServer(placed.ServerId, null)
+            : new SettledServer(null, NoRoom(placed));
+    }
+
+    private static ServiceRefusal NoRoom(PlacementResult placement) => new(
+        placement.Reason ?? "No server has room for everything this launch creates.",
+        placement.ReasonFa ?? placement.Reason ?? "هیچ سروری برای همهٔ چیزهایی که این راه‌اندازی می‌سازد جا ندارد.");
+
+    /// <summary>What every database and the app ask for together, all at the one size a launch gives them.</summary>
+    private async Task<(long Memory, double Cpu)> AllOfItAsync(LaunchChoices choices, CancellationToken ct)
+    {
         var size = string.IsNullOrWhiteSpace(choices.InstanceSizeKey)
             ? null
             : await db.InstanceSizes.AsNoTracking().FirstOrDefaultAsync(s => s.Key == choices.InstanceSizeKey, ct);
         var count = choices.Services.Count + 1;
-        var plan = await PlanForAsync(workspaceId, ct);
-        var pool = string.IsNullOrWhiteSpace(plan?.NodePool) ? null : plan!.NodePool;
-
-        var placed = await scheduler.PlaceAsync((size?.MemoryBytes ?? 0) * count, (size?.CpuCores ?? 0) * count, pool, ct);
-        return placed.Ok
-            ? new SettledServer(placed.ServerId, null)
-            : new SettledServer(null, new ServiceRefusal(
-                placed.Reason ?? "No server has room for everything this launch creates.",
-                placed.ReasonFa ?? placed.Reason ?? "هیچ سروری برای همهٔ چیزهایی که این راه‌اندازی می‌سازد جا ندارد."));
+        return ((size?.MemoryBytes ?? 0) * count, (size?.CpuCores ?? 0) * count);
     }
 
     private sealed record SettledServer(Guid? ServerId, ServiceRefusal? Refusal);
@@ -379,6 +401,19 @@ public sealed partial class LaunchService
                 DatabaseRequest(launch, choices, i, names[i], serverId, null), ct));
 
         refusals.AddRange(await apps.ValidateCreateAsync(AppRequest(launch, choices, inspection, serverId, null, null), ct));
+
+        // Each of those asks the plan about itself alone, and on a plan with one slot left every one of
+        // them is true. Asked as a batch, so a launch that cannot all fit stops here rather than at its
+        // second create, with the first already charged. Only when nothing above has spoken: a plan that
+        // is already full would otherwise say so twice in two different sentences.
+        if (refusals.Count == 0)
+        {
+            var (memory, cpu) = await AllOfItAsync(choices, ct);
+            var batch = await quota.CanAddWorkloadsAsync(launch.WorkspaceId,
+                new WorkloadQuotaDelta(Apps: 1, Services: choices.Services.Count, MemoryBytes: memory, CpuCores: cpu), ct);
+            if (!batch.Allowed)
+                refusals.Add(AppRefusals.Quota(batch, "Plan quota exceeded.", "سقف پلن پر شده است."));
+        }
 
         if ((await QuoteOnAsync(launch.WorkspaceId, choices, serverId, ct)).Refusal is { } money)
             refusals.Add(money);
