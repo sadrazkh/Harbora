@@ -651,6 +651,19 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
     }
 
     [Fact]
+    public async Task A_frontend_reads_as_something_that_will_be_built_and_served_in_both_languages()
+    {
+        var (view, proposal) = Confirmable(Inspection(DetectedStack.Frontend, DetectedAppKind.Web));
+        var id = Given(view, proposal);
+        var client = await Owner();
+
+        (await PageAsync(client, $"/launch/{id}")).Should().Contain("یک فرانت‌اند که اول ساخته می‌شود و بعد خروجی‌اش روی وب نشان داده می‌شود");
+
+        await SpeakEnglish(client);
+        (await PageAsync(client, $"/launch/{id}")).Should().Contain("A frontend that will be built, with what it produces served on the web");
+    }
+
+    [Fact]
     public async Task A_name_the_platform_keeps_for_itself_says_that_and_does_not_blame_the_root_domain()
     {
         var (id, client, token) = await AtTheConfirmScreen();

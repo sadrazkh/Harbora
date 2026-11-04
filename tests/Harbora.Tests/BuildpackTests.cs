@@ -627,11 +627,13 @@ public class BuildpackTests : IDisposable
     /// Runs the generated step as Docker would hand it to a shell, with its continuations joined. Null
     /// where there is no <c>sh</c>, which only a Windows machine without Git would lack.
     /// </summary>
-    private (int ExitCode, string Output)? RunOutputStep()
+    private (int ExitCode, string Output)? RunOutputStep() => RunStep("RUN found=", 80);
+
+    private (int ExitCode, string Output)? RunStep(string startingWith, int port, Func<string, string>? adjust = null)
     {
         Touch("package.json", ViteShaped);
-        var lines = Buildpacks.Detect(_dir, 80)!.Value.Dockerfile.Split('\n')
-            .SkipWhile(l => !l.StartsWith("RUN found=", StringComparison.Ordinal)).ToList();
+        var lines = Buildpacks.Detect(_dir, port)!.Value.Dockerfile.Split('\n')
+            .SkipWhile(l => !l.StartsWith(startingWith, StringComparison.Ordinal)).ToList();
 
         var step = new System.Text.StringBuilder();
         foreach (var line in lines)
@@ -655,7 +657,8 @@ public class BuildpackTests : IDisposable
         start.ArgumentList.Add("-c");
 
         // The PATH is for Git's sh on Windows, where a bare `find` can otherwise be System32's.
-        start.ArgumentList.Add("PATH=\"/usr/bin:/bin:$PATH\"; " + step.ToString()["RUN ".Length..]);
+        var command = step.ToString()["RUN ".Length..];
+        start.ArgumentList.Add("PATH=\"/usr/bin:/bin:$PATH\"; " + (adjust?.Invoke(command) ?? command));
 
         try
         {
@@ -741,6 +744,27 @@ public class BuildpackTests : IDisposable
         run.Output.Should().Contain("The build finished without producing an index.html, so this is not a site.");
         run.Output.Should().Contain("start script").And.Contain("Dockerfile");
         Directory.Exists(Path.Combine(_dir, ".harbora-site")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void The_nginx_config_the_step_writes_is_the_one_meant_with_nothing_expanded_on_the_way()
+    {
+        if (RunStep("RUN printf", 8123, c => c.Replace("/etc/nginx/conf.d/default.conf", "written.conf")) is not { } run) return;
+
+        run.ExitCode.Should().Be(0, run.Output);
+        File.ReadAllText(Path.Combine(_dir, "written.conf")).ReplaceLineEndings("\n").Should().Be(
+            """
+            server {
+                listen 8123;
+                root /usr/share/nginx/html;
+                index index.html;
+                autoindex off;
+                location / {
+                    try_files $uri $uri/ /index.html;
+                }
+            }
+
+            """.ReplaceLineEndings("\n"));
     }
 
     // --- Through the pipeline --------------------------------------------------------------------
