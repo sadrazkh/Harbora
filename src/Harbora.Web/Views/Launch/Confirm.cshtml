@@ -101,16 +101,24 @@
 
         @if (inspection.RootCandidates.Count > 0)
         {
-            <fieldset class="mt-4 space-y-2" data-launch-roots>
-                <legend class="mb-2 text-sm font-medium text-ink">@(isFa ? "کدام پوشه را راه بیندازم؟" : "Which folder should I launch?")</legend>
-                @foreach (var candidate in inspection.RootCandidates)
+            <div class="mt-3 text-sm text-ink-muted" data-launch-folder>
+                <p>@(isFa ? "این را از پوشه‌ی " : "I read this from the ")<code dir="ltr" class="break-all text-ink">@inspection.RootDirectory</code>@(isFa ? " خواندم." : " folder.")</p>
+                @if (canCreate)
                 {
-                    <label class="flex cursor-pointer items-center gap-3 rounded-xl border border-line bg-surface-2 p-3">
-                        <input type="radio" name="RootDirectory" value="@candidate" required checked="@(form.RootDirectory == candidate)" />
-                        <code class="min-w-0 break-all text-sm text-ink" dir="ltr">@candidate</code>
-                    </label>
+                    <details class="mt-1 text-xs" data-launch-other-folder>
+                        <summary class="cursor-pointer select-none text-accent-text hover:underline">@(isFa ? "پوشه‌ی دیگری را انتخاب کن" : "Choose another folder")</summary>
+                        <p class="mt-1 text-ink-faint">@(isFa ? "اگر عوضش کنی، هر چه اینجا نوشته‌ای پاک می‌شود." : "Changing it clears whatever you've typed here.")</p>
+                        <div class="mt-2 flex flex-wrap gap-2">
+                            @foreach (var candidate in inspection.RootCandidates.Where(c => c != inspection.RootDirectory))
+                            {
+                                @* Submits the small form below this one: a form cannot sit inside a form, and
+                                   nothing typed on this screen, a key least of all, has any business going along. *@
+                                <button type="submit" form="launch-other-folder" name="folder" value="@candidate" class="btn-secondary px-3 py-1.5 text-xs"><code dir="ltr" class="break-all">@candidate</code></button>
+                            }
+                        </div>
+                    </details>
                 }
-            </fieldset>
+            </div>
         }
     </section>
 
@@ -340,6 +348,13 @@
         </div>
     </details>
 </form>
+
+@if (canCreate && inspection.RootCandidates.Count > 0)
+{
+    <form id="launch-other-folder" method="post" action="/launch/@proposal.LaunchId/root">
+        @Html.AntiForgeryToken()
+    </form>
+}
 
 @if (canCreate)
 {

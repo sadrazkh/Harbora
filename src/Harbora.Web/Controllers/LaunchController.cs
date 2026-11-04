@@ -148,7 +148,9 @@ public sealed class LaunchController(
 
         if (view.Status == LaunchStatus.AwaitingConfirmation
             && await launches.ProposeAsync(id, ct) is { } proposal)
-            return await ConfirmScreenAsync(proposal, FormFrom(proposal), [], secretsToRetype: false, ct);
+            return NeedsFolder(proposal)
+                ? View("Root", new LaunchRootModel(id, proposal.Inspection.RootCandidates))
+                : await ConfirmScreenAsync(proposal, FormFrom(proposal), [], secretsToRetype: false, ct);
 
         return View(await ProgressAsync(view, ct));
     }
@@ -172,10 +174,32 @@ public sealed class LaunchController(
     public async Task<IActionResult> Quote(Guid id, LaunchConfirmForm form, CancellationToken ct)
     {
         if (await launches.GetAsync(id, ct) is null) return NotFound();
-        if (await launches.ProposeAsync(id, ct) is not { } proposal) return NotFound();
+        if (await launches.ProposeAsync(id, ct) is not { } proposal || NeedsFolder(proposal)) return NotFound();
 
         var (choices, _) = ChoicesFrom(form, proposal);
         return PartialView("_Cost", await launches.QuoteAsync(id, choices, ct));
+    }
+
+    /// <summary>
+    /// Which folder of a several-app repository this launch is about. Before the confirm screen the first
+    /// time, and from it to change the answer, which starts its form again: everything on it was about the
+    /// other folder.
+    /// </summary>
+    [HttpPost("{id:guid}/root")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsCreate)]
+    public async Task<IActionResult> ChooseRoot(Guid id, string? folder, CancellationToken ct)
+    {
+        var view = await launches.GetAsync(id, ct);
+        if (view is null) return NotFound();
+        if (view.Status != LaunchStatus.AwaitingConfirmation
+            || await launches.ProposeAsync(id, ct) is not { } proposal)
+            return Redirect($"/launch/{id}");
+
+        var outcome = await launches.ChooseRootAsync(id, folder ?? "", ct);
+        return outcome.Ok
+            ? Redirect($"/launch/{id}")
+            : View("Root", new LaunchRootModel(id, proposal.Inspection.RootCandidates, Say(outcome.Refusals)));
     }
 
     /// <summary>
@@ -190,7 +214,8 @@ public sealed class LaunchController(
         var view = await launches.GetAsync(id, ct);
         if (view is null) return NotFound();
         if (view.Status != LaunchStatus.AwaitingConfirmation
-            || await launches.ProposeAsync(id, ct) is not { } proposal)
+            || await launches.ProposeAsync(id, ct) is not { } proposal
+            || NeedsFolder(proposal))
             return Redirect($"/launch/{id}");
 
         // A value the screen is about to draw again is only ever one it may draw again. A secret
@@ -303,14 +328,6 @@ public sealed class LaunchController(
             refusals.Add(new ServiceRefusal("The port has to be a number.", "پورت باید عدد باشد.", nameof(LaunchChoices.ContainerPort)));
         }
 
-        // The one thing the first block can ask. The inspector found several apps and will not guess.
-        var candidates = proposal.Inspection.RootCandidates;
-        if (candidates.Count > 0 && !candidates.Contains(form.RootDirectory ?? "", StringComparer.Ordinal))
-            refusals.Add(new ServiceRefusal(
-                "There's more than one app in here. Choose which folder to launch.",
-                "اینجا بیشتر از یک اپ هست. بگو کدام پوشه را راه بیندازم.",
-                nameof(LaunchChoices.RootDirectory)));
-
         var ticked = form.Services.ToHashSet(StringComparer.Ordinal);
         var services = proposal.ServiceOptions
             .Where(o => ticked.Contains(o.Type.ToString()))
@@ -342,7 +359,11 @@ public sealed class LaunchController(
             ContainerPort = port,
             Command = Blank(form.Command),
             ReleaseCommand = Blank(form.ReleaseCommand),
-            RootDirectory = Blank(form.RootDirectory),
+            // Among several apps the folder was settled by ChooseRootAsync, and everything else in this
+            // proposal was read from it. A field in this form does not get to disagree.
+            RootDirectory = proposal.Inspection.RootCandidates.Count > 0
+                ? proposal.Inspection.RootDirectory
+                : Blank(form.RootDirectory),
             EnvironmentId = form.EnvironmentId ?? defaults.EnvironmentId,
             ServerId = form.ServerId,
             InstanceSizeKey = Blank(form.InstanceSizeKey) ?? defaults.InstanceSizeKey,
@@ -352,6 +373,13 @@ public sealed class LaunchController(
 
         return (choices, refusals);
     }
+
+    /// <summary>
+    /// A repository holding several apps, with no folder chosen yet. Nothing a proposal says is about the
+    /// app the person means until one is, so the screen asks that and nothing else.
+    /// </summary>
+    private static bool NeedsFolder(LaunchProposal proposal) =>
+        proposal.Inspection is { RootDirectory: null, RootCandidates.Count: > 0 };
 
     private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 

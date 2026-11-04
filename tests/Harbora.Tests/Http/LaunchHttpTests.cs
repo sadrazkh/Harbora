@@ -109,8 +109,9 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
         DetectedAppKind kind = DetectedAppKind.Web,
         IReadOnlyList<string>? roots = null,
         IReadOnlyList<DetectedEnvVar>? env = null,
-        IReadOnlyList<InspectionNote>? notes = null) =>
-        new(stack, kind, null, roots ?? [], 3000, null, null, [], env ?? [], notes ?? []);
+        IReadOnlyList<InspectionNote>? notes = null,
+        string? root = null) =>
+        new(stack, kind, root, roots ?? [], 3000, null, null, [], env ?? [], notes ?? []);
 
     /// <summary>A launch at the confirm screen that found a certain Postgres, a maybe-Redis and four kinds of variable.</summary>
     private static (LaunchView View, LaunchProposal Proposal) Confirmable(
@@ -411,6 +412,7 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
     private static string[] PostRoutes(Guid id) =>
     [
         "/launch",
+        $"/launch/{id}/root",
         $"/launch/{id}/quote",
         $"/launch/{id}/confirm",
         $"/launch/{id}/retry",
@@ -431,6 +433,7 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
         }
 
         Launches.Started.Should().BeEmpty();
+        Launches.ChosenRoots.Should().BeEmpty();
         Launches.Quoted.Should().BeEmpty();
         Launches.Confirmed.Should().BeEmpty();
         Launches.Abandoned.Should().BeEmpty();
@@ -438,6 +441,7 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
 
     [Theory]
     [InlineData("")]
+    [InlineData("/root")]
     [InlineData("/confirm")]
     [InlineData("/retry")]
     [InlineData("/abandon")]
@@ -449,11 +453,12 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
         var token = await client.AntiforgeryTokenFrom("/apps");
 
         var path = suffix.Length == 0 ? "/launch" : $"/launch/{id}{suffix}";
-        var response = await client.PostFormAsync(path, token, ("GitUrl", "https://x.example/y"), ("Name", "shop"));
+        var response = await client.PostFormAsync(path, token, ("GitUrl", "https://x.example/y"), ("Name", "shop"), ("folder", "services/api"));
 
         response.StatusCode.Should().Be(HttpStatusCode.Found);
         response.RedirectPath().Should().Be("/account/denied");
         Launches.Started.Should().BeEmpty();
+        Launches.ChosenRoots.Should().BeEmpty();
         Launches.Confirmed.Should().BeEmpty();
         Launches.Retried.Should().BeEmpty();
         Launches.Abandoned.Should().BeEmpty();
@@ -471,8 +476,9 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
         (await client.GetAsync($"/launch/{theirs}/progress")).StatusCode.Should().Be(HttpStatusCode.NotFound);
 
         foreach (var route in PostRoutes(theirs).Skip(1))
-            (await client.PostFormAsync(route, token, ("Name", "shop"))).StatusCode.Should().Be(HttpStatusCode.NotFound, route);
+            (await client.PostFormAsync(route, token, ("Name", "shop"), ("folder", "services/api"))).StatusCode.Should().Be(HttpStatusCode.NotFound, route);
 
+        Launches.ChosenRoots.Should().BeEmpty();
         Launches.Quoted.Should().BeEmpty();
         Launches.Validated.Should().BeEmpty();
         Launches.Confirmed.Should().BeEmpty();
@@ -669,28 +675,197 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
         html.Should().NotContain("یک اپ  که");
     }
 
-    [Fact]
-    public async Task Several_apps_in_one_tree_is_the_only_thing_the_first_block_asks_and_it_has_to_be_answered()
+    // ---- several apps in one repository ------------------------------------------------------------
+
+    private static readonly string[] Folders = ["services/api", "services/web", "tools/cron"];
+
+    /// <summary>A launch of a several-app repository, with no folder chosen yet.</summary>
+    private (Guid Id, LaunchProposal Proposal) GivenSeveralApps(string? chosen = null)
     {
-        var (view, proposal) = Confirmable(Inspection(roots: ["services/api", "services/web"]));
+        var (view, proposal) = Confirmable(Inspection(roots: Folders, root: chosen));
+        return (Given(view, proposal, Charged), proposal);
+    }
+
+    [Fact]
+    public async Task A_repository_with_several_apps_asks_only_which_one()
+    {
+        var (id, _) = GivenSeveralApps();
+
+        var html = await PageAsync(await Owner(), $"/launch/{id}");
+
+        html.Should().Contain("این مخزن چند اپ دارد. کدام را راه بیندازم؟");
+        foreach (var folder in Folders)
+            Tag(html, $"name=\"folder\" value=\"{folder}\"").Should().StartWith("<button").And.Contain("type=\"submit\"");
+        html.Should().Contain($"action=\"/launch/{id}/root\"");
+
+        // Nothing it could propose is about the app they mean, so none of it is on the page.
+        foreach (var absent in new[]
+                 {
+                     "data-launch-confirm", "data-launch-found", "data-launch-created", "data-launch-asked",
+                     "data-launch-cost", "data-launch-submit", "data-launch-details", "name=\"Services\""
+                 })
+            html.Should().NotContain(absent);
+
+        Launches.Quoted.Should().BeEmpty("there is no figure to show until there is an app to price");
+    }
+
+    [Fact]
+    public async Task The_folder_question_reads_in_english_too()
+    {
+        var (id, _) = GivenSeveralApps();
+        var client = await Owner();
+        await SpeakEnglish(client);
+
+        var html = await PageAsync(client, $"/launch/{id}");
+
+        html.Should().Contain("This repository holds several apps. Which one?");
+        html.Should().NotContain("این مخزن چند اپ دارد");
+    }
+
+    [Fact]
+    public async Task Choosing_a_folder_goes_through_the_service_and_lands_on_the_normal_screen()
+    {
+        var (id, _) = GivenSeveralApps();
+        var client = await Owner();
+        var token = await client.AntiforgeryTokenFrom($"/launch/{id}");
+
+        var response = await client.PostFormAsync($"/launch/{id}/root", token, ("folder", "services/web"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Found);
+        response.RedirectPath().Should().Be($"/launch/{id}");
+        Launches.ChosenRoots.Should().Equal((id, "services/web"));
+
+        var html = await PageAsync(client, $"/launch/{id}");
+        html.Should().Contain("data-launch-confirm").And.Contain("data-launch-submit").And.Contain("data-launch-cost");
+        html.Should().NotContain("این مخزن چند اپ دارد");
+    }
+
+    [Fact]
+    public async Task An_unknown_folder_is_refused_on_the_same_question()
+    {
+        var (id, _) = GivenSeveralApps();
+        var client = await Owner();
+        var token = await client.AntiforgeryTokenFrom($"/launch/{id}");
+
+        var response = await client.PostFormAsync($"/launch/{id}/root", token, ("folder", "../../etc"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var html = await BodyAsync(response);
+        html.Should().Contain("این پوشه در این مخزن نیست.");
+        html.Should().Contain("این مخزن چند اپ دارد. کدام را راه بیندازم؟");
+        Tag(html, "name=\"folder\" value=\"services/api\"").Should().StartWith("<button");
+        html.Should().NotContain("data-launch-submit").And.NotContain("data-launch-cost");
+    }
+
+    [Fact]
+    public async Task No_folder_at_all_is_refused_on_the_same_question()
+    {
+        var (id, _) = GivenSeveralApps();
+        var client = await Owner();
+        var token = await client.AntiforgeryTokenFrom($"/launch/{id}");
+
+        var response = await client.PostFormAsync($"/launch/{id}/root", token);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await BodyAsync(response)).Should().Contain("این پوشه در این مخزن نیست.");
+    }
+
+    [Fact]
+    public async Task Somebody_who_cannot_create_apps_is_told_so_and_offered_no_folders()
+    {
+        var (id, _) = GivenSeveralApps();
+
+        var html = await PageAsync(await Viewer(), $"/launch/{id}");
+
+        html.Should().Contain("این مخزن چند اپ دارد").And.Contain("data-launch-no-permission");
+        html.Should().NotContain("name=\"folder\"");
+    }
+
+    [Fact]
+    public async Task Confirming_or_pricing_before_a_folder_is_chosen_does_nothing_and_returns_to_the_question()
+    {
+        var (id, _) = GivenSeveralApps();
+        var client = await Owner();
+        var token = await client.AntiforgeryTokenFrom($"/launch/{id}");
+
+        var confirm = await client.PostFormAsync($"/launch/{id}/confirm", token, ("Name", "shop"), ("RootDirectory", "services/web"));
+        var quote = await client.PostFormAsync($"/launch/{id}/quote", token, ("Name", "shop"));
+
+        confirm.StatusCode.Should().Be(HttpStatusCode.Found);
+        confirm.RedirectPath().Should().Be($"/launch/{id}");
+        quote.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        Launches.Validated.Should().BeEmpty();
+        Launches.Confirmed.Should().BeEmpty();
+        Launches.Quoted.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Once_a_folder_is_chosen_the_screen_says_which_and_offers_the_others()
+    {
+        var (id, _) = GivenSeveralApps(chosen: "services/web");
+
+        var html = await PageAsync(await Owner(), $"/launch/{id}");
+
+        Regex.Replace(html[html.IndexOf("data-launch-folder", StringComparison.Ordinal)..], "<[^>]+>", "")
+            .Should().Contain("این را از پوشه‌ی services/web خواندم.");
+        html.Should().Contain("پوشه‌ی دیگری را انتخاب کن");
+        Tag(html, "data-launch-other-folder").Should().NotContain(" open");
+
+        Tag(html, "name=\"folder\" value=\"services/api\"").Should().Contain("form=\"launch-other-folder\"");
+        Tag(html, "name=\"folder\" value=\"tools/cron\"").Should().Contain("form=\"launch-other-folder\"");
+        html.Should().NotContain("name=\"folder\" value=\"services/web\"", "the one already chosen is not another folder");
+
+        // The buttons sit inside the confirm form but belong to this one, which carries its own token.
+        var at = html.IndexOf("id=\"launch-other-folder\"", StringComparison.Ordinal);
+        at.Should().BeGreaterThan(html.IndexOf("</form>", StringComparison.Ordinal), "a form cannot sit inside a form");
+        var small = html[at..html.IndexOf("</form>", at, StringComparison.Ordinal)];
+        small.Should().Contain($"action=\"/launch/{id}/root\"").And.Contain(HttpConversation.AntiforgeryField);
+    }
+
+    [Fact]
+    public async Task Changing_the_folder_from_the_screen_goes_through_the_service()
+    {
+        var (id, _) = GivenSeveralApps(chosen: "services/web");
+        var client = await Owner();
+        var token = await client.AntiforgeryTokenFrom($"/launch/{id}");
+
+        var response = await client.PostFormAsync($"/launch/{id}/root", token, ("folder", "tools/cron"));
+
+        response.RedirectPath().Should().Be($"/launch/{id}");
+        Launches.ChosenRoots.Should().Equal((id, "tools/cron"));
+        Regex.Replace(await PageAsync(client, $"/launch/{id}"), "<[^>]+>", "").Should().Contain("این را از پوشه‌ی tools/cron خواندم.");
+    }
+
+    [Fact]
+    public async Task The_chosen_folder_is_the_services_fact_and_a_field_cannot_disagree_with_it()
+    {
+        var (id, _) = GivenSeveralApps(chosen: "services/web");
+        var client = await Owner();
+
+        var html = await PageAsync(client, $"/launch/{id}");
+        html.Should().NotContain("name=\"RootDirectory\"");
+
+        var token = await client.AntiforgeryTokenFrom($"/launch/{id}");
+        await client.PostFormAsync($"/launch/{id}/confirm", token, ("Name", "shop"), ("RootDirectory", "tools/cron"));
+
+        Launches.Confirmed.Should().ContainSingle().Which.Choices.RootDirectory.Should().Be("services/web");
+    }
+
+    [Fact]
+    public async Task A_single_app_keeps_the_plain_folder_field_and_no_folder_sentence()
+    {
+        var (view, proposal) = Confirmable();
         var id = Given(view, proposal);
         var client = await Owner();
 
         var html = await PageAsync(client, $"/launch/{id}");
-        html.Should().Contain("data-launch-roots").And.Contain("value=\"services/api\"");
-        Tag(html, "value=\"services/api\"").Should().Contain("required");
-        html[html.IndexOf("data-launch-details", StringComparison.Ordinal)..].Should().NotContain("name=\"RootDirectory\"",
-            "two fields with one name would post whichever came first");
+        html.Should().Contain("name=\"RootDirectory\"");
+        html.Should().NotContain("data-launch-folder").And.NotContain("launch-other-folder");
 
         var token = await client.AntiforgeryTokenFrom($"/launch/{id}");
-        var refused = await client.PostFormAsync($"/launch/{id}/confirm", token, ("Name", "shop"));
-        refused.StatusCode.Should().Be(HttpStatusCode.OK);
-        (await BodyAsync(refused)).Should().Contain("کدام پوشه");
-        Launches.Confirmed.Should().BeEmpty();
+        await client.PostFormAsync($"/launch/{id}/confirm", token, ("Name", "shop"), ("RootDirectory", "api"));
 
-        var chosen = await client.PostFormAsync($"/launch/{id}/confirm", token, ("Name", "shop"), ("RootDirectory", "services/web"));
-        chosen.StatusCode.Should().Be(HttpStatusCode.Found);
-        Launches.Confirmed.Should().ContainSingle().Which.Choices.RootDirectory.Should().Be("services/web");
+        Launches.Confirmed.Should().ContainSingle().Which.Choices.RootDirectory.Should().Be("api");
     }
 
     // ---- the cost ----------------------------------------------------------------------------------

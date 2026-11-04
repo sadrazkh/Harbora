@@ -141,6 +141,7 @@ public sealed class LaunchPanelFixture : IDisposable
         public Task<ServiceOutcome<Guid>> StartAsync(LaunchStartRequest request, CancellationToken ct) => fake.StartAsync(request);
         public Task InspectAsync(Guid launchId, CancellationToken ct) => Task.CompletedTask;
         public Task<LaunchProposal?> ProposeAsync(Guid launchId, CancellationToken ct) => Task.FromResult(fake.Propose(launchId));
+        public Task<ServiceOutcome<LaunchProposal>> ChooseRootAsync(Guid launchId, string candidate, CancellationToken ct) => Task.FromResult(fake.ChooseRoot(launchId, candidate));
         public Task<LaunchQuote> QuoteAsync(Guid launchId, LaunchChoices choices, CancellationToken ct) => Task.FromResult(fake.Quote(launchId, choices));
         public Task<IReadOnlyList<ServiceRefusal>> ValidateConfirmAsync(Guid launchId, LaunchChoices choices, CancellationToken ct) => Task.FromResult(fake.Validate(launchId, choices));
         public Task<ServiceOutcome<LaunchView>> ConfirmAsync(Guid launchId, LaunchChoices choices, string? clientIp, CancellationToken ct) => Task.FromResult(fake.Confirm(launchId, choices));
@@ -157,7 +158,7 @@ public sealed class FakeLaunchService
     {
         public required Guid WorkspaceId { get; init; }
         public required LaunchView View { get; set; }
-        public LaunchProposal? Proposal { get; init; }
+        public LaunchProposal? Proposal { get; set; }
         public LaunchQuote? Quote { get; init; }
     }
 
@@ -165,6 +166,7 @@ public sealed class FakeLaunchService
     private readonly object _gate = new();
 
     public List<LaunchStartRequest> Started { get; } = [];
+    public List<(Guid Id, string Candidate)> ChosenRoots { get; } = [];
     public List<(Guid Id, LaunchChoices Choices)> Quoted { get; } = [];
     public List<(Guid Id, LaunchChoices Choices)> Validated { get; } = [];
     public List<(Guid Id, LaunchChoices Choices)> Confirmed { get; } = [];
@@ -190,7 +192,7 @@ public sealed class FakeLaunchService
         lock (_gate)
         {
             _launches.Clear();
-            Started.Clear(); Quoted.Clear(); Validated.Clear(); Confirmed.Clear(); Retried.Clear(); Abandoned.Clear();
+            Started.Clear(); ChosenRoots.Clear(); Quoted.Clear(); Validated.Clear(); Confirmed.Clear(); Retried.Clear(); Abandoned.Clear();
             StartRefusal = null; StartThrows = false; NextStartId = Guid.CreateVersion7();
             ValidateRefusals = []; ConfirmRefusals = []; RetryRefusals = []; AbandonAllowed = true;
             StatusAfterRefusedConfirm = null;
@@ -222,6 +224,22 @@ public sealed class FakeLaunchService
     public LaunchProposal? Propose(Guid id)
     {
         lock (_gate) return _launches.TryGetValue(id, out var entry) && entry.View.Status == LaunchStatus.AwaitingConfirmation ? entry.Proposal : null;
+    }
+
+    public ServiceOutcome<LaunchProposal> ChooseRoot(Guid id, string candidate)
+    {
+        lock (_gate)
+        {
+            ChosenRoots.Add((id, candidate));
+            var entry = _launches[id];
+            var proposal = entry.Proposal!;
+            if (!proposal.Inspection.RootCandidates.Contains(candidate))
+                return ServiceOutcome<LaunchProposal>.Refused(
+                    new ServiceRefusal("That folder isn't in this repository.", "این پوشه در این مخزن نیست."));
+
+            entry.Proposal = proposal with { Inspection = proposal.Inspection with { RootDirectory = candidate } };
+            return ServiceOutcome<LaunchProposal>.Success(entry.Proposal);
+        }
     }
 
     public LaunchQuote Quote(Guid id, LaunchChoices choices)

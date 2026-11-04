@@ -78,6 +78,10 @@ public sealed record LaunchConfirmModel(
     public IEnumerable<LaunchEnvField> Aliases => Proposal.EnvFields.Where(f => f.Disposition == EnvVarDisposition.AliasOfAttach);
 }
 
+/// <summary>The one question a several-app repository gets before anything else can be said about it.</summary>
+/// <param name="Message">Why the last answer was refused.</param>
+public sealed record LaunchRootModel(Guid LaunchId, IReadOnlyList<string> Candidates, string? Message = null);
+
 /// <summary>The part of <c>/launch/{id}</c> that changes.</summary>
 /// <param name="AppKind">What the launch's app turned out to be, for how its success is worded. Null until there is one.</param>
 public sealed record LaunchProgressModel(LaunchView View, ServiceKind? AppKind);

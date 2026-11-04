@@ -174,6 +174,9 @@ public class AppScopeCensusTests
             "Records where the code is and queues reading it. Nothing is created and no placement exists "
             + "yet: the app and its environment are chosen on the confirm screen. LaunchService asks "
             + "whether the caller may create apps at all, as AppProvisioningService does.",
+        ["LaunchController.cs:ChooseRoot(Guid id"] =
+            "Settles which folder of the source this launch is about. Nothing is created and nothing has "
+            + "a placement until the confirm that follows.",
         ["LaunchController.cs:Confirm(Guid id"] =
             "Hands the whole creation to ILaunchService, which goes through AppProvisioningService and "
             + "DatabaseProvisioningService on the request, and each of those asks AllowsAsync on the "
