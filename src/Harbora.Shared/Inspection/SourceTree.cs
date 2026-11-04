@@ -190,9 +190,8 @@ internal sealed class SourceTree
     /// <para>
     /// Breadth-first with one listing per folder, because that is the order
     /// <c>Directory.EnumerateFiles(AllDirectories)</c> yields, and "the first one" is the pipeline's
-    /// answer when no project looks like a web one. Lazy, because a tree with a <c>package.json</c>
-    /// at its root never asks. Run once from the inspected root and filtered for any folder inside
-    /// it, which gives the list and the order a walk from that folder would.
+    /// answer when no project looks like a web one. Run once from the inspected root and filtered for
+    /// any folder inside it, which gives the list and the order a walk from that folder would.
     /// </para>
     /// </summary>
     private sealed class CsprojWalk(string root)

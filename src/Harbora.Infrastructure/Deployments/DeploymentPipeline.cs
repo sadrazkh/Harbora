@@ -1129,6 +1129,8 @@ public sealed class DeploymentPipeline(
                     await File.WriteAllTextAsync(Path.Combine(service.Build, dockerfile), pack.Value.Dockerfile, ct);
                     var serviceEntrySuffix = pack.Value.Entry is { } serviceEntry ? $" (entry: {serviceEntry})" : "";
                     await log(LogStream.System, $"Service '{service.Name}': detected {pack.Value.Stack}{serviceEntrySuffix}.");
+                    if (pack.Value.Warning is { } serviceWarning)
+                        await log(LogStream.System, $"⚠ Service '{service.Name}': {serviceWarning}");
                 }
 
                 await log(LogStream.System, $"Building {service.Name} → {image} …");
@@ -1469,6 +1471,7 @@ public sealed class DeploymentPipeline(
                 await File.WriteAllTextAsync(Path.Combine(contextPath, dockerfile), pack.Value.Dockerfile, ct);
                 var entrySuffix = pack.Value.Entry is { } entry ? $" (entry: {entry})" : "";
                 await log(LogStream.System, $"No Dockerfile — auto-detected {pack.Value.Stack}{entrySuffix}; using a generated build.");
+                if (pack.Value.Warning is { } warning) await log(LogStream.System, $"⚠ {warning}");
             }
         }
 

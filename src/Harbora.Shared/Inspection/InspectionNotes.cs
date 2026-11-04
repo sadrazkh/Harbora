@@ -50,8 +50,13 @@ internal static class InspectionNotes
 
     public static InspectionNote StackAmbiguous() => new(
         "stack-ambiguous",
-        "A package.json sits beside another language's project file. Without a Dockerfile this builds as Node, because package.json comes first. If Node is not what runs this app, add a Dockerfile.",
-        "کنار package.json فایل پروژهٔ یک زبان دیگر هم هست. بدون Dockerfile این پروژه با Node ساخته می‌شود، چون package.json اولویت دارد. اگر اپ با Node اجرا نمی‌شود، یک Dockerfile اضافه کن.");
+        "This package.json can start something, and another language's project file sits beside it. Without a Dockerfile this builds as Node. If Node is not what runs this app, add a Dockerfile.",
+        "این package.json می‌تواند چیزی را اجرا کند و کنارش فایل پروژهٔ یک زبان دیگر هم هست. بدون Dockerfile این پروژه با Node ساخته می‌شود. اگر اپ با Node اجرا نمی‌شود، یک Dockerfile اضافه کن.");
+
+    public static InspectionNote FrontendAssetsNotBuilt() => new(
+        "frontend-assets-not-built",
+        NodeStartRule.AssetsNotBuilt,
+        "package.json اینجا اسکریپت build دارد ولی ایمیجی که خودکار ساخته می‌شود آن را اجرا نمی‌کند، پس فایل‌های فرانت‌اند ساخته نمی‌شوند. برای ساختنشان یک Dockerfile اضافه کن.");
 
     public static InspectionNote SqliteNeedsVolume() => new(
         "sqlite-needs-volume",

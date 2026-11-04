@@ -33,6 +33,27 @@ internal static class NodeManifest
         });
     }
 
+    /// <summary>False for a script that is not there, is not text or is blank, and for a file that cannot be read at all.</summary>
+    public static bool HasScript(SourceTree folder, string name)
+    {
+        if (folder.ReadText(File) is not { } text) return false;
+
+        try
+        {
+            using var document = JsonManifest.Parse(text);
+            return document.RootElement.ValueKind == JsonValueKind.Object &&
+                   document.RootElement.TryGetProperty("scripts", out var scripts) &&
+                   scripts.ValueKind == JsonValueKind.Object &&
+                   scripts.TryGetProperty(name, out var script) &&
+                   script.ValueKind == JsonValueKind.String &&
+                   !string.IsNullOrWhiteSpace(script.GetString());
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     private static bool NamesAWorker(JsonElement root)
     {
         if (root.TryGetProperty("main", out var main) && main.ValueKind == JsonValueKind.String &&
@@ -75,6 +96,8 @@ internal static class JsonManifest
         CommentHandling = JsonCommentHandling.Skip
     };
 
+    public static JsonDocument Parse(string text) => JsonDocument.Parse(text, Lenient);
+
     public static void Read(SourceTree app, ProjectFacts facts, string file, Action<JsonElement> read)
     {
         if (app.ReadText(file) is not { } text)
@@ -85,7 +108,7 @@ internal static class JsonManifest
 
         try
         {
-            using var document = JsonDocument.Parse(text, Lenient);
+            using var document = Parse(text);
             if (document.RootElement.ValueKind == JsonValueKind.Object) read(document.RootElement);
             else facts.UnreadableFiles.Add(file);
         }

@@ -381,15 +381,129 @@ public class SourceInspectorTests : InspectorTreeTests
         Codes(result).Should().Contain("django-unsupported");
     }
 
+    // --- A package.json that is only a frontend's ------------------------------------------------
+
+    private const string FrontendOnly = """{"scripts":{"build":"vite build"},"devDependencies":{"vite":"5"}}""";
+    private const string RealNodeApp = """{"scripts":{"start":"node app.js"}}""";
+
+    [Fact]
+    public void Laravel_with_a_frontend_package_json_is_php_with_its_migrations_and_a_word_about_the_assets()
+    {
+        Write("package.json", FrontendOnly);
+        Write("composer.json", "{\"require\":{\"ext-pgsql\":\"*\"}}");
+        Write("artisan");
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.Php);
+        result.Port.Should().Be(80);
+        result.ReleaseCommand.Should().Be("php artisan migrate --force");
+        Service(result, DetectedServiceKind.Postgres).Certain.Should().BeTrue();
+        Codes(result).Should().Contain("frontend-assets-not-built").And.NotContain("stack-ambiguous");
+    }
+
+    [Fact]
+    public void Flask_with_a_frontend_package_json_is_python_on_flasks_port()
+    {
+        Write("package.json", FrontendOnly);
+        Write("requirements.txt", "flask");
+        Write("app.py");
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.Python);
+        result.Port.Should().Be(5000);
+        Codes(result).Should().Contain("frontend-assets-not-built").And.NotContain("stack-ambiguous");
+    }
+
+    [Fact]
+    public void AspNet_with_a_frontend_package_json_is_dotnet_and_its_kind_comes_from_the_project()
+    {
+        Write("package.json", FrontendOnly);
+        Write("Shop.csproj", Csproj("Microsoft.NET.Sdk.Worker", "Npgsql"));
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.DotNet);
+        result.Kind.Should().Be(DetectedAppKind.Worker);
+        Service(result, DetectedServiceKind.Postgres).Certain.Should().BeTrue();
+        Codes(result).Should().Contain("frontend-assets-not-built").And.NotContain("stack-ambiguous");
+    }
+
+    [Fact]
+    public void A_project_anywhere_the_pipeline_looks_counts_as_the_other_stack()
+    {
+        Write("package.json", FrontendOnly);
+        Write("src/Shop/Shop.csproj", Csproj());
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.DotNet);
+        result.RootDirectory.Should().BeNull("the package.json at the root still says the root is where the app is");
+    }
+
+    [Fact]
+    public void Go_with_a_frontend_package_json_is_go()
+    {
+        Write("package.json", FrontendOnly);
+        Write("go.mod", "module x");
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.Go);
+        Codes(result).Should().Contain("frontend-assets-not-built");
+    }
+
+    [Fact]
+    public void A_real_node_app_with_a_stray_requirements_txt_is_still_node_and_the_note_stays()
+    {
+        Write("package.json", RealNodeApp);
+        Write("requirements.txt", "flask");
+        Write("app.py");
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.Node);
+        result.Port.Should().Be(3000);
+        Codes(result).Should().Contain("stack-ambiguous").And.NotContain("frontend-assets-not-built");
+    }
+
+    [Fact]
+    public void A_server_js_and_no_scripts_is_still_node()
+    {
+        Write("package.json", "{}");
+        Write("server.js");
+        Write("composer.json", "{}");
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.Node);
+        Codes(result).Should().Contain("stack-ambiguous");
+    }
+
+    [Fact]
+    public void A_package_json_alone_with_no_start_is_still_node_and_nothing_is_ambiguous()
+    {
+        Write("package.json", FrontendOnly);
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.Node);
+        Codes(result).Should().NotContain(["stack-ambiguous", "frontend-assets-not-built"]);
+    }
+
     [Theory]
     [InlineData("composer.json")]
     [InlineData("index.php")]
     [InlineData("go.mod")]
     [InlineData("requirements.txt")]
+    [InlineData("pyproject.toml")]
+    [InlineData("Pipfile")]
     [InlineData("App.csproj")]
-    public void A_package_json_beside_another_languages_project_builds_as_node_and_says_so(string other)
+    [InlineData("src/App/App.csproj")]
+    public void Node_that_wins_beside_another_stacks_marker_says_so(string other)
     {
-        Write("package.json", "{}");
+        Write("package.json", RealNodeApp);
         Write(other);
 
         var result = Inspect();
@@ -399,26 +513,89 @@ public class SourceInspectorTests : InspectorTreeTests
     }
 
     [Fact]
-    public void A_package_json_alone_is_not_ambiguous()
+    public void Node_that_can_start_with_nothing_beside_it_has_nothing_to_say()
     {
-        Write("package.json", "{}");
-        Write("tools/Gen/Gen.csproj", Csproj());
+        Write("package.json", RealNodeApp);
 
-        Codes(Inspect()).Should().NotContain("stack-ambiguous");
+        Codes(Inspect()).Should().NotContain(["stack-ambiguous", "frontend-assets-not-built"]);
     }
 
     [Fact]
-    public void A_frontend_package_json_beside_another_language_is_called_out()
+    public void An_index_html_is_not_another_stack()
     {
-        Write("package.json", "{}");
-        Write("composer.json", "{}");
-        Write("artisan");
+        Write("package.json", FrontendOnly);
+        Write("index.html", "<html></html>");
 
         var result = Inspect();
 
         result.Stack.Should().Be(DetectedStack.Node);
-        Codes(result).Should().Contain("stack-ambiguous");
-        result.ReleaseCommand.Should().BeNull("an image built by the Node buildpack has no PHP to run artisan with");
+        Codes(result).Should().NotContain("stack-ambiguous");
+    }
+
+    [Fact]
+    public void A_malformed_package_json_gives_way_only_when_another_marker_exists_and_is_a_note_either_way()
+    {
+        Write("package.json", "not json");
+
+        var alone = Inspect();
+        alone.Stack.Should().Be(DetectedStack.Node);
+        Codes(alone).Should().Contain("manifest-unreadable");
+
+        Write("composer.json", "{}");
+
+        var beside = Inspect();
+        beside.Stack.Should().Be(DetectedStack.Php);
+        Codes(beside).Should().Contain("manifest-unreadable").And.NotContain("frontend-assets-not-built");
+    }
+
+    [Fact]
+    public void A_package_json_with_no_build_script_has_no_assets_to_warn_about()
+    {
+        Write("package.json", "{\"dependencies\":{\"left-pad\":\"1\"}}");
+        Write("composer.json", "{}");
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.Php);
+        Codes(result).Should().NotContain(["stack-ambiguous", "frontend-assets-not-built"]);
+    }
+
+    [Fact]
+    public void A_dockerfile_builds_what_it_likes_so_the_assets_are_not_mentioned()
+    {
+        Write("Dockerfile", "FROM x");
+        Write("package.json", FrontendOnly);
+        Write("composer.json", "{}");
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.Dockerfile);
+        Codes(result).Should().NotContain(["stack-ambiguous", "frontend-assets-not-built"]);
+    }
+
+    [Fact]
+    public void A_frontend_beside_django_gets_the_django_note_and_nothing_about_assets()
+    {
+        Write("package.json", FrontendOnly);
+        Write("requirements.txt", "django");
+        Write("manage.py");
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.Unknown);
+        Codes(result).Should().Equal("django-unsupported");
+    }
+
+    [Fact]
+    public void A_frontend_beside_python_with_no_entry_file_says_what_is_missing()
+    {
+        Write("package.json", FrontendOnly);
+        Write("requirements.txt", "flask");
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.Unknown);
+        Codes(result).Should().Equal("no-stack-recognised");
     }
 
     // --- Kind and start command --------------------------------------------------------------
@@ -932,6 +1109,17 @@ public class SourceInspectorTests : InspectorTreeTests
 
         result.Stack.Should().Be(DetectedStack.Unknown);
         Codes(result).Should().Contain("tree-too-large");
+
+        // The same tree with no start script is still undecided as far as the search could see, and
+        // says so. With one, the search only ever fed a note, so an upload carrying node_modules is
+        // not told it is too large.
+        Write("package.json", "{}");
+        Codes(Inspect()).Should().Contain("tree-too-large");
+
+        Write("package.json", RealNodeApp);
+        var node = Inspect();
+        node.Stack.Should().Be(DetectedStack.Node);
+        Codes(node).Should().NotContain("tree-too-large");
     }
 
     [Fact]

@@ -3,7 +3,8 @@ namespace Harbora.Shared.Inspection;
 /// <summary>
 /// What a folder builds as: a Dockerfile, then exactly what <c>Buildpacks.Detect</c> would choose, then a
 /// compose file. <c>Harbora.Shared</c> cannot call the buildpacks, so this is a copy of their order, and
-/// <c>SourceInspectorParityTests</c> runs the two side by side so that it cannot quietly become a different one.
+/// <c>SourceInspectorParityTests</c> runs the two side by side so that it cannot quietly become a different
+/// one. Only the question of whether a <c>package.json</c> counts is shared code: <see cref="NodeStartRule"/>.
 /// </summary>
 internal static class StackDetector
 {
@@ -29,14 +30,21 @@ internal static class StackDetector
         if (HasAny(app, DockerfileNames)) return DetectedStack.Dockerfile;
 
         // Buildpacks.Detect, in its order. Python is the one branch that can return "nothing": with no
-        // entry file it answers null at once, so an index.html beside it does not make it a static site.
-        if (app.HasFile("package.json")) return DetectedStack.Node;
+        // entry file it answers null at once, so neither a package.json nor an index.html beside it
+        // gets a turn. A package.json that cannot start anything comes after every other stack's
+        // marker and still before a static site, which is where a frontend's own index.html is.
+        var hasPackage = app.HasFile("package.json");
+        if (hasPackage && NodeStartRule.CanStart(app)) return DetectedStack.Node;
         if (app.Csprojs().Count > 0) return DetectedStack.DotNet;
         if (app.HasFile("go.mod")) return DetectedStack.Go;
         if (HasAny(app, PhpMarkers)) return DetectedStack.Php;
         if (HasAny(app, PythonManifests))
         {
             if (HasAny(app, PythonEntries)) return DetectedStack.Python;
+        }
+        else if (hasPackage)
+        {
+            return DetectedStack.Node;
         }
         else if (HasAny(app, StaticMarkers))
         {
@@ -80,12 +88,18 @@ internal static class StackDetector
             else yield return InspectionNotes.PythonEntryMissing(PythonEntries);
         }
 
-        // A frontend's package.json beside a Laravel or Flask app wins detection and builds the wrong
-        // thing: `npm start` in an image with no PHP. Parity says Node, so the person has to be told.
+        // Node beside another stack's marker can only mean its package.json can start something. That
+        // is usually the right call and sometimes a dev server's script, and only a person can tell.
         if (stack == DetectedStack.Node &&
-            (app.HasFile("go.mod") || HasAny(app, PhpMarkers) || HasAny(app, PythonManifests) ||
-             app.FileNames().Any(n => n.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))))
+            (app.Csprojs().Count > 0 || app.HasFile("go.mod") || HasAny(app, PhpMarkers) || HasAny(app, PythonManifests)))
             yield return InspectionNotes.StackAmbiguous();
+
+        // The other side of that decision: the package.json was passed over, and whatever its build
+        // script produces will be missing from a page that otherwise works. A Dockerfile builds what
+        // it likes, and Unknown has bigger news.
+        if (stack is DetectedStack.DotNet or DetectedStack.Go or DetectedStack.Php or DetectedStack.Python &&
+            NodeStartRule.HasBuildScript(app))
+            yield return InspectionNotes.FrontendAssetsNotBuilt();
     }
 
     private static bool HasAny(SourceTree folder, string[] names) => names.Any(folder.HasFile);

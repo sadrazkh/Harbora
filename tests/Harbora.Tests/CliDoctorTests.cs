@@ -173,6 +173,71 @@ public class CliDoctorTests : IDisposable
         check.Detail.Should().Contain("Node");
     }
 
+    [Theory]
+    [InlineData("composer.json", "PHP")]
+    [InlineData("requirements.txt", "Python")]
+    [InlineData("go.mod", "Go")]
+    [InlineData("App.csproj", ".NET")]
+    public void A_frontends_package_json_is_not_reported_as_the_stack_the_server_will_not_build(string marker, string stack)
+    {
+        Write("package.json", """{"scripts":{"build":"vite build"}}""");
+        Write(marker, "");
+
+        var (checks, _) = Doctor.CheckBuild(_root, new ProjectConfig());
+
+        Single(checks, "Dockerfile").Detail.Should().Contain($"auto-detected as {stack} (");
+    }
+
+    [Theory]
+    [InlineData("""{"scripts":{"start":"node a.js"}}""", "notes.txt")]
+    [InlineData("{}", "server.js")]
+    public void A_package_json_that_can_start_is_reported_as_node_beside_anything(string packageJson, string alongside)
+    {
+        Write("package.json", packageJson);
+        Write(alongside, "");
+        Write("composer.json", "{}");
+
+        var (checks, _) = Doctor.CheckBuild(_root, new ProjectConfig());
+
+        Single(checks, "Dockerfile").Detail.Should().Contain("auto-detected as Node (");
+    }
+
+    [Fact]
+    public void Doctor_names_the_stack_the_server_builds_for_every_combination_of_markers()
+    {
+        // The third copy of the order, and the one that reports it before a deploy. Where the server
+        // finds nothing (a Python manifest with no entry file) this check has nothing to compare:
+        // doctor has always accepted the manifest alone there.
+        string[] markers = ["svc/App.csproj", "go.mod", "composer.json", "requirements.txt", "main.py", "index.html", "server.js"];
+        foreach (var packageJson in new[] { """{"scripts":{"start":"x"}}""", """{"scripts":{"build":"x"}}""", "broken" })
+        {
+            Write("package.json", packageJson);
+
+            for (var mask = 0; mask < 1 << markers.Length; mask++)
+            {
+                for (var bit = 0; bit < markers.Length; bit++)
+                {
+                    var path = Path.Combine(_root, markers[bit].Replace('/', Path.DirectorySeparatorChar));
+                    var wanted = (mask & (1 << bit)) != 0;
+                    if (wanted && !File.Exists(path)) Write(markers[bit], "");
+                    if (!wanted && File.Exists(path)) File.Delete(path);
+                }
+
+                if (Harbora.Infrastructure.Deployments.Buildpacks.Detect(_root, 3000) is not { } pack) continue;
+
+                var expected = pack.Stack switch
+                {
+                    "Node.js" => "Node (",
+                    "Static (Nginx)" => "static (",
+                    var stack => stack + " ("
+                };
+                var (checks, _) = Doctor.CheckBuild(_root, new ProjectConfig());
+                Single(checks, "Dockerfile").Detail.Should().Contain($"auto-detected as {expected}",
+                    $"package.json {packageJson} with {string.Join(", ", markers.Where((_, b) => (mask & (1 << b)) != 0))}");
+            }
+        }
+    }
+
     [Fact]
     public void A_dotnet_project_anywhere_under_the_context_counts_as_a_recognised_stack()
     {

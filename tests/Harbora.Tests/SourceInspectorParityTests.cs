@@ -30,23 +30,20 @@ public class SourceInspectorParityTests : InspectorTreeTests
     {
         var inspection = Inspect();
         var judged = inspection.RootDirectory is null ? Root : Path.Combine(Root, inspection.RootDirectory);
+        var pack = Buildpacks.Detect(judged, 3000);
 
-        inspection.Stack.Should().Be(FromBuildpack(Buildpacks.Detect(judged, 3000)), because);
+        inspection.Stack.Should().Be(FromBuildpack(pack), because);
+
+        // The two places a person can read about unbuilt assets say the same thing at the same time.
+        inspection.Notes.Where(n => n.Code == "frontend-assets-not-built").Select(n => n.Message)
+            .Should().Equal(pack?.Warning is { } warning ? [warning] : Array.Empty<string>(), because);
     }
 
-    // --- Buildpacks.Detect -------------------------------------------------------------------
-
-    [Fact]
-    public void Every_combination_of_marker_files_detects_the_same_stack()
+    private void ForEveryCombination(string[] markers, string because)
     {
-        // Every marker with every other, which is what order bugs are made of. Ten files make 1024
-        // trees, one folder is reused for all of them, and a hand-picked list would only ever hold
-        // the combinations somebody thought of.
-        string[] markers =
-        [
-            "package.json", "svc/App.csproj", "go.mod", "composer.json", "index.php",
-            "requirements.txt", "Pipfile", "main.py", "manage.py", "index.html"
-        ];
+        // Every marker with every other, which is what order bugs are made of. One folder is reused
+        // for all of the trees, and a hand-picked list would only ever hold the combinations somebody
+        // thought of.
         Folder("svc");
 
         for (var mask = 0; mask < 1 << markers.Length; mask++)
@@ -60,8 +57,48 @@ public class SourceInspectorParityTests : InspectorTreeTests
             }
 
             InspectorShouldAgreeWithThePipeline(
-                "with " + string.Join(", ", markers.Where((_, bit) => (mask & (1 << bit)) != 0)));
+                $"{because} with " + string.Join(", ", markers.Where((_, bit) => (mask & (1 << bit)) != 0)));
         }
+    }
+
+    // --- Buildpacks.Detect -------------------------------------------------------------------
+
+    [Fact]
+    public void Every_combination_of_marker_files_detects_the_same_stack()
+    {
+        ForEveryCombination(
+        [
+            "package.json", "svc/App.csproj", "go.mod", "composer.json", "index.php",
+            "requirements.txt", "Pipfile", "main.py", "manage.py", "index.html"
+        ], "an empty package.json if any");
+    }
+
+    [Theory]
+    [InlineData("""{"scripts":{"start":"node a.js"}}""")]
+    [InlineData("""{"scripts":{"build":"vite build"}}""")]
+    [InlineData("""{"scripts":{"start":"node a.js","build":"vite build"}}""")]
+    [InlineData("""{"scripts":{"start":""}}""")]
+    [InlineData("{}")]
+    [InlineData("not json")]
+    public void Every_combination_beside_each_kind_of_package_json_detects_the_same_stack(string packageJson)
+    {
+        Write("package.json", packageJson);
+
+        ForEveryCombination(
+        [
+            "svc/App.csproj", "go.mod", "composer.json", "requirements.txt", "main.py", "index.html", "server.js"
+        ], packageJson);
+    }
+
+    [Fact]
+    public void A_package_json_the_inspector_will_not_read_is_treated_the_same_by_the_pipeline()
+    {
+        // The start rule is shared code, limit included, so a 2 MiB file cannot split the two.
+        Write("package.json", "{\"scripts\":{\"start\":\"x\"},\"pad\":\"" + new string('a', 2 * 1024 * 1024) + "\"}");
+        Write("composer.json", "{}");
+
+        InspectorShouldAgreeWithThePipeline("an oversized package.json");
+        Inspect().Stack.Should().Be(DetectedStack.Php);
     }
 
     [Theory]

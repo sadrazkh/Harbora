@@ -362,19 +362,34 @@ public class SourceInspectorServiceTests : InspectorTreeTests
     [Fact]
     public void A_stack_of_another_language_does_not_have_its_nested_projects_read()
     {
-        Write("package.json", "{}");
+        Write("package.json", "{\"scripts\":{\"start\":\"node a.js\"}}");
         Write("tools/Gen/Gen.csproj", Csproj("Microsoft.NET.Sdk", "Npgsql"));
 
         Inspect().Services.Should().BeEmpty();
     }
 
     [Fact]
-    public void A_laravel_app_that_builds_as_node_still_needs_its_database()
+    public void Every_languages_file_is_read_even_when_node_wins_the_build()
     {
-        Write("package.json", "{}");
+        Write("package.json", "{\"scripts\":{\"start\":\"node a.js\"}}");
         Write("composer.json", "{\"require\":{\"ext-pgsql\":\"*\"}}");
 
-        Service(Inspect(), DetectedServiceKind.Postgres).Certain.Should().BeTrue();
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.Node);
+        Service(result, DetectedServiceKind.Postgres).Certain.Should().BeTrue();
+    }
+
+    [Fact]
+    public void A_frontends_package_json_is_still_read_when_it_gives_way()
+    {
+        Write("package.json", PackageJson("ioredis"));
+        Write("composer.json", "{}");
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.Php);
+        Service(result, DetectedServiceKind.Redis).Certain.Should().BeTrue();
     }
 
     // --- Prisma, Laravel, URLs, compose ------------------------------------------------------

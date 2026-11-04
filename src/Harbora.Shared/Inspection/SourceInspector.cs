@@ -61,7 +61,11 @@ public static class SourceInspector
 
         foreach (var file in facts.UnreadableFiles.Concat(unreadableExamples))
             notes.Add(InspectionNotes.ManifestUnreadable(file));
-        if (tree.WalkWasCutShort) notes.Add(InspectionNotes.TreeTooLarge());
+
+        // A Node app that can start never needed the search to decide anything, only to word a note,
+        // and an upload that includes node_modules should not be told it is too large for that.
+        if (tree.WalkWasCutShort && !(stack == DetectedStack.Node && NodeStartRule.CanStart(app)))
+            notes.Add(InspectionNotes.TreeTooLarge());
 
         return new SourceInspection(
             stack,
