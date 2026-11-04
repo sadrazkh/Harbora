@@ -114,7 +114,7 @@ public sealed class LaunchWithRealInspectorTests
     }
 
     [Fact]
-    public async Task A_zip_that_wraps_everything_in_one_folder_builds_from_that_folder()
+    public async Task A_zip_that_wraps_everything_in_one_folder_builds_as_if_it_had_not()
     {
         using var h = new LaunchHarness();
         var id = await UploadAsync(h, "shop-main-0123456789abcdef0123456789abcdef.zip", new()
@@ -125,10 +125,74 @@ public sealed class LaunchWithRealInspectorTests
 
         var proposal = await h.Request().ProposeAsync(id, default);
 
-        proposal!.Inspection.RootDirectory.Should().Be("shop-main");
-        proposal.Defaults.RootDirectory.Should().Be("shop-main");
+        proposal!.Inspection.RootDirectory.Should().BeNull("the wrapper is a fact about this one file, and the next upload will not have it");
+        proposal.Defaults.RootDirectory.Should().BeNull();
         proposal.Inspection.Stack.Should().Be(DetectedStack.Node);
         proposal.Defaults.Services.Should().ContainSingle().Which.Type.Should().Be(ManagedServiceType.PostgreSql);
+
+        (await h.Request().ConfirmAsync(id, proposal.Defaults, null, default)).Ok.Should().BeTrue();
+        h.Store().Apps.IgnoreQueryFilters().Single().BuildContextPath.Should().Be(".", "the top of whatever arrives next");
+    }
+
+    [Fact]
+    public async Task Several_apps_in_a_wrapper_are_offered_without_it()
+    {
+        using var h = new LaunchHarness();
+        var id = await UploadAsync(h, "mono-main-0123456789abcdef0123456789abcdef.zip", new()
+        {
+            ["mono-main/api/package.json"] = NodeWithPostgres,
+            ["mono-main/web/package.json"] = NodeWithPostgres
+        });
+
+        (await h.Request().ProposeAsync(id, default))!.Inspection.RootCandidates.Should().BeEquivalentTo(["api", "web"]);
+    }
+
+    [Fact]
+    public async Task A_zip_refused_for_what_is_in_it_says_why_in_persian_too_rather_than_calling_it_empty()
+    {
+        using var h = new LaunchHarness();
+        h.Reader.UseRealInspector = true;
+        var uploads = Path.Combine(h.WorkDir, "_uploads");
+        Directory.CreateDirectory(uploads);
+        var path = Path.Combine(uploads, "bad-0123456789abcdef0123456789abcdef.zip");
+        using (var file = File.Create(path))
+        using (var zip = new ZipArchive(file, ZipArchiveMode.Create))
+        {
+            using var writer = new StreamWriter(zip.CreateEntry("../../outside.txt").Open());
+            writer.Write("x");
+        }
+
+        var id = (await h.Request().StartAsync(new LaunchStartRequest
+        {
+            WorkspaceId = h.WorkspaceId, UserId = h.UserId, Source = LaunchSourceKind.Upload, ArchivePath = path
+        }, default)).Value;
+        await h.Worker().InspectAsync(id, default);
+
+        var view = await h.Request().GetAsync(id, default);
+        view!.Status.Should().Be(LaunchStatus.InspectFailed);
+        view.FailureMessage.Should().Contain("escapes");
+        view.FailureMessageFa.Should().Contain("بیرون").And.NotContain("خالی");
+    }
+
+    [Fact]
+    public void Too_large_a_zip_is_not_told_to_try_the_same_thing_again_as_if_it_were_empty()
+    {
+        var (message, messageFa) = LaunchService.ArchiveFailure(Harbora.Infrastructure.Deployments.SourceArchive.TooLarge());
+
+        message.Should().Contain("2048 MB");
+        messageFa.Should().Contain("2048").And.Contain("مگابایت").And.NotContain("خالی");
+    }
+
+    [Fact]
+    public void Anything_else_gets_the_sentence_and_never_the_panels_own_words()
+    {
+        var (message, messageFa) = LaunchService.ArchiveFailure(new FileNotFoundException("/var/lib/harbora/_uploads/x.zip"));
+        message.Should().NotContain("/var/lib");
+        messageFa.Should().NotContain("/var/lib");
+
+        (message, messageFa) = LaunchService.ArchiveFailure(new InvalidOperationException("/var/lib/harbora/_uploads/y.zip"));
+        message.Should().NotContain("/var/lib");
+        messageFa.Should().NotContain("/var/lib");
     }
 
     /// <summary>What Docker itself will take as a container name and a tag's repository, which a test here can only state.</summary>

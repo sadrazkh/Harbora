@@ -326,14 +326,15 @@ public sealed partial class LaunchService(
     }
 
     /// <summary>
-    /// <see cref="SourceArchive"/> words its own refusals for a person. Anything else, a file gone from
-    /// the disk say, would be quoting the panel's own paths at them, so it only gets the sentence.
+    /// <see cref="SourceArchive"/> words its own refusals for a person, in both languages. Anything else, a
+    /// file gone from the disk say, would be quoting the panel's own paths at them, so it only gets the sentence.
     /// </summary>
-    private static (string Message, string MessageFa) ArchiveFailure(Exception ex)
+    internal static (string Message, string MessageFa) ArchiveFailure(Exception ex)
     {
-        var reason = ex is InvalidOperationException ? LogText.Clean(ex.Message).Trim() + " " : "";
+        var reason = ex is SourceArchiveRefusedException ? LogText.Clean(ex.Message).Trim() + " " : "";
+        var reasonFa = ex is SourceArchiveRefusedException refused ? LogText.Clean(refused.MessageFa).Trim() + " " : "";
         return ($"Could not read this file. {reason}Zip the project's folder and upload it again. Nothing was created.",
-            $"این فایل خوانده نشد؛ خالی است یا zip و tar.gz معتبری نیست. پوشهٔ پروژه را zip کنید و دوباره آپلود کنید. چیزی ساخته نشد.");
+            $"این فایل خوانده نشد. {reasonFa}پوشهٔ پروژه را zip کن و دوباره آپلود کن. چیزی ساخته نشد.");
     }
 
     /// <summary>
