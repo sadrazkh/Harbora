@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 340" width="1280" height="340" role="img" aria-label="Harbora — a self-hosted, multi-tenant PaaS">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f0d17"/>
+      <stop offset="1" stop-color="#191330"/>
+    </linearGradient>
+    <linearGradient id="brand" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#a78bfa"/>
+      <stop offset="1" stop-color="#6d4aff"/>
+    </linearGradient>
+    <linearGradient id="mark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#c4b5fd"/>
+      <stop offset="1" stop-color="#6d4aff"/>
+    </linearGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#ffffff" stroke-opacity="0.035"/>
+    </pattern>
+    <radialGradient id="halo" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#6d4aff" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#6d4aff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="7" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <style>
+      text { font-family: "Segoe UI", Vazirmatn, Tahoma, "Helvetica Neue", Arial, sans-serif; }
+      .mono { font-family: Consolas, "SF Mono", Menlo, monospace; }
+      .flow { stroke-dasharray: 6 12; animation: flow 1.5s linear infinite; }
+      @keyframes flow { to { stroke-dashoffset: -36; } }
+      .beat { animation: beat 3s ease-in-out infinite; }
+      .beat.b { animation-delay: .6s; }
+      .beat.c { animation-delay: 1.2s; }
+      .beat.d { animation-delay: 1.8s; }
+      @keyframes beat { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+      @media (prefers-reduced-motion: reduce) { .flow, .beat { animation: none; } }
+    </style>
+  </defs>
+
+  <rect width="1280" height="340" rx="18" fill="url(#bg)"/>
+  <rect width="1280" height="340" rx="18" fill="url(#grid)"/>
+  <ellipse cx="300" cy="150" rx="420" ry="300" fill="url(#halo)"/>
+
+  <!-- the panel's own mark, 32x32 scaled to 96 -->
+  <g transform="translate(82 104) scale(3)" filter="url(#glow)">
+    <path d="M16 2.5 28 9.4v13.2L16 29.5 4 22.6V9.4L16 2.5Z" fill="url(#mark)" opacity=".18"/>
+    <path d="m9 11.6 7-4 7 4-7 4-7-4Zm0 2.9 5.6 3.2v6.5L9 21v-6.5Zm14 0v6.5l-5.6 3.2v-6.5l5.6-3.2Z" fill="url(#mark)"/>
+  </g>
+
+  <text x="206" y="150" font-size="72" font-weight="800" fill="#f3f0ff" letter-spacing="-2">Harbora</text>
+  <text x="210" y="192" font-size="23" fill="#b6aed0">A self-hosted, multi-tenant PaaS — one command to install.</text>
+  <!-- A pure-Persian run shapes right-to-left on its own; the line box still starts at x, so it
+       lines up with the English above it instead of reaching backwards off the canvas. -->
+  <text x="210" y="232" font-size="23" fill="#d6cfee">پلتفرم خودمیزبانِ استقرار، با یک دستور</text>
+  <text x="212" y="276" font-size="15" fill="#8b82a8" class="mono">Deploy · Databases · Backups · Functions · Nodes · AI</text>
+
+  <!-- right: the pipeline, panel to nodes -->
+  <!-- 790 + the widest child (474) = 1264, which keeps a 16px margin inside the 1280 canvas.
+       At 828 the node cards ran 22px off the right edge. -->
+  <g transform="translate(790 54)">
+    <rect x="0" y="50" width="120" height="52" rx="12" fill="#1b1730" stroke="#3b3166"/>
+    <text x="60" y="81" font-size="14" fill="#c4b5fd" text-anchor="middle" class="mono">git push</text>
+
+    <rect x="156" y="36" width="128" height="80" rx="14" fill="#201a3a" stroke="#6d4aff" stroke-opacity=".6"/>
+    <text x="220" y="70" font-size="14" fill="#f3f0ff" text-anchor="middle">Harbora</text>
+    <text x="220" y="92" font-size="12" fill="#9b93bb" text-anchor="middle" class="mono">build · route</text>
+
+    <path class="flow" d="M120 76H156" stroke="#a78bfa" stroke-width="2" fill="none"/>
+    <path class="flow" d="M284 76h44" stroke="#a78bfa" stroke-width="2" fill="none"/>
+    <path class="flow" d="M328 76h24v-52h24" stroke="#a78bfa" stroke-width="2" fill="none" stroke-opacity=".75"/>
+    <path class="flow" d="M328 76h24v52h24" stroke="#a78bfa" stroke-width="2" fill="none" stroke-opacity=".75"/>
+
+    <g class="beat">
+      <rect x="376" y="0" width="98" height="46" rx="11" fill="#1b1730" stroke="#3b3166"/>
+      <circle cx="396" cy="23" r="5" fill="#34d399"/>
+      <text x="410" y="28" font-size="13" fill="#b6aed0" class="mono">node-01</text>
+    </g>
+    <g class="beat b">
+      <rect x="376" y="54" width="98" height="46" rx="11" fill="#1b1730" stroke="#3b3166"/>
+      <circle cx="396" cy="77" r="5" fill="#34d399"/>
+      <text x="410" y="82" font-size="13" fill="#b6aed0" class="mono">node-02</text>
+    </g>
+    <g class="beat c">
+      <rect x="376" y="108" width="98" height="46" rx="11" fill="#1b1730" stroke="#3b3166"/>
+      <circle cx="396" cy="131" r="5" fill="#fbbf24"/>
+      <text x="410" y="136" font-size="13" fill="#b6aed0" class="mono">node-03</text>
+    </g>
+
+    <text x="0" y="186" font-size="13" fill="#6f678c" class="mono">no inbound port · mTLS · works behind NAT</text>
+  </g>
+</svg>
