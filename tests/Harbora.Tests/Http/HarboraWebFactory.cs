@@ -420,6 +420,9 @@ public sealed class RecordingDeploymentEngine : IDeploymentEngine
     /// <summary>Set to make the next queue attempt fail the way a rollback in flight does.</summary>
     public string? RefuseWith { get; set; }
 
+    /// <summary>Set to answer the way the engine does mid-build: nothing queued, and that deployment's id.</summary>
+    public Guid? CoalesceOnto { get; set; }
+
     /// <summary>Set to make the next Approve/Reject call fail the way a self-approval or an
     /// already-decided approval does.</summary>
     public string? RefuseDecisionWith { get; set; }
@@ -427,6 +430,7 @@ public sealed class RecordingDeploymentEngine : IDeploymentEngine
     public Task<Guid> QueueDeploymentAsync(DeploymentRequest request, CancellationToken ct)
     {
         if (RefuseWith is { } reason) throw new InvalidOperationException(reason);
+        if (CoalesceOnto is { } inFlight) return Task.FromResult(inFlight);
         lock (_queued) _queued.Add(request);
         return Task.FromResult(Guid.CreateVersion7());
     }

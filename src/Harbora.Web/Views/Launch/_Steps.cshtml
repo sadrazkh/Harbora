@@ -10,6 +10,8 @@
         var isDeploy = step.Key == LaunchStepKeys.Deploy;
         // The deployment page answers at /deployments/details/{id}; there is no shorter address for it.
         var link = isDeploy && view.DeploymentId is { } deployment ? $"/deployments/details/{deployment}" : step.LinkPath;
+        // The deployment's page went with the app.
+        if (view.AppGone) link = null;
         <li class="flex items-start gap-3 rounded-lg px-3 py-2" data-launch-step="@step.Key" data-launch-step-state="@step.State">
             @switch (step.State)
             {

@@ -24,8 +24,8 @@ public static class UploadedArchive
     /// </summary>
     public const long MaxBytes = 512L * 1024 * 1024;
 
-    /// <summary>What the file input offers. The real test is <see cref="LooksLikeArchive"/>.</summary>
-    public const string Accept = ".zip,.tar.gz,.tgz";
+    /// <summary>What the file input offers. The real test is <see cref="WhyNot"/>.</summary>
+    public const string Accept = ".zip";
 
     private static string Directory(string workDir) => Path.Combine(workDir, "_uploads");
 
@@ -62,20 +62,32 @@ public static class UploadedArchive
     }
 
     /// <summary>
-    /// The first two bytes, the same way the extractor tells the two formats apart. Refusing here says
-    /// so on the form; letting a Word document through says so later, as a failed build.
+    /// Why a browser's file will not do, or null when it is a zip. The first two bytes, the same way the
+    /// extractor tells the formats apart. Refusing here says so on the form; letting a Word document
+    /// through says so later, as a failed build.
+    ///
+    /// <para>
+    /// A zip and nothing else, though the extractor reads a gzipped tar too. <c>node_modules</c> and
+    /// <c>.env</c> are left out of a zip as it is extracted, and that is what the upload form promises.
+    /// A tar is the CLI's format, and it arrives already filtered by the CLI's packer, on a route of
+    /// its own; from a browser it would keep them.
+    /// </para>
     /// </summary>
-    public static bool LooksLikeArchive(IFormFile file)
+    public static string? WhyNot(IFormFile file, bool isFa)
     {
         using var stream = file.OpenReadStream();
         Span<byte> head = stackalloc byte[2];
-        return stream.ReadAtLeast(head, 2, throwOnEndOfStream: false) == 2
-            && head[0] switch
-            {
-                0x1F => head[1] == 0x8B,
-                0x50 => head[1] == 0x4B,
-                _ => false
-            };
+        var read = stream.ReadAtLeast(head, 2, throwOnEndOfStream: false);
+
+        if (read == 2 && head[0] == 0x50 && head[1] == 0x4B) return null;
+
+        return read == 2 && head[0] == 0x1F && head[1] == 0x8B
+            ? isFa
+                ? "از مرورگر فقط zip می‌گیرم. پوشه‌ی پروژه را zip کن و همان را بفرست."
+                : "A browser can only send me a zip. Zip your project folder and send that."
+            : isFa
+                ? "این فایل zip نیست. پوشه‌ی پروژه را zip کن و همان را بفرست."
+                : "That file isn't a zip. Zip your project folder and send that.";
     }
 
     /// <summary>Removes an archive nothing is going to read.</summary>

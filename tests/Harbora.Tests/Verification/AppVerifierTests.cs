@@ -6,6 +6,7 @@ using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
 using Harbora.Domain.Launch;
 using Harbora.Infrastructure.Deployments;
+using Harbora.Infrastructure.Launch;
 using Harbora.Infrastructure.Networking;
 using Harbora.Infrastructure.Verification;
 using Harbora.Tests.Fakes;
@@ -1063,6 +1064,52 @@ public class AppVerifierTests
         row = await h.Db.AppVerifications.IgnoreQueryFilters().SingleAsync();
         row.StartedAt.Should().Be(Now);
         row.CompletedAt.Should().Be(Now.AddSeconds(30));
+    }
+
+    [Fact]
+    public async Task A_fault_in_the_panels_own_database_is_a_report_that_has_not_finished_and_stores_nothing()
+    {
+        var h = new VerifierHarness();
+        var app = h.GivenDeployedApp();
+        var verifier = h.Verifier();
+        await h.Db.DisposeAsync();
+
+        var report = await verifier.RunAsync(app.Id, null, InFiveMinutes, default);
+
+        report.IsComplete.Should().BeFalse("a verdict on a blip is what told somebody their app was up");
+        report.CompletedAt.Should().BeNull();
+        report.HasFailures.Should().BeFalse("this says nothing about the app either way");
+
+        await using var fresh = h.Open(SystemWorkspaceScope.Instance);
+        (await fresh.AppVerifications.IgnoreQueryFilters().AnyAsync()).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_hung_daemons_whole_report_is_not_called_a_success()
+    {
+        var h = new VerifierHarness();
+        var app = h.GivenDeployedApp(kind: ServiceKind.Worker);
+        h.Engines.Unreachable(h.ServerId, "Server 'x' cannot be reached.");
+
+        var report = await RunAsync(h, app);
+
+        report.IsComplete.Should().BeTrue();
+        report.HasFailures.Should().BeFalse();
+        LaunchAdvance.VerdictOn(report.Checks, ServiceKind.Worker).Should().Be(LaunchStatus.SucceededWithProblems);
+    }
+
+    [Theory]
+    [InlineData(ServiceKind.Cron)]
+    [InlineData(ServiceKind.ReleaseTask)]
+    public async Task A_real_run_of_a_kind_that_runs_and_exits_stays_a_success(ServiceKind kind)
+    {
+        var h = new VerifierHarness();
+        var app = h.GivenApp(kind: kind);
+
+        var report = await RunAsync(h, app);
+
+        report.Checks.Should().OnlyContain(c => c.Status == AppCheckStatus.Skipped);
+        LaunchAdvance.VerdictOn(report.Checks, kind).Should().Be(LaunchStatus.Succeeded);
     }
 
     [Fact]

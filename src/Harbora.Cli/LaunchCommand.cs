@@ -305,7 +305,8 @@ public sealed class LaunchCommand : AsyncCommand<LaunchCommand.Settings>
         {
             Say("✗", "red", refusal);
             Say("", "default", "Nothing was created.");
-            Whole($"  Add credit here, then run this again: {api.Server}/billing");
+            if (LaunchPlan.RefusalIsAboutMoney(quote))
+                Whole($"  Add credit here, then run this again: {api.Server}/billing");
             await AbandonAsync(api, id);
             return 1;
         }
@@ -449,6 +450,15 @@ public sealed class LaunchCommand : AsyncCommand<LaunchCommand.Settings>
         var status = LaunchPlan.Text(view, "status");
         AnsiConsole.WriteLine();
 
+        // Whatever the status still says. A failed launch goes on to say why it stopped, which is still true.
+        var gone = LaunchPlan.AppGone(view);
+        if (gone && status != LaunchPlan.Failed)
+        {
+            Say("!", "yellow", "The app this launch made has since been deleted, so there is nothing to open.");
+            ShowWhatExists(api, view);
+            return 1;
+        }
+
         switch (status)
         {
             case LaunchPlan.Succeeded:
@@ -457,22 +467,28 @@ public sealed class LaunchCommand : AsyncCommand<LaunchCommand.Settings>
                 break;
 
             case LaunchPlan.SucceededWithProblems:
-                ShowAddress(view, "It is running, but something is wrong", good: false);
+                if (LaunchPlan.ProblemFound(view))
+                {
+                    ShowAddress(view, "It is running, but something is wrong", good: false);
+                }
+                else
+                {
+                    // Nothing was found to be wrong, and saying otherwise sends somebody looking for it.
+                    ShowAddress(view, "It came up, but could not be confirmed as working", good: false);
+                    if (LaunchPlan.NotChecked(view) is { Count: > 0 } notChecked)
+                        Say("", "default", $"Could not be checked: {string.Join(", ", notChecked)}");
+                }
                 foreach (var check in LaunchPlan.ChecksWorstFirst(view)) ShowCheck(api, check);
                 break;
 
             case LaunchPlan.Failed:
                 Say("✗", "red", $"It stopped at: {LaunchPlan.FailedStepTitle(view) ?? "an unknown step"}");
                 if (LaunchPlan.Text(view, "failureMessage") is { Length: > 0 } message) Say("", "default", message);
+                if (gone) Say("!", "yellow", "The app this launch made has since been deleted.");
 
-                var exists = LaunchPlan.WhatExists(view, api.Server);
-                if (exists.Count > 0)
-                {
-                    Say("", "default", "What exists so far:");
-                    foreach (var line in exists) Whole($"  - {line}");
-                }
+                ShowWhatExists(api, view);
 
-                if (view.TryGetProperty("canRetry", out var canRetry) && canRetry.ValueKind == JsonValueKind.True)
+                if (!gone && view.TryGetProperty("canRetry", out var canRetry) && canRetry.ValueKind == JsonValueKind.True)
                     Whole($"  Trying again could help. Do it on the panel: {LaunchPlan.LaunchPage(api.Server, id)}");
                 break;
 
@@ -487,6 +503,15 @@ public sealed class LaunchCommand : AsyncCommand<LaunchCommand.Settings>
             await RememberAsync(api, run, view, ct);
 
         return LaunchPlan.ExitCode(status);
+    }
+
+    private static void ShowWhatExists(ApiClient api, JsonElement view)
+    {
+        var exists = LaunchPlan.WhatExists(view, api.Server);
+        if (exists.Count == 0) return;
+
+        Say("", "default", "What exists so far:");
+        foreach (var line in exists) Whole($"  - {line}");
     }
 
     /// <summary>
@@ -566,7 +591,7 @@ public sealed class LaunchCommand : AsyncCommand<LaunchCommand.Settings>
         if (description.Kept.Count > 0)
             Say("", "default", $"It will set these from your example file: {string.Join(", ", description.Kept)}");
         if (description.Unattached.Count > 0)
-            Say("!", "yellow", $"With that service turned down, nothing will set {string.Join(", ", description.Unattached)}. Pass --set if the app needs them.");
+            Say("!", "yellow", $"With no service to answer them, nothing will set {string.Join(", ", description.Unattached)}. Pass --set if the app needs them.");
     }
 
     /// <summary>Stops with nothing created, and lets go of the upload now rather than when the sweep finds it.</summary>

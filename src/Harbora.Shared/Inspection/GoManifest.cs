@@ -33,6 +33,43 @@ internal static class GoManifest
         }
     }
 
+    /// <summary>The <c>go 1.23</c> line, patch level ignored: the image for a minor is its newest patch. Null when there is none to read.</summary>
+    public static Version? LanguageVersion(SourceTree app)
+    {
+        if (app.ReadText(File) is not { } text) return null;
+
+        foreach (var raw in text.Split('\n'))
+        {
+            var words = raw.Trim().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (words is not ["go", var version, ..]) continue;
+
+            var parts = version.Split('.');
+            return parts.Length >= 2
+                   && int.TryParse(parts[0], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var major)
+                   && int.TryParse(new string(parts[1].TakeWhile(char.IsAsciiDigit).ToArray()), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var minor)
+                ? new Version(major, minor)
+                : null;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The one <c>cmd/*</c> to build, for a project with no <c>main.go</c> at its top, which is the
+    /// standard layout and where <c>go build .</c> finds nothing to compile. Null when the top has one, or
+    /// when there are several and nothing says which. Only a name a shell line can hold plainly.
+    /// </summary>
+    public static string? SoleCommand(SourceTree app)
+    {
+        if (app.HasFile("main.go") || !app.HasDirectory("cmd")) return null;
+
+        var cmd = app.Scope("cmd");
+        var commands = cmd.AppFolders().Where(f => cmd.HasFile(f + "/main.go")).ToList();
+        return commands is [var only] && only.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.')
+            ? "./cmd/" + only
+            : null;
+    }
+
     private static bool IsRequireBlock(string line) =>
         line.StartsWith("require", StringComparison.Ordinal) && line["require".Length..].TrimStart().StartsWith('(');
 

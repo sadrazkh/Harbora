@@ -37,12 +37,13 @@ internal static class KindDetector
 
         if (ReadProcfile(app) is { } declared)
         {
-            // A `web:` command is left to the image's own CMD, except where that CMD is `npm start`
-            // with nothing to start. There it is the app's only way to run, and without it a compiled
-            // backend would be taken for a frontend and given nginx.
-            var cannotStart = stack == DetectedStack.Node && !NodeStartRule.CanStart(app);
-            return declared.Kind == DetectedAppKind.Web && !cannotStart ? (DetectedAppKind.Web, null) : declared;
+            return declared.Kind == DetectedAppKind.Web && !ImageCanRun(stack, declared.Command)
+                ? (DetectedAppKind.Web, null)
+                : declared;
         }
+
+        if (stack == DetectedStack.Node && IsNuxtServerBuild(app, facts))
+            return (DetectedAppKind.Web, NuxtServer);
 
         if (facts.DotNetSdk is { } sdk)
         {
@@ -60,6 +61,39 @@ internal static class KindDetector
 
         return (hasWorker && !hasWeb ? DetectedAppKind.Worker : DetectedAppKind.Web, null);
     }
+
+    /// <summary>
+    /// Whether a <c>web:</c> line can be what this stack's image runs. It usually says more than the image
+    /// would: <c>gunicorn app:app</c> beside an <c>app.py</c> is the real server, where <c>python app.py</c>
+    /// is a loopback development server at best. That only holds where the image keeps the source and its
+    /// interpreter. A Go or .NET image holds one compiled output and already runs it, a static one holds
+    /// nginx, and a line written for Heroku names paths that exist only there (<c>bin/server</c>), so taking
+    /// it would break what works. A Dockerfile says for itself how it starts. Nor does
+    /// <c>heroku-php-apache2</c> exist anywhere but on Heroku, while this PHP image has its own Apache.
+    /// </summary>
+    private static bool ImageCanRun(DetectedStack stack, string? command) => stack switch
+    {
+        DetectedStack.Node or DetectedStack.Python or DetectedStack.Unknown => true,
+        DetectedStack.Php => command?.Contains("heroku-php-", StringComparison.Ordinal) != true,
+        _ => false
+    };
+
+    private const string NuxtServer = "node .output/server/index.mjs";
+
+    /// <summary>
+    /// A default Nuxt project has a <c>build</c> and no <c>start</c>, which is the shape of a frontend, but
+    /// its build writes a server rather than a site: the frontend image would stop saying there is no
+    /// <c>index.html</c>. Its output is the same whatever the project's settings, so this is the one
+    /// framework whose start command can be known. <c>nuxt generate</c> really does write a site, and is
+    /// left to be one. SvelteKit is not treated this way because its adapter decides what comes out.
+    /// </summary>
+    private static bool IsNuxtServerBuild(SourceTree app, ProjectFacts facts) =>
+        facts.Has(Ecosystem.Node, Nuxt) &&
+        !NodeStartRule.CanStart(app) &&
+        NodeManifest.Script(app, "build") is { } build &&
+        !build.Contains("generate", StringComparison.Ordinal);
+
+    private static readonly HashSet<string> Nuxt = new(StringComparer.Ordinal) { "nuxt" };
 
     /// <summary>Null when there is no Procfile or it names neither process, so the other evidence gets its say.</summary>
     private static (DetectedAppKind Kind, string? Command)? ReadProcfile(SourceTree app)

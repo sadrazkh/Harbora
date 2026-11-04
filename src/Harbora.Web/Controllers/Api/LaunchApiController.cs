@@ -176,6 +176,7 @@ public sealed class LaunchApiController(
             quote.Currency,
             quote.Exempt,
             quote.Refusal,
+            quote.RefusalIsAboutMoney,
             firstHour = MinorUnits.Format(quote.FirstHourMinor, quote.Currency),
             perHour = MinorUnits.Format(perHour, quote.Currency),
             balance = quote.BalanceMinor is { } balance ? MinorUnits.Format(balance, quote.Currency) : null

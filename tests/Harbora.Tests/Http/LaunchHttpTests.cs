@@ -89,11 +89,14 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
         IReadOnlyList<AppCheck>? checks = null,
         bool canRetry = false,
         bool? terminal = null,
-        LaunchSourceKind kind = LaunchSourceKind.Git) =>
+        LaunchSourceKind kind = LaunchSourceKind.Git,
+        bool appGone = false,
+        IReadOnlyList<LaunchCreatedThing>? created = null) =>
         new(id ?? Guid.CreateVersion7(), status, kind, source, appId, appName, publicUrl, deploymentId, failure, failureFa,
             steps ?? Steps(), checks ?? [], canRetry,
             terminal ?? status is LaunchStatus.Succeeded or LaunchStatus.SucceededWithProblems or LaunchStatus.Failed
-                or LaunchStatus.InspectFailed or LaunchStatus.Abandoned);
+                or LaunchStatus.InspectFailed or LaunchStatus.Abandoned,
+            appGone, created);
 
     private Guid Given(LaunchView view, LaunchProposal? proposal = null, LaunchQuote? quote = null, Guid? workspace = null)
     {
@@ -145,7 +148,7 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
                 new LaunchEnvField("JWT_SECRET", EnvVarDisposition.GeneratedSecret, null, IsSecret: true, ".env.example"),
                 new LaunchEnvField("SESSION_SECRET", EnvVarDisposition.GeneratedSecret, null, IsSecret: true, ".env.example"),
                 new LaunchEnvField("LOG_LEVEL", EnvVarDisposition.KeepExample, "info", IsSecret: false, ".env.example"),
-                new LaunchEnvField("DB_HOST", EnvVarDisposition.AliasOfAttach, null, IsSecret: false, ".env.example")
+                new LaunchEnvField("DB_HOST", EnvVarDisposition.AliasOfAttach, null, IsSecret: false, ".env.example", ManagedServiceType.PostgreSql)
             ],
             [
                 new LaunchServiceOption(ManagedServiceType.PostgreSql, "PostgreSQL", "پستگرس", Detected(DetectedServiceKind.Postgres, certain: true)),
@@ -188,7 +191,7 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
         html.Should().Contain("مخزن خصوصی است؟ یا شاخه‌ی دیگری می‌خواهی؟");
 
         // A real file input in a real multipart form, which is what makes it work with no script.
-        html.Should().Contain("type=\"file\"").And.Contain("accept=\".zip,.tar.gz,.tgz\"");
+        html.Should().Contain("type=\"file\"").And.Contain("accept=\".zip\"");
         html.Should().Contain("enctype=\"multipart/form-data\"");
 
         html.Should().Contain("href=\"/templates\"").And.Contain("href=\"/apps/create\"");
@@ -378,18 +381,34 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
         UploadedFiles().Count().Should().Be(before);
     }
 
-    [Fact]
-    public async Task A_tar_gz_is_as_good_as_a_zip()
+    private static byte[] GzippedTar()
     {
-        var client = await Owner();
-        var token = await client.AntiforgeryTokenFrom("/launch");
         var bytes = Zip();
         bytes[0] = 0x1F;
         bytes[1] = 0x8B;
+        return bytes;
+    }
 
-        var response = await client.PostAsync("/launch", Upload(token, bytes, "shop.tar.gz"));
+    /// <summary>
+    /// The page promises to leave out <c>node_modules</c> and <c>.env</c>, and that happens only as a zip
+    /// is extracted. Only the CLI sends a tar, because its packer has already filtered it.
+    /// </summary>
+    [Theory]
+    [InlineData("shop.tar.gz")]
+    [InlineData("shop.tgz")]
+    [InlineData("called-a-zip-but-is-not.zip")]
+    public async Task A_gzipped_tar_from_a_browser_is_told_to_send_a_zip_and_never_written(string fileName)
+    {
+        var client = await Owner();
+        var token = await client.AntiforgeryTokenFrom("/launch");
+        var before = UploadedFiles().Count();
 
-        response.StatusCode.Should().Be(HttpStatusCode.Found);
+        var response = await client.PostAsync("/launch", Upload(token, GzippedTar(), fileName));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await BodyAsync(response)).Should().Contain("از مرورگر فقط zip می‌گیرم");
+        Launches.Started.Should().BeEmpty();
+        UploadedFiles().Count().Should().Be(before);
     }
 
     [Fact]
@@ -605,8 +624,244 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
         details.Should().Contain("data-launch-field=\"LOG_LEVEL\"").And.Contain("value=\"info\"");
         details.Should().Contain("data-launch-aliases").And.Contain("DB_HOST");
 
+        // Blank here does not mean what the sentence used to say whenever a folder was what got read.
+        details.Should().Contain("خالی یعنی همان ریشه.");
+
         var asked = html[html.IndexOf("data-launch-asked", StringComparison.Ordinal)..html.IndexOf("data-launch-details", StringComparison.Ordinal)];
         asked.Should().NotContain("LOG_LEVEL").And.NotContain("DB_HOST").And.NotContain("JWT_SECRET");
+    }
+
+    [Fact]
+    public async Task A_folder_read_from_is_what_a_blank_field_goes_back_to_and_the_hint_says_so()
+    {
+        // The service puts the inspected folder back when this is blank, so "the top level" would be false.
+        var (view, proposal) = Confirmable(Inspection(root: "backend"));
+        var id = Given(view, proposal);
+
+        var html = await PageAsync(await Owner(), $"/launch/{id}");
+
+        html.Should().NotContain("خالی یعنی همان ریشه.");
+        Regex.Replace(html[html.IndexOf("data-launch-root-hint", StringComparison.Ordinal)..], "<[^>]+>", "")
+            .Should().Contain("همان پوشه‌ای می‌ماند که این‌ها را از آن خواندم: backend");
+    }
+
+    // ---- somebody with their own database ----------------------------------------------------------
+
+    private static readonly IReadOnlyList<LaunchEnvField> ConnectionFields =
+    [
+        new("DATABASE_URL", EnvVarDisposition.ProvidedByAttach, null, IsSecret: false, ".env.example", ManagedServiceType.PostgreSql),
+        new("DB_HOST", EnvVarDisposition.AliasOfAttach, null, IsSecret: false, ".env.example", ManagedServiceType.PostgreSql),
+        new("REDIS_URL", EnvVarDisposition.ProvidedByAttach, null, IsSecret: false, ".env.example", ManagedServiceType.Redis)
+    ];
+
+    private (Guid Id, LaunchProposal Proposal) GivenConnections(IReadOnlyList<LaunchEnvField>? fields = null)
+    {
+        var (view, proposal) = Confirmable(fields: fields ?? ConnectionFields);
+        return (Given(view, proposal, Charged), proposal);
+    }
+
+    private static string NameOnTheLine(string html, string name) =>
+        Regex.Match(html[html.IndexOf("data-launch-aliases", StringComparison.Ordinal)..], $"<code[^>]*>{name}</code>").Value;
+
+    [Fact]
+    public async Task The_quiet_line_promises_only_what_a_ticked_service_will_set()
+    {
+        var (id, _) = GivenConnections();
+
+        var html = await PageAsync(await Owner(), $"/launch/{id}");
+
+        Tag(html, "data-launch-aliases").Should().NotContain("hidden");
+        NameOnTheLine(html, "DATABASE_URL").Should().NotContain("hidden");
+        NameOnTheLine(html, "DB_HOST").Should().NotContain("hidden");
+        NameOnTheLine(html, "REDIS_URL").Should().Contain("hidden", "Redis is only a guess here, and a guess is not ticked");
+    }
+
+    [Fact]
+    public async Task With_nothing_ticked_the_quiet_line_promises_nothing_at_all()
+    {
+        var (id, _) = GivenConnections();
+        var client = await Owner();
+        var token = await client.AntiforgeryTokenFrom($"/launch/{id}");
+
+        // They unticked Postgres and were sent back to the screen, so this is what the server now knows.
+        var html = await BodyAsync(await client.PostFormAsync($"/launch/{id}/confirm", token, ("Name", "shop"), ("Recheck", "1")));
+
+        Tag(html, "data-launch-aliases").Should().Contain("hidden");
+        NameOnTheLine(html, "DATABASE_URL").Should().Contain("hidden");
+    }
+
+    [Fact]
+    public async Task Every_connection_gets_an_input_because_with_no_script_nothing_could_draw_one_later()
+    {
+        var (id, _) = GivenConnections();
+
+        var html = await PageAsync(await Owner(), $"/launch/{id}");
+
+        html.Should().Contain("دیتابیس را جای دیگری داری؟ اینجا بنویس");
+
+        // The script is what hides one a ticked service answers, so with no script the sentence has to.
+        var note = html.IndexOf("data-launch-own-connection-note", StringComparison.Ordinal);
+        html.LastIndexOf("<noscript>", note, StringComparison.Ordinal).Should().BeGreaterThan(html.LastIndexOf("</noscript>", note, StringComparison.Ordinal));
+        html.Should().Contain("فقط وقتی لازم است که تیک دیتابیس بالا را برداشته باشی.");
+
+        var details = html[html.IndexOf("data-launch-details", StringComparison.Ordinal)..];
+        foreach (var name in new[] { "DATABASE_URL", "DB_HOST", "REDIS_URL" })
+            details.Should().Contain($"name=\"Values[{name}]\"");
+
+        // What the script reads to decide. DATABASE_URL is what any of the three SQL engines sets; an
+        // alias is only ever written for its own.
+        Tag(html, "data-launch-field=\"DATABASE_URL\"").Should().Contain("data-launch-connection=\"PostgreSql MySql MariaDb\"");
+        Tag(html, "data-launch-field=\"DB_HOST\"").Should().Contain("data-launch-connection=\"PostgreSql\"");
+        Tag(html, "data-launch-field=\"REDIS_URL\"").Should().Contain("data-launch-connection=\"Redis\"");
+    }
+
+    [Fact]
+    public async Task A_connection_with_no_known_service_is_asked_and_never_promised()
+    {
+        var (id, _) = GivenConnections(
+        [
+            new LaunchEnvField("SOME_DB_URL", EnvVarDisposition.AliasOfAttach, null, IsSecret: false, ".env.example")
+        ]);
+
+        var html = await PageAsync(await Owner(), $"/launch/{id}");
+
+        Tag(html, "data-launch-field=\"SOME_DB_URL\"").Should().Contain("data-launch-connection=\"\"");
+        NameOnTheLine(html, "SOME_DB_URL").Should().BeEmpty("nothing is known to set it");
+        Tag(html, "data-launch-aliases").Should().Contain("hidden");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_connection_somebody_typed_is_the_apps_own_variable_whatever_is_ticked(bool postgresTicked)
+    {
+        var (id, _) = GivenConnections();
+        var client = await Owner();
+        var token = await client.AntiforgeryTokenFrom($"/launch/{id}");
+
+        var body = new List<KeyValuePair<string, string>>
+        {
+            new("__RequestVerificationToken", token), new("Name", "shop"),
+            new("Values[DATABASE_URL]", "postgres://me:neon-password@neon.example/db")
+        };
+        if (postgresTicked) body.Add(new("Services", "PostgreSql"));
+
+        var response = await client.PostAsync($"/launch/{id}/confirm", new FormUrlEncodedContent(body));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Found);
+        var choices = Launches.Confirmed.Should().ContainSingle().Subject.Choices;
+        var own = choices.EnvVars.Should().ContainSingle(v => v.Key == "DATABASE_URL").Subject;
+        own.Value.Should().Be("postgres://me:neon-password@neon.example/db");
+        own.IsSecret.Should().BeTrue("it has their password in it, whatever a proposal says about a name it expected to answer");
+        choices.Services.Select(s => s.Type).Should().BeEquivalentTo(postgresTicked ? [ManagedServiceType.PostgreSql] : Array.Empty<ManagedServiceType>());
+    }
+
+    [Fact]
+    public async Task A_connection_left_blank_with_nothing_ticked_to_answer_it_goes_along_to_be_named()
+    {
+        var (id, _) = GivenConnections();
+        var client = await Owner();
+        var token = await client.AntiforgeryTokenFrom($"/launch/{id}");
+
+        await client.PostFormAsync($"/launch/{id}/confirm", token, ("Name", "shop"), ("Values[DATABASE_URL]", ""));
+
+        Launches.Confirmed.Should().ContainSingle().Which.Choices.EnvVars
+            .Should().OnlyContain(v => v.Value == null).And
+            .Satisfy(v => v.Key == "DATABASE_URL", v => v.Key == "DB_HOST", v => v.Key == "REDIS_URL");
+    }
+
+    [Fact]
+    public async Task A_connection_a_ticked_service_answers_is_not_sent_or_the_timeline_would_name_what_the_app_has()
+    {
+        var (id, _) = GivenConnections();
+        var client = await Owner();
+        var token = await client.AntiforgeryTokenFrom($"/launch/{id}");
+
+        await client.PostFormAsync($"/launch/{id}/confirm", token, ("Name", "shop"), ("Services", "PostgreSql"), ("Values[DATABASE_URL]", ""));
+
+        Launches.Confirmed.Should().ContainSingle().Which.Choices.EnvVars.Select(v => v.Key).Should().Equal("REDIS_URL");
+    }
+
+    [Fact]
+    public async Task Ticking_a_different_engine_answers_the_name_they_all_set_but_not_the_other_ones_alias()
+    {
+        var (view, proposal) = Confirmable(fields: ConnectionFields);
+        var id = Given(view, proposal with
+        {
+            ServiceOptions = [.. proposal.ServiceOptions, new LaunchServiceOption(ManagedServiceType.MySql, "MySQL", "مای‌اس‌کیوال", null)]
+        }, Charged);
+        var client = await Owner();
+        var token = await client.AntiforgeryTokenFrom($"/launch/{id}");
+
+        await client.PostFormAsync($"/launch/{id}/confirm", token, ("Name", "shop"), ("Services", "MySql"));
+
+        var keys = Launches.Confirmed.Should().ContainSingle().Subject.Choices.EnvVars.Select(v => v.Key).ToList();
+        keys.Should().NotContain("DATABASE_URL", "MySQL's attachment sets that too");
+        keys.Should().Contain("DB_HOST", "an alias is only written for its own engine");
+    }
+
+    [Fact]
+    public async Task A_refused_screen_does_not_draw_a_connection_back_and_opens_the_fold_to_ask_for_it_again()
+    {
+        var (id, _) = GivenConnections();
+        var client = await Owner();
+        var token = await client.AntiforgeryTokenFrom($"/launch/{id}");
+        Launches.ValidateRefusals = [new ServiceRefusal("No.", "نه.")];
+
+        var html = await BodyAsync(await client.PostFormAsync($"/launch/{id}/confirm", token,
+            ("Name", "shop"), ("Values[DATABASE_URL]", "postgres://me:never-echoed@neon.example/db"), ("Values[DB_HOST]", "db.example.com")));
+
+        html.Should().NotContain("never-echoed");
+        var url = Tag(html, "name=\"Values[DATABASE_URL]\"");
+        url.Should().Contain("type=\"password\"").And.NotContain("value=");
+        html.Should().Contain("data-launch-retype-connection");
+        Tag(html, "data-launch-details").Should().Contain("open", "it is folded away, and the person has to type it again");
+
+        // A host has nothing secret in it, and is only hidden if there is a reason to.
+        var host = Tag(html, "name=\"Values[DB_HOST]\"");
+        host.Should().Contain("type=\"text\"").And.Contain("value=\"db.example.com\"");
+
+        html.Should().NotContain("data-launch-retype>", "no key from the block above was typed");
+    }
+
+    [Fact]
+    public async Task Evidence_reads_in_persian_on_a_persian_screen_and_in_english_on_an_english_one()
+    {
+        var (view, proposal) = Confirmable();
+        var option = proposal.ServiceOptions[0];
+        var id = Given(view, proposal with
+        {
+            ServiceOptions =
+            [
+                option with
+                {
+                    Detected = new DetectedService(DetectedServiceKind.Postgres,
+                        [new ServiceEvidence("package.json", "\"pg\" in dependencies", "«pg» در وابستگی‌ها آمده")], true)
+                },
+                .. proposal.ServiceOptions.Skip(1)
+            ]
+        });
+        var client = await Owner();
+
+        var persian = Regex.Replace(await PageAsync(client, $"/launch/{id}"), "<[^>]+>", "");
+        persian.Should().Contain("«pg» در وابستگی‌ها آمده");
+
+        await SpeakEnglish(client);
+        var english = await PageAsync(client, $"/launch/{id}");
+        english.Should().NotContain("«pg» در وابستگی‌ها آمده");
+        Regex.Replace(english, "<[^>]+>", "").Should().Contain("Because pg is in package.json");
+    }
+
+    [Fact]
+    public async Task Evidence_with_no_persian_falls_back_to_what_it_has()
+    {
+        var (view, proposal) = Confirmable();
+        var id = Given(view, proposal);
+
+        var html = await PageAsync(await Owner(), $"/launch/{id}");
+
+        // The maybe-Redis has no name in quotes and no Persian, so its reason stands as it was written.
+        html.Should().Contain("REDIS_URL named");
     }
 
     [Fact]
@@ -676,6 +931,65 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
 
         html.Should().Contain("این اسم برای خود پنل نگه داشته شده");
         html.Should().NotContain("دامنه‌ی اصلی ندارد");
+
+        // Typing another name has to be able to take that back, so the line it turns into is already
+        // there, and the script knows what an address ends in.
+        Tag(html, "data-launch-address-line").Should().Contain("hidden");
+        Tag(html, "data-launch-reserved").Should().NotContain("hidden");
+        Tag(html, "data-launch-confirm").Should().Contain("data-root-domain=\"apps.example.com\"");
+    }
+
+    [Fact]
+    public async Task The_name_as_proposed_previews_the_address_it_will_really_get()
+    {
+        // The second launch of a repository: the app will be shop-2, and shop is somebody else's.
+        var (view, proposal) = Confirmable();
+        var id = Given(view, proposal with { SuggestedSlug = "shop-2" }, Charged);
+
+        var html = await PageAsync(await Owner(), $"/launch/{id}");
+
+        Regex.Replace(html, "<[^>]+>", "").Should().Contain("shop-2.apps.example.com");
+        Tag(html, "data-launch-confirm").Should().Contain("data-suggested-name=\"shop\"").And.Contain("data-suggested-slug=\"shop-2\"");
+    }
+
+    [Fact]
+    public async Task A_name_the_person_typed_is_previewed_from_that_name_and_not_the_suggestion()
+    {
+        var (view, proposal) = Confirmable();
+        var id = Given(view, proposal with { SuggestedSlug = "shop-2" }, Charged);
+        var client = await Owner();
+        var token = await client.AntiforgeryTokenFrom($"/launch/{id}");
+        Launches.ValidateRefusals = [new ServiceRefusal("No.", "نه.")];
+
+        var html = await BodyAsync(await client.PostFormAsync($"/launch/{id}/confirm", token, ("Name", "other")));
+
+        Regex.Replace(html, "<[^>]+>", "").Should().Contain("other.apps.example.com").And.NotContain("shop-2.apps.example.com");
+    }
+
+    [Fact]
+    public async Task A_typed_slug_is_previewed_as_creating_the_app_will_clean_it_up()
+    {
+        var (id, client, token) = await AtTheConfirmScreen();
+        Launches.ValidateRefusals = [new ServiceRefusal("No.", "نه.")];
+
+        var html = await BodyAsync(await client.PostFormAsync($"/launch/{id}/confirm", token, ("Name", "shop"), ("Slug", "My Shop")));
+
+        var text = Regex.Replace(html, "<[^>]+>", "");
+        text.Should().Contain("my-shop.apps.example.com");
+        text.Should().NotContain("My Shop.apps.example.com");
+    }
+
+    [Fact]
+    public async Task Every_stack_the_inspector_can_report_has_words_on_the_screen()
+    {
+        var client = await Owner();
+        foreach (var stack in Enum.GetValues<DetectedStack>())
+        {
+            var (view, proposal) = Confirmable(Inspection(stack));
+            var html = await PageAsync(client, $"/launch/{Given(view, proposal)}");
+
+            html.Should().NotContain("یک اپ  که", $"{stack} would otherwise read as an app of nothing");
+        }
     }
 
     [Fact]
@@ -914,13 +1228,33 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
     {
         var (view, proposal) = Confirmable();
         var id = Given(view, proposal, new LaunchQuote(Charged.Lines, 1_200_000, 5, "IRT", Exempt: false,
-            new ServiceRefusal("Not enough balance.", "موجودی کافی نیست.")));
+            new ServiceRefusal("Not enough balance.", "موجودی کافی نیست."), RefusalIsAboutMoney: true));
 
         var html = await PageAsync(await Owner(), $"/launch/{id}");
 
-        html.Should().Contain("موجودی کافی نیست.").And.Contain("href=\"/billing\"");
+        html.Should().Contain("موجودی کافی نیست.").And.Contain("data-launch-cost-billing").And.Contain("href=\"/billing\"");
         html.Should().NotContain("از موجودی کم می‌شود");
         Tag(html, "data-launch-submit").Should().Contain(" disabled=");
+    }
+
+    [Fact]
+    public async Task A_refusal_more_credit_would_not_fix_says_so_and_sends_nobody_to_billing()
+    {
+        var (view, proposal) = Confirmable();
+        var id = Given(view, proposal, new LaunchQuote(Charged.Lines, 0, 5, "IRT", Exempt: false,
+            new ServiceRefusal("This size has no price yet.", "این اندازه هنوز قیمت ندارد.")));
+        var client = await Owner();
+
+        var html = await PageAsync(client, $"/launch/{id}");
+
+        html.Should().Contain("این اندازه هنوز قیمت ندارد.");
+        html.Should().NotContain("data-launch-cost-billing").And.NotContain("برو به صورت‌حساب");
+        Tag(html, "data-launch-submit").Should().Contain(" disabled=");
+
+        // The same words when the figure is refreshed, since that is how most people will meet it.
+        var token = await client.AntiforgeryTokenFrom($"/launch/{id}");
+        (await BodyAsync(await client.PostFormAsync($"/launch/{id}/quote", token, ("Name", "shop"))))
+            .Should().Contain("این اندازه هنوز قیمت ندارد.").And.NotContain("data-launch-cost-billing");
     }
 
     [Fact]
@@ -999,14 +1333,31 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
             .Which.Name.Should().Be("DB_HOST", "the aliases the proposal worked out go with the service");
 
         var variables = choices.EnvVars.ToDictionary(v => v.Key);
-        variables.Keys.Should().BeEquivalentTo(["STRIPE_SECRET_KEY", "JWT_SECRET", "SESSION_SECRET", "LOG_LEVEL"],
-            "a blank answer is not set, an alias is not a variable, and EVIL was never asked");
+        variables.Keys.Should().BeEquivalentTo(["STRIPE_SECRET_KEY", "SUPPORT_EMAIL", "JWT_SECRET", "SESSION_SECRET", "LOG_LEVEL"],
+            "an alias a ticked service answers is not a variable, and EVIL was never asked");
+        variables["SUPPORT_EMAIL"].Value.Should().BeNull("blank sets nothing, and goes along so the timeline can name it");
+        variables["SUPPORT_EMAIL"].IsSecret.Should().BeFalse();
         variables["STRIPE_SECRET_KEY"].Value.Should().Be("sk_live_real");
         variables["STRIPE_SECRET_KEY"].IsSecret.Should().BeTrue("the proposal says so, not the form");
         variables["JWT_SECRET"].Value.Should().BeNull("null is what asks the service to generate it");
         variables["JWT_SECRET"].IsSecret.Should().BeTrue();
         variables["LOG_LEVEL"].Value.Should().Be("debug");
         variables["LOG_LEVEL"].IsSecret.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Whatever_is_left_blank_or_not_posted_goes_along_with_no_value_as_it_does_from_the_cli()
+    {
+        var (id, client, token) = await AtTheConfirmScreen();
+
+        await client.PostFormAsync($"/launch/{id}/confirm", token,
+            ("Name", "shop"), ("Values[STRIPE_SECRET_KEY]", ""), ("Values[LOG_LEVEL]", ""));
+
+        var variables = Launches.Confirmed.Should().ContainSingle().Subject.Choices.EnvVars.ToDictionary(v => v.Key);
+        variables["STRIPE_SECRET_KEY"].Value.Should().BeNull();
+        variables["STRIPE_SECRET_KEY"].IsSecret.Should().BeTrue();
+        variables["SUPPORT_EMAIL"].Value.Should().BeNull();
+        variables["LOG_LEVEL"].Value.Should().BeNull("blanking a suggestion drops it");
     }
 
     [Fact]
@@ -1183,6 +1534,19 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
 
         html.Should().NotContain("data-launch-submit").And.NotContain("data-launch-abandon");
         html.Should().Contain("data-launch-no-permission");
+
+        // It posts to the same gated route, so for them it would only ever be a refusal. The figure
+        // they can see does not depend on it.
+        html.Should().NotContain("data-launch-recheck");
+    }
+
+    [Fact]
+    public async Task Somebody_who_can_create_apps_and_has_no_script_can_work_the_cost_out_again()
+    {
+        var (view, proposal) = Confirmable();
+        var id = Given(view, proposal, Charged);
+
+        (await PageAsync(await Owner(), $"/launch/{id}")).Should().Contain("data-launch-recheck");
     }
 
     [Fact]
@@ -1218,6 +1582,23 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
         html.Should().Contain("data-launch-poll").And.Contain("data-terminal=\"false\"");
         html.Should().Contain("data-launch-refresh");
         html.Should().NotContain("اپت بالاست").And.NotContain("data-launch-outcome=\"succeeded\"");
+
+        // What the script shows if its polling stops with no answer. Outside the region it swaps, or
+        // the first swap would take it away, and hidden until then.
+        Tag(html, "data-launch-keeps-going").Should().StartWith("<p");
+        var stopped = Tag(html, "data-launch-poll-stopped");
+        stopped.Should().Contain("hidden");
+        html.IndexOf("data-launch-poll-stopped", StringComparison.Ordinal)
+            .Should().BeGreaterThan(html.IndexOf("data-launch-state", StringComparison.Ordinal));
+        html[html.IndexOf("data-launch-poll-stopped", StringComparison.Ordinal)..].Should().Contain($"href=\"/launch/{id}\"");
+    }
+
+    [Fact]
+    public async Task A_launch_that_has_ended_has_no_poll_to_lose()
+    {
+        var id = Given(View(LaunchStatus.Failed, failure: "No.", failureFa: "نشد."));
+
+        (await PageAsync(await Owner(), $"/launch/{id}")).Should().NotContain("data-launch-poll-stopped");
     }
 
     [Fact]
@@ -1400,26 +1781,150 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
     }
 
     [Fact]
+    public async Task A_warning_is_a_problem_found_and_says_so()
+    {
+        IReadOnlyList<AppCheck> checks =
+        [
+            new("running", AppCheckStatus.Passed, "Running", "در حال اجراست"),
+            new("logs", AppCheckStatus.Warning, "Logs", "لاگ‌ها", "It complains.", "دارد شکایت می‌کند.")
+        ];
+        var id = Given(View(LaunchStatus.SucceededWithProblems, appId: Guid.CreateVersion7(), checks: checks));
+
+        var html = await PageAsync(await Owner(), $"/launch/{id}");
+
+        html.Should().Contain("اپ بالا آمد، ولی یک چیز درست نیست");
+        html.Should().NotContain("data-launch-not-sure").And.NotContain("data-launch-not-checked");
+    }
+
+    [Fact]
+    public async Task Nothing_found_wrong_and_something_unchecked_is_not_called_a_problem_and_names_what_it_could_not_check()
+    {
+        IReadOnlyList<AppCheck> checks =
+        [
+            new("running", AppCheckStatus.Skipped, "Is it running?", "در حال اجراست؟", "The server didn't answer.", "سرور جواب نداد."),
+            new("url", AppCheckStatus.Pending, "The address", "آدرسش", "Waiting.", "در انتظار."),
+            new("logs", AppCheckStatus.Passed, "The log", "لاگش")
+        ];
+        var id = Given(View(LaunchStatus.SucceededWithProblems, appId: Guid.CreateVersion7(),
+            publicUrl: "https://shop.apps.example.com", checks: checks));
+        var client = await Owner();
+
+        var html = await PageAsync(client, $"/launch/{id}");
+
+        html.Should().Contain("بالا آمد، ولی نتوانستم مطمئن شوم که کار می‌کند");
+        html.Should().NotContain("یک چیز درست نیست");
+        html.Should().NotContain("data-launch-outcome=\"succeeded\"");
+        Tag(html, "data-launch-outcome").Should().Contain("problems", "it is still never drawn green");
+        html.Should().Contain("href=\"https://shop.apps.example.com\"");
+
+        var named = html[html.IndexOf("data-launch-not-checked", StringComparison.Ordinal)..];
+        named[..named.IndexOf("</p>", StringComparison.Ordinal)].Should().Contain("در حال اجراست؟").And.Contain("آدرسش").And.NotContain("لاگش");
+
+        await SpeakEnglish(client);
+        var english = await PageAsync(client, $"/launch/{id}");
+        english.Should().Contain("It came up, but I couldn't make sure it works");
+        english.Should().Contain("I couldn't check: Is it running?, The address");
+    }
+
+    [Fact]
+    public async Task No_checks_at_all_is_not_a_problem_found_either_and_has_nothing_to_name()
+    {
+        var id = Given(View(LaunchStatus.SucceededWithProblems, appId: Guid.CreateVersion7()));
+
+        var html = await PageAsync(await Owner(), $"/launch/{id}");
+
+        html.Should().Contain("بالا آمد، ولی نتوانستم مطمئن شوم که کار می‌کند");
+        html.Should().NotContain("data-launch-not-checked");
+    }
+
+    private static readonly IReadOnlyList<AppCheck> AllPassed = [new("running", AppCheckStatus.Passed, "Running", "در حال اجراست")];
+
+    [Theory]
+    [InlineData(LaunchStatus.Succeeded)]
+    [InlineData(LaunchStatus.SucceededWithProblems)]
+    public async Task A_launch_whose_app_was_deleted_says_so_with_no_green_and_no_way_to_it(LaunchStatus status)
+    {
+        var appId = Guid.CreateVersion7();
+        var deployment = Guid.CreateVersion7();
+        var id = Given(View(status, appId: appId, appName: "shop", publicUrl: "https://shop.apps.example.com", deploymentId: deployment,
+            checks: AllPassed, appGone: true, steps: Steps(services: LaunchStepState.Done, app: LaunchStepState.Done, deploy: LaunchStepState.Done, verify: LaunchStepState.Done)));
+
+        var html = await PageAsync(await Owner(), $"/launch/{id}");
+
+        html.Should().Contain("این اپ بعداً پاک شده");
+        Tag(html, "data-launch-outcome").Should().Contain("gone");
+
+        html.Should().NotContain("اپت بالاست").And.NotContain("یک چیز درست نیست").And.NotContain("مطمئن شوم");
+        html.Should().NotContain("data-launch-address-link").And.NotContain("data-launch-app-link").And.NotContain("https://shop.apps.example.com");
+        html.Should().NotContain($"/apps/details/{appId}").And.NotContain($"/deployments/details/{deployment}");
+
+        var region = html[html.IndexOf("data-launch-state", StringComparison.Ordinal)..];
+        region.Should().NotContain("text-ok", "nothing here is green");
+    }
+
+    [Fact]
+    public async Task What_is_left_of_a_launch_whose_app_was_deleted_is_still_named()
+    {
+        var databaseId = Guid.CreateVersion7();
+        var id = Given(View(LaunchStatus.Succeeded, appGone: true,
+            created: [new LaunchCreatedThing("database", "shop-postgresql", $"/databases/{databaseId}", Ready: true)]));
+
+        var html = await PageAsync(await Owner(), $"/launch/{id}");
+
+        html.Should().Contain("این اپ بعداً پاک شده").And.Contain($"href=\"/databases/{databaseId}\"");
+    }
+
+    [Fact]
+    public async Task A_failed_launch_whose_app_was_deleted_still_says_why_it_stopped_and_offers_no_retry()
+    {
+        var appId = Guid.CreateVersion7();
+        var id = Given(View(LaunchStatus.Failed, appId: appId, appName: "shop", canRetry: true, appGone: true,
+            steps: Steps(deploy: LaunchStepState.Failed), failure: "The build failed.", failureFa: "ساخت شکست خورد."));
+
+        var html = await PageAsync(await Owner(), $"/launch/{id}");
+
+        html.Should().Contain("ساخت شکست خورد.").And.Contain("اپی که این راه‌اندازی ساخته بود بعداً پاک شده.");
+        html.Should().NotContain("data-launch-retry").And.NotContain($"/apps/details/{appId}");
+    }
+
+    [Fact]
     public async Task A_failed_launch_names_the_step_says_what_exists_and_offers_a_retry()
     {
         var appId = Guid.CreateVersion7();
+        var databaseId = Guid.CreateVersion7();
         IReadOnlyList<LaunchStepView> steps =
         [
             Step(LaunchStepKeys.Source, LaunchStepState.Done),
-            Step(LaunchStepKeys.Services, LaunchStepState.Done, "پستگرس shop-db ساخته شد."),
+            Step(LaunchStepKeys.Services, LaunchStepState.Done),
             Step(LaunchStepKeys.App, LaunchStepState.Done),
-            Step(LaunchStepKeys.Deploy, LaunchStepState.Failed),
+            Step(LaunchStepKeys.Deploy, LaunchStepState.Failed, "ساخت شکست خورد."),
             Step(LaunchStepKeys.Verify, LaunchStepState.Waiting)
         ];
         var id = Given(View(LaunchStatus.Failed, appId: appId, appName: "shop", steps: steps, canRetry: true,
-            failure: "The build failed.", failureFa: "ساخت شکست خورد."));
+            failure: "The build failed.", failureFa: "ساخت شکست خورد.",
+            created:
+            [
+                new LaunchCreatedThing("database", "shop-postgresql", $"/databases/{databaseId}", Ready: true),
+                new LaunchCreatedThing("database", "shop-redis", $"/databases/{databaseId}/x", Ready: false),
+                new LaunchCreatedThing("app", "shop", $"/apps/details/{appId}", Ready: true)
+            ]));
 
         var html = await PageAsync(await Owner(), $"/launch/{id}");
 
         html.Should().Contain("اینجا گیر کرد: مرحله‌ی deploy");
         html.Should().Contain("ساخت شکست خورد.");
+
+        // The failure is on the page where it belongs, and what exists is not that sentence again.
         var exists = html[html.IndexOf("data-launch-exists", StringComparison.Ordinal)..];
-        exists.Should().Contain($"href=\"/apps/details/{appId}\"").And.Contain("پستگرس shop-db ساخته شد.");
+        exists = exists[..exists.IndexOf("</ul>", StringComparison.Ordinal)];
+        exists.Should().Contain("هزینه داشته باشند");
+        exists.Should().Contain($"href=\"/apps/details/{appId}\"").And.Contain($"href=\"/databases/{databaseId}\"");
+        exists.Should().Contain("shop-postgresql").And.NotContain("ساخت شکست خورد.");
+
+        var unfinished = exists[exists.IndexOf("shop-redis", StringComparison.Ordinal)..];
+        unfinished[..unfinished.IndexOf("</li>", StringComparison.Ordinal)].Should().Contain("آماده نیست");
+        exists[..exists.IndexOf("shop-redis", StringComparison.Ordinal)].Should().NotContain("آماده نیست");
+
         html.Should().Contain("دوباره امتحان کن").And.Contain($"action=\"/launch/{id}/retry\"");
 
         html.Should().NotContain("اپت بالاست").And.NotContain("data-launch-outcome=\"succeeded\"");
@@ -1439,13 +1944,32 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
     }
 
     [Fact]
-    public async Task A_failure_before_anything_was_made_says_nothing_was()
+    public async Task A_failure_with_nothing_left_says_nothing_about_what_is_left()
     {
-        var id = Given(View(LaunchStatus.Failed, steps: Steps(services: LaunchStepState.Waiting), failure: "No.", failureFa: "نشد."));
+        foreach (var created in new IReadOnlyList<LaunchCreatedThing>?[] { null, [] })
+        {
+            var id = Given(View(LaunchStatus.Failed, steps: Steps(deploy: LaunchStepState.Failed), failure: "No.", failureFa: "نشد.", created: created));
 
-        var html = await PageAsync(await Owner(), $"/launch/{id}");
+            var html = await PageAsync(await Owner(), $"/launch/{id}");
 
-        html.Should().Contain("هنوز چیزی ساخته نشده.");
+            html.Should().Contain("نشد.");
+            html.Should().NotContain("data-launch-exists", "a promise that something is still there, about nothing, is what this used to be");
+            html.Should().NotContain("سر جایش است");
+        }
+    }
+
+    [Fact]
+    public async Task What_a_failed_launch_left_reads_in_english_too()
+    {
+        var id = Given(View(LaunchStatus.Failed, failure: "No.", failureFa: "نشد.",
+            created: [new LaunchCreatedThing("app", "shop", "/apps/details/x", Ready: false)]));
+        var client = await Owner();
+        await SpeakEnglish(client);
+
+        var html = await PageAsync(client, $"/launch/{id}");
+
+        Regex.Replace(html, "<[^>]+>", "").Should().Contain("App: shop");
+        html.Should().Contain("may be costing money").And.Contain("not ready");
     }
 
     [Fact]
@@ -1761,6 +2285,80 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
     }
 
     [Fact]
+    public async Task A_new_version_sent_during_a_build_is_refused_out_loud_rather_than_landing_on_the_old_builds_log()
+    {
+        var appId = GivenApp(AppSourceType.Upload);
+        var inFlight = Guid.CreateVersion7();
+        _fixture.Seed(db => db.Deployments.Add(new Harbora.Domain.Deployments.Deployment
+        {
+            Id = inFlight, AppId = appId, WorkspaceId = _fixture.WorkspaceId, Number = 1,
+            Status = DeploymentStatus.Building, Trigger = DeploymentTrigger.Manual,
+            SourceArchivePath = Path.Combine(_fixture.WorkDir, "_uploads", "the-older-version.zip")
+        }));
+
+        var client = await Owner();
+        var token = await client.AntiforgeryTokenFrom("/apps");
+        var before = UploadedFiles().Count();
+
+        _fixture.Deployments.CoalesceOnto = inFlight;
+        try
+        {
+            var response = await client.PostAsync($"/apps/{appId}/upload", Upload(token, Zip(), "the-fix.zip", "file"));
+
+            response.RedirectPath().Should().StartWith("/Apps/Details", "that build will never read this file");
+        }
+        finally
+        {
+            _fixture.Deployments.CoalesceOnto = null;
+        }
+
+        UploadedFiles().Count().Should().Be(before, "a file nothing will ever read does not stay");
+        (await PageAsync(client, $"/apps/details/{appId}")).Should().Contain("یک ساخت هنوز در جریان است");
+    }
+
+    [Fact]
+    public async Task A_deployment_in_flight_from_a_repository_has_no_archive_and_is_still_not_this_upload()
+    {
+        var appId = GivenApp(AppSourceType.Upload);
+        var inFlight = Guid.CreateVersion7();
+        _fixture.Seed(db => db.Deployments.Add(new Harbora.Domain.Deployments.Deployment
+        {
+            Id = inFlight, AppId = appId, WorkspaceId = _fixture.WorkspaceId, Number = 1,
+            Status = DeploymentStatus.Building, Trigger = DeploymentTrigger.Manual
+        }));
+
+        var client = await Owner();
+        var token = await client.AntiforgeryTokenFrom("/apps");
+
+        _fixture.Deployments.CoalesceOnto = inFlight;
+        try
+        {
+            (await client.PostAsync($"/apps/{appId}/upload", Upload(token, Zip(), "the-fix.zip", "file")))
+                .RedirectPath().Should().StartWith("/Apps/Details");
+        }
+        finally
+        {
+            _fixture.Deployments.CoalesceOnto = null;
+        }
+    }
+
+    [Fact]
+    public async Task A_gzipped_tar_for_a_new_version_is_told_to_send_a_zip_and_nothing_is_queued()
+    {
+        var appId = GivenApp(AppSourceType.Upload);
+        var client = await Owner();
+        var token = await client.AntiforgeryTokenFrom("/apps");
+        var before = UploadedFiles().Count();
+
+        var response = await client.PostAsync($"/apps/{appId}/upload", Upload(token, GzippedTar(), "shop.tar.gz", "file"));
+
+        response.RedirectPath().Should().StartWith("/Apps/Details");
+        _fixture.Deployments.Queued.Should().NotContain(r => r.AppId == appId);
+        UploadedFiles().Count().Should().Be(before);
+        (await PageAsync(client, $"/apps/details/{appId}")).Should().Contain("از مرورگر فقط zip می‌گیرم");
+    }
+
+    [Fact]
     public async Task A_queue_that_refuses_deletes_the_upload_and_says_why_on_the_apps_page()
     {
         var appId = GivenApp(AppSourceType.Upload);
@@ -1793,7 +2391,7 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
 
         var html = await PageAsync(client, $"/apps/details/{uploaded}");
         html.Should().Contain("data-app-upload").And.Contain($"action=\"/apps/{uploaded}/upload\"");
-        html.Should().Contain("accept=\".zip,.tar.gz,.tgz\"");
+        html.Should().Contain("accept=\".zip\"");
 
         (await PageAsync(client, $"/apps/details/{fromGit}")).Should().NotContain("data-app-upload");
     }

@@ -1,0 +1,30 @@
+@model IReadOnlyList<Harbora.Infrastructure.Launch.LaunchCreatedThing>
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+
+    string KindOf(string kind) => (kind, isFa) switch
+    {
+        ("database", true) => "دیتابیس",
+        ("database", false) => "Database",
+        ("app", true) => "اپ",
+        ("app", false) => "App",
+        _ => kind
+    };
+}
+@* Read from the rows: this is what is still there and may still be costing money, and each one is a
+   link because deleting it happens on its own page. *@
+<div class="mt-3 text-xs text-ink-muted" data-launch-exists>
+    <p>@(isFa ? "این‌ها هنوز هستند و ممکن است هزینه داشته باشند. اگر لازمشان نداری، بازشان کن و پاکشان کن:" : "These are still there and may be costing money. If you don't need them, open them and delete them:")</p>
+    <ul class="mt-1.5 space-y-1">
+        @foreach (var thing in Model)
+        {
+            <li class="break-words" data-launch-created-thing="@thing.Kind">
+                @KindOf(thing.Kind): <a href="@thing.LinkPath" class="text-accent-text hover:underline" dir="ltr">@thing.Name</a>
+                @if (!thing.Ready)
+                {
+                    <span data-launch-not-ready> · @(isFa ? "آماده نیست" : "not ready")</span>
+                }
+            </li>
+        }
+    </ul>
+</div>

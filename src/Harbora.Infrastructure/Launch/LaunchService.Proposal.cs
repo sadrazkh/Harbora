@@ -2,6 +2,7 @@ using Harbora.Application.Abstractions;
 using Harbora.Domain.Billing;
 using Harbora.Domain.Common;
 using Harbora.Domain.Launch;
+using Harbora.Domain.Servers;
 using Harbora.Domain.Services;
 using Harbora.Domain.Settings;
 using Harbora.Domain.Tenancy;
@@ -71,19 +72,25 @@ public sealed partial class LaunchService
         var place = await PlacementAsync(launch.WorkspaceId, ct);
 
         // Only what is certain is ticked: creating a database costs money, and a guess is not consent.
-        var services = inspection.Services.Where(s => s.Certain)
+        var ticked = inspection.Services.Where(s => s.Certain)
             .Select(s => AttachEnvRoles.TypeFor(s.Kind))
             .Distinct()
-            .Select(type => new LaunchServiceChoice(type, Aliases: AliasesFor(inspection, type)))
+            .ToList();
+        var services = ticked
+            .Select(type => new LaunchServiceChoice(type, Aliases: AliasesFor(inspection, type, ticked)))
             .ToList();
         var aliased = services.SelectMany(s => s.Aliases ?? []).Select(a => a.Name).ToHashSet(StringComparer.Ordinal);
 
-        var fields = inspection.EnvVars
-            .Where(v => v.Disposition != EnvVarDisposition.ProvidedByAttach)
+        // Every name, including the ones an attachment sets: somebody who unticks Postgres because their
+        // database is elsewhere has to have somewhere to put its address. The screen sorts by disposition.
+        var fields = inspection.EnvVars.Concat(UnnamedConnections(inspection))
             .Select(v => new LaunchEnvField(
                 v.Name, v.Disposition,
                 v.Disposition == EnvVarDisposition.KeepExample ? v.ExampleValue : null,
-                IsSecretByDefault(v), v.SourceFile))
+                IsSecretByDefault(v), v.SourceFile,
+                v.Disposition is EnvVarDisposition.ProvidedByAttach or EnvVarDisposition.AliasOfAttach && v.Service is { } kind
+                    ? AttachEnvRoles.TypeFor(kind)
+                    : null))
             .ToList();
 
         var defaults = new LaunchChoices
@@ -97,14 +104,16 @@ public sealed partial class LaunchService
             EnvironmentId = place.Environment?.Id,
             InstanceSizeKey = await DefaultSizeKeyAsync(launch.WorkspaceId, ct),
             Services = services,
-            // An alias of a database that is ticked has nothing to ask: the attachment answers it.
-            EnvVars = fields.Where(f => !aliased.Contains(f.Key))
+            // An alias of a database that is ticked has nothing to ask: the attachment answers it. An
+            // attach name is a question only once its engine is unticked, and then only with a value in
+            // it, which is the person's to give: a blank one here would be named as "not set".
+            EnvVars = fields.Where(f => f.Disposition != EnvVarDisposition.ProvidedByAttach && !aliased.Contains(f.Key))
                 .Select(f => new LaunchEnvChoice(f.Key, f.SuggestedValue, f.IsSecret))
                 .ToList()
         };
 
-        // The operator's catalogue, not the shipped one: offering an engine they withdrew would only
-        // earn a refusal one click later.
+        // The operator's catalogue, not the shipped one, whose versions they can change. Every shipped
+        // engine stays in it: nothing an operator can do today takes one out.
         var catalog = await ServiceCatalogReader.EffectiveAsync(db, engine, ct);
         var options = catalog
             .Select(entry => new LaunchServiceOption(
@@ -112,50 +121,121 @@ public sealed partial class LaunchService
                 inspection.Services.FirstOrDefault(s => AttachEnvRoles.TypeFor(s.Kind) == entry.Type)))
             .ToList();
 
-        return new LaunchProposal(launch.Id, inspection, defaults, name, fields, options);
+        // Across every workspace, and asked now rather than worked out on the page, or launching one
+        // repository twice previews the address of the app that is already there.
+        var slug = await AppProvisioningService.UniqueSlugAsync(db, AppProvisioningService.Slugify(name), ct);
+
+        return new LaunchProposal(launch.Id, inspection, defaults, name, fields, options, slug);
     }
 
     /// <summary>
     /// A variable only a person can answer is usually a third party's credential, so the safer wrong
     /// guess is to mask it; a name that plainly is one is masked and anything else is left readable.
     /// A generated one is always secret, and the example file's own value never makes anything secret.
+    ///
+    /// <para>
+    /// A connection name goes the other way round, secret unless it plainly holds a harmless part: what
+    /// somebody types for <c>DATABASE_URL</c> or <c>MONGODB_URI</c> has their database's password in it,
+    /// and neither name says so. What this answers is what <see cref="LaunchEnvField.IsSecret"/> carries.
+    /// </para>
     /// </summary>
     private static bool IsSecretByDefault(DetectedEnvVar variable) => variable.Disposition switch
     {
         EnvVarDisposition.GeneratedSecret => true,
-        EnvVarDisposition.NeedsAnswer or EnvVarDisposition.AliasOfAttach =>
-            SecretNameParts.Any(part => variable.Name.Contains(part, StringComparison.OrdinalIgnoreCase)),
+        EnvVarDisposition.ProvidedByAttach or EnvVarDisposition.AliasOfAttach => !IsPlainConnectionPart(variable),
+        EnvVarDisposition.NeedsAnswer => variable.Role == EnvAliasRole.Url
+            || SecretNameParts.Any(part => variable.Name.Contains(part, StringComparison.OrdinalIgnoreCase)),
         _ => false
     };
 
     private static readonly string[] SecretNameParts = ["KEY", "TOKEN", "SECRET", "PASSWORD", "PASS", "CREDENTIAL"];
 
+    /// <summary>How an attach name, which carries no role of its own, says it holds a host, a port, a user or a database's name.</summary>
+    private static readonly string[] PlainPartEndings = ["HOST", "PORT", "USER", "USERNAME", "DATABASE", "DB", "NAME"];
+
+    private static bool IsPlainConnectionPart(DetectedEnvVar variable) => variable.Role is { } role
+        ? role is EnvAliasRole.Host or EnvAliasRole.Port or EnvAliasRole.User or EnvAliasRole.Database
+        : PlainPartEndings.Any(ending => variable.Name.EndsWith(ending, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// A project with <c>pg</c> in its dependencies and no example file names no variable at all, so
+    /// somebody who unticks Postgres would have nowhere to give their own database's address until the app's
+    /// page. Each detected service with no name of its own gets the one name its attachment would set for
+    /// the whole address, from the same table that alias resolution reads.
+    /// </summary>
+    private static IEnumerable<DetectedEnvVar> UnnamedConnections(SourceInspection inspection)
+    {
+        var given = inspection.EnvVars.Select(v => v.Name).ToHashSet(StringComparer.Ordinal);
+
+        foreach (var service in inspection.Services.Where(s => inspection.EnvVars.All(v => v.Service != s.Kind)))
+            if (AttachEnvRoles.SourceKeyFor(AttachEnvRoles.TypeFor(service.Kind), EnvAliasRole.Url) is { } address && given.Add(address))
+                yield return new DetectedEnvVar(address, EnvVarDisposition.ProvidedByAttach, null, service.Kind, null,
+                    service.Evidence.FirstOrDefault()?.File ?? "");
+    }
+
     /// <summary>
     /// Every spelling in the example env file of something this engine's attachment provides, turned
     /// into the attach variable it reads from. A role this engine has no value for stays an ordinary
     /// question on the screen rather than an alias of nothing.
+    ///
+    /// <para>
+    /// A name like <c>DB_HOST</c> belongs to whichever database the app has, so when exactly one is
+    /// ticked it is that one's, whatever the inspector could or could not guess: a plain PDO app has no
+    /// library to detect, and the note on its screen tells the person to tick one. With two ticked it
+    /// stays a question, because nothing says which.
+    /// </para>
     /// </summary>
-    private static IReadOnlyList<AttachEnvAlias> AliasesFor(SourceInspection inspection, ManagedServiceType type) =>
-        inspection.EnvVars
-            .Where(v => v.Disposition == EnvVarDisposition.AliasOfAttach
-                        && v.Service is { } service && AttachEnvRoles.TypeFor(service) == type
-                        && v.Role is not null)
+    private static IReadOnlyList<AttachEnvAlias> AliasesFor(
+        SourceInspection inspection, ManagedServiceType type, IReadOnlyCollection<ManagedServiceType> ticked)
+    {
+        var theOneDatabase = ticked.Where(IsDatabase).Distinct().Count() == 1 && IsDatabase(type);
+
+        return inspection.EnvVars
+            .Where(v => v.Role is not null && (
+                (v.Disposition == EnvVarDisposition.AliasOfAttach
+                 && v.Service is { } service && AttachEnvRoles.TypeFor(service) == type)
+                || (theOneDatabase && AttachEnvNames.IsGenericDatabaseName(v.Name))))
             .Select(v => AttachEnvRoles.SourceKeyFor(type, v.Role!.Value) is { } source ? new AttachEnvAlias(v.Name, source) : null)
             .OfType<AttachEnvAlias>()
             .ToList();
+    }
+
+    /// <summary>The engines a generic <c>DB_</c> name can mean; a cache or a broker beside one does not make it unclear.</summary>
+    private static bool IsDatabase(ManagedServiceType type) => type is ManagedServiceType.PostgreSql
+        or ManagedServiceType.MySql or ManagedServiceType.MariaDb or ManagedServiceType.MongoDb;
+
+    /// <summary>
+    /// What a service is really attached with. One ticked by hand arrives with none, and gets what the
+    /// example file says it is read under. One from the screen's defaults keeps its own, and those were
+    /// worked out with everything certain ticked: unticking one of two databases leaves the other as the
+    /// only one a <c>DB_HOST</c> can mean. What a person types for such a name is the app's own variable,
+    /// which outranks anything an attachment sets, so this never overrides an answer.
+    /// </summary>
+    private static IReadOnlyList<AttachEnvAlias> SettledAliases(
+        LaunchServiceChoice service, SourceInspection inspection, IReadOnlyCollection<ManagedServiceType> ticked)
+    {
+        var worked = AliasesFor(inspection, service.Type, ticked);
+        return service.Aliases is not { } given
+            ? worked
+            : given.Concat(worked.Where(a => AttachEnvNames.IsGenericDatabaseName(a.Name))).DistinctBy(a => a.Name).ToList();
+    }
 
     /// <summary>
     /// The size the chooser would open on. <c>SizePickerService</c> is what really answers this for a
     /// form, but it lives in the web project and this does not: the rules below are its own, asked in
     /// its own order, and <c>LaunchSizeDefaultParityTests</c> holds the two together. Never "no limit":
     /// that is the one thing a create must not pick for somebody.
+    ///
+    /// <para>
+    /// The platform's default goes first and is held to the same rules, on any host. Taken unchecked it
+    /// could be a tier nobody priced, and the screen would then open on a refusal it had chosen by itself.
+    /// </para>
     /// </summary>
     private async Task<string?> DefaultSizeKeyAsync(Guid workspaceId, CancellationToken ct)
     {
         var platformDefault = await db.Settings.IgnoreQueryFilters().AsNoTracking()
             .Where(s => s.Key == SettingKeys.DefaultInstanceSize)
             .Select(s => s.Value).FirstOrDefaultAsync(ct);
-        if (!string.IsNullOrWhiteSpace(platformDefault)) return platformDefault;
 
         var plan = await PlanForAsync(workspaceId, ct);
         var allowedKeys = (plan?.AllowedSizeKeys ?? "")
@@ -177,24 +257,27 @@ public sealed partial class LaunchService
         var priceIsAGate = billing.Value.Enabled && !await db.Workspaces.IgnoreQueryFilters().AsNoTracking()
             .Where(w => w.Id == workspaceId).Select(w => w.IsDefault).FirstOrDefaultAsync(ct);
 
-        foreach (var server in servers)
+        bool Selectable(Server server, InstanceSize size)
         {
             var reading = capacities.FirstOrDefault(c => c.ServerId == server.Id);
-            if (reading is { IsOnline: false }) continue;
+            if (reading is { IsOnline: false }) return false;
 
-            foreach (var size in sizes)
-            {
-                var offer = offers.FirstOrDefault(o => o.ServerId == server.Id
-                    && string.Equals(o.InstanceSizeKey, size.Key, StringComparison.OrdinalIgnoreCase));
+            var offer = offers.FirstOrDefault(o => o.ServerId == server.Id
+                && string.Equals(o.InstanceSizeKey, size.Key, StringComparison.OrdinalIgnoreCase));
 
-                if (allowedKeys.Count > 0 && !allowedKeys.Contains(size.Key)) continue;
-                if (!ServerRates.OffersNewWork(offer)) continue;
-                if (reading is not null && !reading.CanFit(size.MemoryBytes, size.CpuCores)) continue;
-                if (priceIsAGate && ServerRates.ForWorkload(size, offer, BilledRunState.Running) is null) continue;
-
-                return size.Key;
-            }
+            if (allowedKeys.Count > 0 && !allowedKeys.Contains(size.Key)) return false;
+            if (!ServerRates.OffersNewWork(offer)) return false;
+            if (reading is not null && !reading.CanFit(size.MemoryBytes, size.CpuCores)) return false;
+            return !priceIsAGate || ServerRates.ForWorkload(size, offer, BilledRunState.Running) is not null;
         }
+
+        var preferred = sizes.FirstOrDefault(s => string.Equals(s.Key, platformDefault, StringComparison.OrdinalIgnoreCase));
+        if (preferred is not null && servers.Any(server => Selectable(server, preferred))) return preferred.Key;
+
+        foreach (var server in servers)
+            foreach (var size in sizes)
+                if (Selectable(server, size))
+                    return size.Key;
 
         return null;
     }
@@ -238,7 +321,7 @@ public sealed partial class LaunchService
                 : new LaunchQuoteLine($"Database {line.Resource.Name}", $"دیتابیس {line.Resource.Name}", line.HourlyMinor))
             .ToList();
 
-        return new LaunchQuote(lines, quote.FirstHourMinor, quote.BalanceMinor, quote.Currency, quote.Exempt, quote.Refusal);
+        return new LaunchQuote(lines, quote.FirstHourMinor, quote.BalanceMinor, quote.Currency, quote.Exempt, quote.Refusal, quote.MoreCreditWouldHelp);
     }
 
     /// <summary>
@@ -247,24 +330,46 @@ public sealed partial class LaunchService
     /// instead of placing the first database wherever suits it alone and then discovering that the app
     /// does not fit beside it, or that a database's placement knows nothing of a plan's pool. The
     /// answer is written into what is confirmed, so a retry stays on the same host.
+    ///
+    /// <para>
+    /// A chosen host is asked the same question, and the form always posts one. Each create checks only
+    /// itself, so on a small host every one of them would pass here, the first database would be created
+    /// and charged, and the next refused: a partial launch that trying again cannot help. The choice stays
+    /// on a refusal, so that what the screen goes on to quote is still about the host it shows. An id that
+    /// is no server is read the way the create services read it, as no choice at all.
+    /// </para>
     /// </summary>
     private async Task<SettledServer> SettleServerAsync(Guid workspaceId, LaunchChoices choices, CancellationToken ct)
     {
-        if (choices.ServerId is { } chosen) return new SettledServer(chosen, null);
+        var (memory, cpu) = await AllOfItAsync(choices, ct);
 
+        if (choices.ServerId is { } chosen && await db.Servers.AsNoTracking().AnyAsync(s => s.Id == chosen, ct))
+        {
+            var fits = await scheduler.CheckAsync(chosen, memory, cpu, ct);
+            return new SettledServer(chosen, fits.Ok ? null : NoRoom(fits));
+        }
+
+        var plan = await PlanForAsync(workspaceId, ct);
+        var pool = string.IsNullOrWhiteSpace(plan?.NodePool) ? null : plan!.NodePool;
+
+        var placed = await scheduler.PlaceAsync(memory, cpu, pool, ct);
+        return placed.Ok
+            ? new SettledServer(placed.ServerId, null)
+            : new SettledServer(null, NoRoom(placed));
+    }
+
+    private static ServiceRefusal NoRoom(PlacementResult placement) => new(
+        placement.Reason ?? "No server has room for everything this launch creates.",
+        placement.ReasonFa ?? placement.Reason ?? "هیچ سروری برای همهٔ چیزهایی که این راه‌اندازی می‌سازد جا ندارد.");
+
+    /// <summary>What every database and the app ask for together, all at the one size a launch gives them.</summary>
+    private async Task<(long Memory, double Cpu)> AllOfItAsync(LaunchChoices choices, CancellationToken ct)
+    {
         var size = string.IsNullOrWhiteSpace(choices.InstanceSizeKey)
             ? null
             : await db.InstanceSizes.AsNoTracking().FirstOrDefaultAsync(s => s.Key == choices.InstanceSizeKey, ct);
         var count = choices.Services.Count + 1;
-        var plan = await PlanForAsync(workspaceId, ct);
-        var pool = string.IsNullOrWhiteSpace(plan?.NodePool) ? null : plan!.NodePool;
-
-        var placed = await scheduler.PlaceAsync((size?.MemoryBytes ?? 0) * count, (size?.CpuCores ?? 0) * count, pool, ct);
-        return placed.Ok
-            ? new SettledServer(placed.ServerId, null)
-            : new SettledServer(null, new ServiceRefusal(
-                placed.Reason ?? "No server has room for everything this launch creates.",
-                placed.ReasonFa ?? placed.Reason ?? "هیچ سروری برای همهٔ چیزهایی که این راه‌اندازی می‌سازد جا ندارد."));
+        return ((size?.MemoryBytes ?? 0) * count, (size?.CpuCores ?? 0) * count);
     }
 
     private sealed record SettledServer(Guid? ServerId, ServiceRefusal? Refusal);
@@ -281,7 +386,7 @@ public sealed partial class LaunchService
 
         foreach (var service in choices.Services)
         {
-            var wanted = string.IsNullOrWhiteSpace(service.Name) ? DerivedServiceName(choices.Name, service.Type) : service.Name.Trim();
+            var wanted = WantedServiceName(choices, service);
             var name = wanted;
             for (var n = 2; !taken.Add(DatabaseProvisioningService.Slugify(name)) || await ContainerNameTakenAsync(name, ct); n++)
                 name = $"{wanted}-{n}";
@@ -290,6 +395,9 @@ public sealed partial class LaunchService
 
         return names;
     }
+
+    private static string WantedServiceName(LaunchChoices choices, LaunchServiceChoice service) =>
+        string.IsNullOrWhiteSpace(service.Name) ? DerivedServiceName(choices.Name, service.Type) : service.Name.Trim();
 
     private Task<bool> ContainerNameTakenAsync(string name, CancellationToken ct)
     {
@@ -318,7 +426,7 @@ public sealed partial class LaunchService
 
     private static readonly ServiceRefusal NoLongerConfirmable = new(
         "This launch can no longer be confirmed. Start again from the beginning.",
-        "این راه‌اندازی دیگر قابل تأیید نیست. از اول شروع کنید.");
+        "این راه‌اندازی دیگر قابل تأیید نیست. از اول شروع کن.");
 
     /// <summary>A second submit of a screen that has already been accepted: not a refusal, it simply has nothing left to do.</summary>
     private static bool AlreadyConfirmed(LaunchStatus status) => status is LaunchStatus.Creating
@@ -335,13 +443,13 @@ public sealed partial class LaunchService
         foreach (var variable in choices.EnvVars.Where(v => !EnvConfigFileEditor.IsValidKey(v.Key ?? "")))
             refusals.Add(new ServiceRefusal(
                 $"'{variable.Key}' cannot be a variable name: use letters, digits and underscores, and do not start with a digit.",
-                $"«{variable.Key}» نمی‌تواند نام متغیر باشد: از حرف، عدد و زیرخط استفاده کنید و با عدد شروع نکنید.",
+                $"«{variable.Key}» نمی‌تواند نام متغیر باشد: از حرف، عدد و زیرخط استفاده کن و با عدد شروع نکن.",
                 nameof(LaunchChoices.EnvVars)));
 
         // No tier at all is an install that has defined none, where there is nothing to choose. On any
         // other install a blank here would create an unlimited workload nobody asked for.
         if (string.IsNullOrWhiteSpace(choices.InstanceSizeKey) && await db.InstanceSizes.AsNoTracking().AnyAsync(s => s.IsEnabled, ct))
-            refusals.Add(new ServiceRefusal("Choose a size.", "یک اندازه انتخاب کنید.", nameof(LaunchChoices.InstanceSizeKey)));
+            refusals.Add(new ServiceRefusal("Choose a size.", "یک اندازه انتخاب کن.", nameof(LaunchChoices.InstanceSizeKey)));
 
         // A folder named only in this form was never chosen, and what is about to be created was worked
         // out from a different one: the wrong database, the wrong variables and the wrong port, with
@@ -352,13 +460,13 @@ public sealed partial class LaunchService
             if (stored.Chosen is null)
                 refusals.Add(new ServiceRefusal(
                     $"This holds several apps. Choose which folder to launch: {string.Join(", ", folders)}.",
-                    $"این کد چند اپ دارد. انتخاب کنید کدام پوشه راه بیفتد: {string.Join("، ", folders)}.",
+                    $"این کد چند اپ دارد. انتخاب کن کدام پوشه راه بیفتد: {string.Join("، ", folders)}.",
                     nameof(LaunchChoices.RootDirectory)));
             else if (!string.IsNullOrWhiteSpace(choices.RootDirectory)
                      && AppRootDirectory.Normalise(choices.RootDirectory) != AppRootDirectory.Normalise(inspection.RootDirectory))
                 refusals.Add(new ServiceRefusal(
                     $"This was worked out for the folder {stored.Chosen}. To launch another one, choose it from the list: {string.Join(", ", folders)}.",
-                    $"این پیشنهاد برای پوشهٔ {stored.Chosen} آماده شده است. برای راه انداختن پوشهٔ دیگر، آن را از فهرست انتخاب کنید: {string.Join("، ", folders)}.",
+                    $"این پیشنهاد برای پوشهٔ {stored.Chosen} آماده شده است. برای راه انداختن پوشهٔ دیگر، آن را از فهرست انتخاب کن: {string.Join("، ", folders)}.",
                     nameof(LaunchChoices.RootDirectory)));
         }
 
@@ -368,7 +476,7 @@ public sealed partial class LaunchService
         if (launch.SourceKind == LaunchSourceKind.Upload && inspection.Stack == DetectedStack.Compose)
             refusals.Add(new ServiceRefusal(
                 "A project that runs only from a Docker Compose file cannot be launched from an upload yet. Push it to a Git repository and launch that, or add a Dockerfile.",
-                "پروژه‌ای که فقط با فایل Docker Compose اجرا می‌شود فعلاً از راه آپلود راه نمی‌افتد. آن را در یک مخزن گیت بگذارید و از آنجا راه بیندازید، یا یک Dockerfile اضافه کنید."));
+                "پروژه‌ای که فقط با فایل Docker Compose اجرا می‌شود فعلاً از راه آپلود راه نمی‌افتد. آن را در یک مخزن گیت بگذار و از آنجا راه بینداز، یا یک Dockerfile اضافه کن."));
 
         if (server.Refusal is { } placement) refusals.Add(placement);
         var serverId = server.ServerId;
@@ -379,6 +487,19 @@ public sealed partial class LaunchService
                 DatabaseRequest(launch, choices, i, names[i], serverId, null), ct));
 
         refusals.AddRange(await apps.ValidateCreateAsync(AppRequest(launch, choices, inspection, serverId, null, null), ct));
+
+        // Each of those asks the plan about itself alone, and on a plan with one slot left every one of
+        // them is true. Asked as a batch, so a launch that cannot all fit stops here rather than at its
+        // second create, with the first already charged. Only when nothing above has spoken: a plan that
+        // is already full would otherwise say so twice in two different sentences.
+        if (refusals.Count == 0)
+        {
+            var (memory, cpu) = await AllOfItAsync(choices, ct);
+            var batch = await quota.CanAddWorkloadsAsync(launch.WorkspaceId,
+                new WorkloadQuotaDelta(Apps: 1, Services: choices.Services.Count, MemoryBytes: memory, CpuCores: cpu), ct);
+            if (!batch.Allowed)
+                refusals.Add(AppRefusals.Quota(batch, "Plan quota exceeded.", "سقف پلن پر شده است."));
+        }
 
         if ((await QuoteOnAsync(launch.WorkspaceId, choices, serverId, ct)).Refusal is { } money)
             refusals.Add(money);

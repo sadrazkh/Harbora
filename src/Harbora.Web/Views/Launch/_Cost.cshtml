@@ -10,7 +10,11 @@
     @if (Model.Refusal is { } refusal)
     {
         <p class="break-words text-danger" data-launch-cost-refusal>@(isFa ? refusal.MessageFa : refusal.Message)</p>
-        <a href="/billing" class="mt-1 inline-block text-xs text-accent-text hover:underline">@(isFa ? "برو به صورت‌حساب" : "Go to billing")</a>
+        @* Only when more credit would fix it. Sent there over a size with no price, a person finds nothing to do. *@
+        @if (Model.RefusalIsAboutMoney)
+        {
+            <a href="/billing" class="mt-1 inline-block text-xs text-accent-text hover:underline" data-launch-cost-billing>@(isFa ? "برو به صورت‌حساب" : "Go to billing")</a>
+        }
     }
     else if (Model.Exempt)
     {

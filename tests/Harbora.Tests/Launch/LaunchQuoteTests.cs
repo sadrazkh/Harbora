@@ -47,6 +47,7 @@ public sealed class LaunchQuoteTests
         var quote = await h.Request().QuoteAsync(id, choices, default);
 
         quote.Refusal.Should().BeNull();
+        quote.RefusalIsAboutMoney.Should().BeFalse();
         quote.Exempt.Should().BeFalse();
         quote.FirstHourMinor.Should().Be(250, "one database and one app at 125");
         quote.BalanceMinor.Should().Be(100_000);
@@ -155,6 +156,7 @@ public sealed class LaunchQuoteTests
         var quote = await h.Request().QuoteAsync(id, choices, default);
 
         quote.Refusal.Should().NotBeNull();
+        quote.RefusalIsAboutMoney.Should().BeTrue("this is the one more credit would fix");
         quote.Refusal!.Message.Should().Contain("Top up");
         quote.Refusal.MessageFa.Should().Contain("شارژ");
         quote.FirstHourMinor.Should().Be(250, "the figure it could not pay is still the figure");
@@ -181,6 +183,7 @@ public sealed class LaunchQuoteTests
         var quote = await h.Request().QuoteAsync(id, choices with { InstanceSizeKey = "unpriced" }, default);
 
         quote.Refusal!.Message.Should().Contain("no running hourly price");
+        quote.RefusalIsAboutMoney.Should().BeFalse("no amount of credit prices a tier");
         quote.Refusal.MessageFa.Should().Contain("قیمت");
         quote.Lines.Should().OnlyContain(l => l.HourlyMinor == null);
     }
@@ -199,6 +202,7 @@ public sealed class LaunchQuoteTests
         var quote = await h.Request().QuoteAsync(id, choices, default);
 
         quote.Refusal!.Message.Should().Contain("suspended");
+        quote.RefusalIsAboutMoney.Should().BeFalse();
         quote.Refusal.MessageFa.Should().Contain("معلق");
     }
 
@@ -213,6 +217,7 @@ public sealed class LaunchQuoteTests
 
         quote.BalanceMinor.Should().BeNull();
         quote.Refusal.Should().NotBeNull();
+        quote.RefusalIsAboutMoney.Should().BeTrue("a wallet is what it is short of");
     }
 
     [Fact]
@@ -229,6 +234,7 @@ public sealed class LaunchQuoteTests
         var quote = await h.Request().QuoteAsync(id, choices, default);
 
         quote.Refusal!.Message.Should().Contain("spend limit");
+        quote.RefusalIsAboutMoney.Should().BeFalse("its owner set that limit, and a top-up does not lift it");
     }
 
     [Fact]

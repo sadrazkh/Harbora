@@ -123,6 +123,51 @@ public class SourceInspectorParityTests : InspectorTreeTests
         InspectorShouldAgreeWithThePipeline(packageJson);
     }
 
+    [Theory]
+    [InlineData("""{"scripts":{"build":"nuxt build"},"devDependencies":{"nuxt":"3"}}""")]
+    [InlineData("""{"scripts":{"build":"nuxt generate"},"devDependencies":{"nuxt":"3"}}""")]
+    [InlineData("""{"scripts":{"build":"nuxt build","start":"node x.mjs"},"dependencies":{"nuxt":"3"}}""")]
+    public void What_a_nuxt_project_is_proposed_as_is_what_the_pipeline_builds_it_as(string packageJson)
+    {
+        Write("package.json", packageJson);
+
+        InspectorShouldAgreeWithThePipeline(packageJson);
+    }
+
+    [Theory]
+    [InlineData("package.json", """{"scripts":{"build":"tsc"}}""", "web: node dist/index.js\n")]
+    [InlineData("requirements.txt", "gunicorn", "web: gunicorn app:app\n")]
+    [InlineData("go.mod", "module x", "web: bin/server\n")]
+    [InlineData("composer.json", "{}", "web: vendor/bin/heroku-php-apache2 public/\n")]
+    public void A_web_line_on_each_stack_does_not_change_what_the_pipeline_builds(string marker, string content, string procfile)
+    {
+        Write(marker, content);
+        if (marker == "requirements.txt") Write("app.py");
+        Write("Procfile", procfile);
+
+        InspectorShouldAgreeWithThePipeline(procfile);
+    }
+
+    [Theory]
+    [InlineData("apps/web/package.json", "apps/api/go.mod")]
+    [InlineData("client/package.json", "server/requirements.txt")]
+    public void A_folder_chosen_from_behind_a_tooling_root_is_what_the_pipeline_builds_from_it(string first, string second)
+    {
+        Write("package.json", """{"scripts":{"build":"turbo run build"}}""");
+        Write(first, """{"scripts":{"start":"node a.js"}}""");
+        Write(second, "module x");
+
+        var candidates = Inspect().RootCandidates;
+        candidates.Should().HaveCount(2);
+
+        foreach (var folder in candidates)
+        {
+            var inspection = SourceInspector.Inspect(Path.Combine(Root, folder));
+            var pack = Buildpacks.Detect(Path.Combine(Root, folder), 3000);
+            inspection.Stack.Should().Be(FromBuildpack(pack), folder);
+        }
+    }
+
     [Fact]
     public void A_package_json_the_inspector_will_not_read_is_treated_the_same_by_the_pipeline()
     {

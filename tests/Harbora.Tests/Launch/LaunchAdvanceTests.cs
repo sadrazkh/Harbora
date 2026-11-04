@@ -2,6 +2,7 @@ using FluentAssertions;
 using Harbora.Domain.Common;
 using Harbora.Domain.Launch;
 using Harbora.Infrastructure.Launch;
+using Harbora.Infrastructure.Verification;
 using Xunit;
 
 namespace Harbora.Tests.Launch;
@@ -120,6 +121,20 @@ public sealed class LaunchAdvanceTests
         LaunchAdvance.Decide(Snapshot(LaunchStatus.Deploying)).Kind.Should().Be(LaunchMoveKind.QueueDeployment);
     }
 
+    [Fact]
+    public void Deploying_with_no_deployment_after_twenty_minutes_is_a_failure_at_deploy_and_not_a_page_that_goes_on_saying_so()
+    {
+        LaunchAdvance.Decide(Snapshot(LaunchStatus.Deploying, inStatus: TimeSpan.FromMinutes(20)))
+            .Kind.Should().Be(LaunchMoveKind.QueueDeployment);
+
+        var move = LaunchAdvance.Decide(Snapshot(LaunchStatus.Deploying, inStatus: TimeSpan.FromMinutes(21)));
+
+        move.Kind.Should().Be(LaunchMoveKind.Fail);
+        move.FailedStep.Should().Be(LaunchStepKeys.Deploy);
+        move.Message.Should().Contain("could not be started");
+        move.MessageFa.Should().Contain("شروع نشد");
+    }
+
     [Theory]
     [InlineData(DeploymentStatus.Queued)]
     [InlineData(DeploymentStatus.Building)]
@@ -158,6 +173,24 @@ public sealed class LaunchAdvanceTests
     }
 
     [Fact]
+    public void A_build_that_wrote_no_site_says_that_rather_than_quoting_a_screen_of_shell()
+    {
+        // What the daemon really sends back: the whole RUN step, with the sentence inside it as an echo.
+        var error =
+            "Build of harbora/shop:build-1 failed at Step 7/12 : RUN found=\"\"; for dir in dist build out; do " +
+            $"if [ -z \"$found\" ]; then echo \"{Harbora.Infrastructure.Deployments.Buildpacks.NotASite}\" >&2; exit 1; fi: " +
+            "The command '/bin/sh -c found=\"\"; for dir in dist build' returned a non-zero code: 1";
+
+        var move = LaunchAdvance.Decide(Snapshot(LaunchStatus.Deploying, deploymentId: Guid.CreateVersion7(),
+            deployment: new(DeploymentStatus.Failed, error)));
+
+        move.FailedStep.Should().Be(LaunchStepKeys.Deploy);
+        move.Message.Should().Be(
+            "The deployment failed: The build finished without producing an index.html, so this is not a site. It needs a start script in package.json, or a Dockerfile.");
+        move.MessageFa.Should().Contain("index.html").And.Contain("Dockerfile").And.NotContain("/bin/sh").And.NotContain("found=");
+    }
+
+    [Fact]
     public void An_uploads_failure_says_to_upload_a_new_version_because_the_archive_is_gone()
     {
         var move = LaunchAdvance.Decide(Snapshot(LaunchStatus.Deploying, source: LaunchSourceKind.Upload,
@@ -190,6 +223,70 @@ public sealed class LaunchAdvanceTests
 
         move.Kind.Should().Be(LaunchMoveKind.Fail);
         move.FailedStep.Should().Be(LaunchStepKeys.Verify);
+    }
+
+    private static AppCheck CheckOf(string key, AppCheckStatus status) => new(key, status, key, key);
+
+    [Fact]
+    public void Green_needs_the_check_that_proves_it_runs_to_have_passed()
+    {
+        LaunchAdvance.VerdictOn(
+                [CheckOf("running", AppCheckStatus.Passed), CheckOf("restarts", AppCheckStatus.Passed), CheckOf("logs", AppCheckStatus.Passed)],
+                ServiceKind.Worker)
+            .Should().Be(LaunchStatus.Succeeded);
+    }
+
+    [Theory]
+    [InlineData(ServiceKind.Web)]
+    [InlineData(ServiceKind.Worker)]
+    [InlineData(ServiceKind.Private)]
+    [InlineData(ServiceKind.Static)]
+    public void A_hung_daemon_is_not_an_app_that_works(ServiceKind kind)
+    {
+        // Not one Failed among them, which is exactly how this used to say "Your bot is running".
+        LaunchAdvance.VerdictOn(
+                [CheckOf("running", AppCheckStatus.Skipped), CheckOf("restarts", AppCheckStatus.Skipped), CheckOf("logs", AppCheckStatus.Skipped)],
+                kind)
+            .Should().Be(LaunchStatus.SucceededWithProblems);
+    }
+
+    [Fact]
+    public void A_page_that_answers_beside_a_log_that_cannot_reach_its_database_is_not_green()
+    {
+        LaunchAdvance.VerdictOn(
+                [CheckOf("running", AppCheckStatus.Passed), CheckOf("url", AppCheckStatus.Passed), CheckOf("logs", AppCheckStatus.Warning)],
+                ServiceKind.Web)
+            .Should().Be(LaunchStatus.SucceededWithProblems);
+    }
+
+    [Theory]
+    [InlineData(ServiceKind.Cron)]
+    [InlineData(ServiceKind.ReleaseTask)]
+    public void A_kind_that_runs_and_exits_has_no_running_check_to_ask_so_it_keeps_its_meaning(ServiceKind kind)
+    {
+        // Skipped by design, every time: requiring it would make every scheduled job a problem.
+        IReadOnlyList<AppCheck> byDesign =
+            [CheckOf("running", AppCheckStatus.Skipped), CheckOf("restarts", AppCheckStatus.Skipped), CheckOf("logs", AppCheckStatus.Skipped)];
+        LaunchAdvance.VerdictOn(byDesign, kind).Should().Be(LaunchStatus.Succeeded);
+
+        // Its database answering is still its own question.
+        LaunchAdvance.VerdictOn([.. byDesign, CheckOf("service:1", AppCheckStatus.Failed)], kind).Should().Be(LaunchStatus.SucceededWithProblems);
+        LaunchAdvance.VerdictOn([.. byDesign, CheckOf("service:1", AppCheckStatus.Warning)], kind).Should().Be(LaunchStatus.SucceededWithProblems);
+        LaunchAdvance.VerdictOn([.. byDesign, CheckOf("service:1", AppCheckStatus.Passed)], kind).Should().Be(LaunchStatus.Succeeded);
+    }
+
+    [Fact]
+    public void A_database_with_no_client_to_test_it_does_not_cost_a_running_app_its_green()
+    {
+        LaunchAdvance.VerdictOn(
+                [CheckOf("running", AppCheckStatus.Passed), CheckOf("service:1", AppCheckStatus.Skipped)], ServiceKind.Web)
+            .Should().Be(LaunchStatus.Succeeded);
+    }
+
+    [Fact]
+    public void Nothing_to_read_at_all_is_not_a_pass()
+    {
+        LaunchAdvance.VerdictOn([], ServiceKind.Web).Should().Be(LaunchStatus.SucceededWithProblems);
     }
 
     [Fact]

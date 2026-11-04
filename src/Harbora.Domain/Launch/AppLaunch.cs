@@ -41,12 +41,13 @@ public enum LaunchStatus
     /// <summary>Deployed; the checks are running.</summary>
     Verifying = 6,
 
-    /// <summary>Deployed, and every check that could run passed.</summary>
+    /// <summary>Deployed, nothing failed or warned, and whatever is meant to keep running was seen running.</summary>
     Succeeded = 7,
 
     /// <summary>
-    /// Deployed, and at least one check failed. Separate from <see cref="Failed"/> because the app is
-    /// running and being billed, and the person's next move is to read the check rather than try again.
+    /// Deployed, and a check failed or warned, or the one that proves it runs could not say. Separate from
+    /// <see cref="Failed"/> because the app is deployed and being billed, and the person's next move is to
+    /// read the checks rather than try again.
     /// </summary>
     SucceededWithProblems = 8,
 

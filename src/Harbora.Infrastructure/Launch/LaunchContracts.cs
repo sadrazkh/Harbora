@@ -83,7 +83,8 @@ public sealed record LaunchChoices
 
 /// <summary>One variable the confirm screen shows.</summary>
 /// <param name="SuggestedValue">Pre-filled for a <c>KeepExample</c>; null for everything else.</param>
-public sealed record LaunchEnvField(string Key, EnvVarDisposition Disposition, string? SuggestedValue, bool IsSecret, string SourceFile);
+/// <param name="Service">For a <c>ProvidedByAttach</c> or <c>AliasOfAttach</c> name: the engine it comes from, when that is known. If that engine is not ticked, nothing will set this name, so a screen asks it as an ordinary question.</param>
+public sealed record LaunchEnvField(string Key, EnvVarDisposition Disposition, string? SuggestedValue, bool IsSecret, string SourceFile, ManagedServiceType? Service = null);
 
 /// <summary>A service the screen can offer, whether or not it was detected.</summary>
 /// <param name="Detected">Null when nothing in the source suggested it.</param>
@@ -92,13 +93,15 @@ public sealed record LaunchServiceOption(ManagedServiceType Type, string Display
 /// <summary>What the confirm screen is drawn from. Nothing here has been created.</summary>
 /// <param name="Defaults">The form's initial values — the inspection turned into choices.</param>
 /// <param name="AppName">Derived from the repository or the archive; what <see cref="LaunchChoices.Name"/> starts as.</param>
+/// <param name="SuggestedSlug">The address label the app would really get, through the same uniqueness rule creating it uses. What a preview shows.</param>
 public sealed record LaunchProposal(
     Guid LaunchId,
     SourceInspection Inspection,
     LaunchChoices Defaults,
     string AppName,
     IReadOnlyList<LaunchEnvField> EnvFields,
-    IReadOnlyList<LaunchServiceOption> ServiceOptions);
+    IReadOnlyList<LaunchServiceOption> ServiceOptions,
+    string? SuggestedSlug = null);
 
 /// <param name="HourlyMinor">Null when this resource has no price yet, which creation refuses.</param>
 public sealed record LaunchQuoteLine(string Name, string NameFa, long? HourlyMinor);
@@ -111,13 +114,15 @@ public sealed record LaunchQuoteLine(string Name, string NameFa, long? HourlyMin
 /// <param name="BalanceMinor">The workspace's balance, or null when there is no wallet to read.</param>
 /// <param name="Exempt">Billing is off, or this is the provider's own workspace: nothing is charged.</param>
 /// <param name="Refusal">Why this could not be paid for, already in both languages. Null when it can.</param>
+/// <param name="RefusalIsAboutMoney">True only when more credit would fix it. An unpriced size is not that, and sending somebody to the billing page for it sends them nowhere.</param>
 public sealed record LaunchQuote(
     IReadOnlyList<LaunchQuoteLine> Lines,
     long FirstHourMinor,
     long? BalanceMinor,
     string Currency,
     bool Exempt,
-    ServiceRefusal? Refusal);
+    ServiceRefusal? Refusal,
+    bool RefusalIsAboutMoney = false);
 
 public enum LaunchStepState
 {
@@ -152,6 +157,13 @@ public sealed record LaunchStepView(
 /// <param name="SourceLabel">The URL with any credentials stripped, or the archive's name.</param>
 /// <param name="PublicUrl">The address to open, once there is one.</param>
 /// <param name="CanRetry">A step failed and running it again could help.</param>
+/// <param name="AppGone">This launch made an app that has since been deleted. Whatever its status says, there is nothing to open.</param>
+/// <param name="Created">What exists right now from this launch, read from the rows rather than from a message.</param>
+/// <summary>Something a launch has created and is still there, to name on a failed launch.</summary>
+/// <param name="Kind">One of <c>"database"</c> or <c>"app"</c>.</param>
+/// <param name="Ready">False while it is still being made, or when making it failed.</param>
+public sealed record LaunchCreatedThing(string Kind, string Name, string LinkPath, bool Ready);
+
 public sealed record LaunchView(
     Guid Id,
     LaunchStatus Status,
@@ -166,7 +178,9 @@ public sealed record LaunchView(
     IReadOnlyList<LaunchStepView> Steps,
     IReadOnlyList<AppCheck> Checks,
     bool CanRetry,
-    bool IsTerminal);
+    bool IsTerminal,
+    bool AppGone = false,
+    IReadOnlyList<LaunchCreatedThing>? Created = null);
 
 /// <summary>
 /// "Here is my code, make it work": read the source, propose what it needs, and once the person

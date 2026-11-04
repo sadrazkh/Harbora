@@ -70,6 +70,27 @@ internal static class DotNetManifest
         }
     }
 
+    /// <summary>
+    /// The major version of a project's <c>TargetFramework</c>, read as XML so that a commented-out one
+    /// does not count. Null for anything but a plain <c>netN.0</c>: a property reference cannot be known
+    /// from here, and <c>net48</c> or <c>netstandard2.0</c> has no image of its own to name.
+    /// </summary>
+    public static int? TargetMajor(SourceTree app, string file)
+    {
+        if (Parse(app, file) is not { } project) return null;
+
+        foreach (var element in project.Descendants().Where(e => e.Name.LocalName == "TargetFramework"))
+        {
+            var value = element.Value.Trim();
+            if (value.StartsWith("net", StringComparison.Ordinal) && value.EndsWith(".0", StringComparison.Ordinal)
+                && int.TryParse(value[3..^2], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var major)
+                && major >= 5)
+                return major;
+        }
+
+        return null;
+    }
+
     private static XDocument? Parse(SourceTree app, string file)
     {
         if (app.ReadText(file) is not { } text) return null;

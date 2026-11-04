@@ -158,9 +158,132 @@ public sealed class LaunchServiceTests
         h.Verifier.Asked[0].GiveUpAt.Should().Be(h.Row(id).VerifyStartedAt!.Value + TimeSpan.FromMinutes(5));
 
         h.Advance(TimeSpan.FromSeconds(30));
-        h.Verifier.Next = app => LaunchHarness.ScriptedVerifier.Report(app, new AppCheck("url", AppCheckStatus.Passed, "Address", "آدرس"));
+        h.Verifier.Next = app => LaunchHarness.ScriptedVerifier.Report(app,
+            new AppCheck("running", AppCheckStatus.Passed, "Running", "در حال اجرا"),
+            new AppCheck("url", AppCheckStatus.Passed, "Address", "آدرس"));
         await h.TickAsync();
         h.Verifier.Asked[1].Previous.Should().NotBeNull("a passed check is not repeated within one run");
+        h.Row(id).Status.Should().Be(LaunchStatus.Succeeded);
+    }
+
+    [Fact]
+    public async Task A_run_that_could_not_ask_whether_it_is_running_is_never_green_and_says_it_could_not_check()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(Bare());
+        await h.ConfirmAsync(id);
+        h.Verifier.Next = app => LaunchHarness.ScriptedVerifier.Report(app,
+            new AppCheck("running", AppCheckStatus.Skipped, "Could not tell", "نشد فهمید"),
+            new AppCheck("restarts", AppCheckStatus.Skipped, "Could not tell", "نشد فهمید"),
+            new AppCheck("logs", AppCheckStatus.Skipped, "Could not read", "نشد خواند"));
+
+        await h.TickAsync();
+        h.DeploymentIs(h.Row(id).DeploymentId!.Value, DeploymentStatus.Succeeded);
+        h.Advance(TimeSpan.FromSeconds(30));
+        await h.TickAsync();
+
+        var view = await h.Request().GetAsync(id, default);
+        view!.Status.Should().Be(LaunchStatus.SucceededWithProblems);
+        var verify = view.Steps.Single(s => s.Key == LaunchStepKeys.Verify);
+        verify.State.Should().Be(LaunchStepState.Failed);
+        verify.Detail.Should().Contain("could not check");
+        verify.Detail.Should().NotContain("found a problem");
+        verify.DetailFa.Should().Contain("نتوانست");
+    }
+
+    [Fact]
+    public async Task A_log_complaining_beside_an_address_that_works_is_not_green()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(Bare());
+        await h.ConfirmAsync(id);
+        h.Verifier.Next = app => LaunchHarness.ScriptedVerifier.Report(app,
+            new AppCheck("running", AppCheckStatus.Passed, "Running", "در حال اجرا"),
+            new AppCheck("url", AppCheckStatus.Passed, "Address", "آدرس"),
+            new AppCheck("logs", AppCheckStatus.Warning, "Log", "لاگ", "ECONNREFUSED 127.0.0.1:5432", "ECONNREFUSED 127.0.0.1:5432"));
+
+        await h.TickAsync();
+        h.DeploymentIs(h.Row(id).DeploymentId!.Value, DeploymentStatus.Succeeded);
+        h.Advance(TimeSpan.FromSeconds(30));
+        await h.TickAsync();
+
+        h.Row(id).Status.Should().Be(LaunchStatus.SucceededWithProblems);
+        (await h.Request().GetAsync(id, default))!.Steps.Single(s => s.Key == LaunchStepKeys.Verify).Detail
+            .Should().Contain("found a problem");
+    }
+
+    [Fact]
+    public async Task A_worker_is_judged_by_its_running_check_and_a_scheduled_job_is_not()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(Bare() with { Kind = DetectedAppKind.Worker, StartCommand = "node bot.js" });
+        await h.ConfirmAsync(id);
+        h.Verifier.Next = app => LaunchHarness.ScriptedVerifier.Report(app, new AppCheck("running", AppCheckStatus.Skipped, "Not running", "روشن نیست"));
+
+        await h.TickAsync();
+        h.DeploymentIs(h.Row(id).DeploymentId!.Value, DeploymentStatus.Succeeded);
+        h.Advance(TimeSpan.FromSeconds(30));
+        await h.TickAsync();
+        h.Row(id).Status.Should().Be(LaunchStatus.SucceededWithProblems, "a worker that could not be seen running");
+
+        // The same report about an app whose kind says nothing was ever meant to keep running.
+        using (var db = h.Store())
+        {
+            db.Apps.IgnoreQueryFilters().Single().Kind = ServiceKind.Cron;
+            db.SaveChanges();
+        }
+        h.ChangeRow(id, l => { l.Status = LaunchStatus.Verifying; l.VerifyStartedAt = h.Clock.UtcNow; });
+        h.Advance(TimeSpan.FromSeconds(30));
+        await h.TickAsync();
+        h.Row(id).Status.Should().Be(LaunchStatus.Succeeded);
+    }
+
+    [Fact]
+    public async Task A_fault_in_the_panels_own_run_is_asked_again_and_only_the_time_limit_ends_it_at_verify()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(Bare());
+        await h.ConfirmAsync(id);
+        h.Verifier.Next = app => LaunchHarness.ScriptedVerifier.Report(app,
+            new AppCheck("running", AppCheckStatus.Pending, "The checks could not run", "بررسی‌ها اجرا نشدند")) with { CompletedAt = null };
+
+        await h.TickAsync();
+        h.DeploymentIs(h.Row(id).DeploymentId!.Value, DeploymentStatus.Succeeded);
+        h.Advance(TimeSpan.FromSeconds(30));
+        await h.TickAsync();
+        h.Row(id).Status.Should().Be(LaunchStatus.Verifying, "nothing was found out, so nothing is announced");
+
+        var runs = h.Verifier.Runs;
+        h.Advance(TimeSpan.FromSeconds(30));
+        await h.TickAsync();
+        h.Verifier.Runs.Should().BeGreaterThan(runs);
+        h.Row(id).Status.Should().Be(LaunchStatus.Verifying);
+
+        h.Advance(TimeSpan.FromMinutes(16));
+        await h.TickAsync();
+        var row = h.Row(id);
+        row.Status.Should().Be(LaunchStatus.Failed);
+        row.FailedStep.Should().Be(LaunchStepKeys.Verify);
+    }
+
+    [Fact]
+    public async Task A_blip_in_the_panels_own_run_that_clears_ends_on_what_the_next_run_found()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(Bare());
+        await h.ConfirmAsync(id);
+        h.Verifier.Next = app => LaunchHarness.ScriptedVerifier.Report(app,
+            new AppCheck("running", AppCheckStatus.Pending, "The checks could not run", "بررسی‌ها اجرا نشدند")) with { CompletedAt = null };
+
+        await h.TickAsync();
+        h.DeploymentIs(h.Row(id).DeploymentId!.Value, DeploymentStatus.Succeeded);
+        h.Advance(TimeSpan.FromSeconds(30));
+        await h.TickAsync();
+
+        h.Verifier.Next = null;
+        h.Advance(TimeSpan.FromSeconds(30));
+        await h.TickAsync();
+
         h.Row(id).Status.Should().Be(LaunchStatus.Succeeded);
     }
 
@@ -408,7 +531,7 @@ public sealed class LaunchServiceTests
 
         first.Status.Should().Be(LaunchStatus.Failed);
         h.Row(id).FailedStep.Should().Be(LaunchStepKeys.App);
-        first.Steps.Single(s => s.Key == LaunchStepKeys.Services).State.Should().Be(LaunchStepState.Done);
+        first.Steps.Single(s => s.Key == LaunchStepKeys.Services).State.Should().Be(LaunchStepState.Running, "it is still being set up, and nothing has said otherwise");
         first.Steps.Single(s => s.Key == LaunchStepKeys.App).State.Should().Be(LaunchStepState.Failed);
 
         (await h.Request().RetryAsync(id, null, default)).Value!.Status.Should().Be(LaunchStatus.WaitingForServices);
@@ -537,6 +660,172 @@ public sealed class LaunchServiceTests
     }
 
     [Fact]
+    public async Task A_queue_that_keeps_throwing_something_unexpected_ends_as_a_failed_deploy()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(Bare());
+        await h.ConfirmAsync(id);
+        h.Row(id).Status.Should().Be(LaunchStatus.Deploying);
+
+        h.RefuseNextDeployment = new TimeoutException("the queue table is locked");
+        await h.TickAsync();
+        h.Row(id).Status.Should().Be(LaunchStatus.Deploying, "one launch's trouble is logged, and it is tried again");
+
+        h.Advance(TimeSpan.FromMinutes(21));
+        h.RefuseNextDeployment = new TimeoutException("the queue table is locked");
+        await h.TickAsync();
+
+        var row = h.Row(id);
+        row.Status.Should().Be(LaunchStatus.Failed);
+        row.FailedStep.Should().Be(LaunchStepKeys.Deploy);
+
+        h.RefuseNextDeployment = null;
+        (await h.Request().RetryAsync(id, null, default)).Value!.Status.Should().Be(LaunchStatus.Deploying,
+            "and running that step again starts its twenty minutes again");
+        await h.TickAsync();
+        h.Row(id).DeploymentId.Should().NotBeNull();
+    }
+
+    /// <summary>A panel that died between each create's commit and the write that puts its id on the row.</summary>
+    private static void ForgetWhatWasCreated(LaunchHarness h, Guid id) => h.ChangeRow(id, l =>
+    {
+        l.Status = LaunchStatus.Failed;
+        l.FailedStep = LaunchStepKeys.Services;
+        l.ServiceIdsJson = null;
+        l.AppId = null;
+        l.DeploymentId = null;
+    });
+
+    [Fact]
+    public async Task A_retry_after_a_crash_adopts_what_was_already_made_and_paid_for_rather_than_making_a_second()
+    {
+        using var h = new LaunchHarness();
+        h.Billing.Enabled = true;
+        using (var db = h.Store())
+        {
+            db.Wallets.Add(new Harbora.Domain.Billing.Wallet { WorkspaceId = h.WorkspaceId, BalanceMinor = 100_000 });
+            db.SaveChanges();
+        }
+        var id = await h.ReadyGitAsync(NodeWithPostgres());
+        await h.ConfirmAsync(id);
+
+        var service = h.Store().ManagedServices.IgnoreQueryFilters().Single().Id;
+        var app = h.Store().Apps.IgnoreQueryFilters().Single().Id;
+        var charged = h.Store().BillingLedger.IgnoreQueryFilters().Count();
+        ForgetWhatWasCreated(h, id);
+
+        var view = (await h.Request().RetryAsync(id, null, default)).Value!;
+
+        view.Status.Should().Be(LaunchStatus.WaitingForServices);
+        h.Store().ManagedServices.IgnoreQueryFilters().Should().ContainSingle().Which.Id.Should().Be(service);
+        h.Store().Apps.IgnoreQueryFilters().Should().ContainSingle().Which.Id.Should().Be(app);
+        h.Store().BillingLedger.IgnoreQueryFilters().Count().Should().Be(charged, "paying once was enough");
+        LaunchJson.ReadIds(h.Row(id).ServiceIdsJson).Should().Equal(service);
+        h.Row(id).AppId.Should().Be(app);
+        h.Store().AppManagedServices.IgnoreQueryFilters().Should().ContainSingle("what it found is attached once");
+    }
+
+    [Fact]
+    public async Task What_a_crash_left_under_a_numbered_name_is_found_too()
+    {
+        using var h = new LaunchHarness();
+        using (var db = h.Store())
+        {
+            // Why the first attempt took "-2": somebody else already has the plain name.
+            db.ManagedServices.Add(new ManagedService
+            {
+                WorkspaceId = h.OtherWorkspaceId, EnvironmentId = Guid.CreateVersion7(), ServerId = h.ServerA.Id,
+                Name = "shop-postgresql", Type = ManagedServiceType.PostgreSql, Version = "16",
+                ContainerName = DatabaseProvisioningService.ContainerPrefix + "shop-postgresql",
+                VolumeName = "v", Username = "u", DatabaseName = "d", EncryptedPassword = "p"
+            });
+            db.SaveChanges();
+        }
+        var id = await h.ReadyGitAsync(NodeWithPostgres());
+        await h.ConfirmAsync(id);
+        h.Store().ManagedServices.IgnoreQueryFilters().Should().Contain(s => s.Name == "shop-postgresql-2");
+        ForgetWhatWasCreated(h, id);
+
+        await h.Request().RetryAsync(id, null, default);
+
+        h.Store().ManagedServices.IgnoreQueryFilters().Count().Should().Be(2, "the other workspace's, and this launch's one");
+        h.Creates.DatabasesCreated.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task What_somebody_made_before_this_launch_began_is_theirs_and_is_not_adopted()
+    {
+        using var h = new LaunchHarness();
+        using (var db = h.Store())
+        {
+            db.ManagedServices.Add(new ManagedService
+            {
+                WorkspaceId = h.WorkspaceId, EnvironmentId = h.Environment!.Id, ServerId = h.ServerA.Id,
+                CreatedAt = DateTimeOffset.UtcNow.AddDays(-1),
+                Name = "shop-postgresql", Type = ManagedServiceType.PostgreSql, Version = "16",
+                ContainerName = DatabaseProvisioningService.ContainerPrefix + "shop-postgresql",
+                VolumeName = "v", Username = "u", DatabaseName = "d", EncryptedPassword = "p"
+            });
+            db.SaveChanges();
+        }
+        var id = await h.ReadyGitAsync(NodeWithPostgres());
+        h.Creates.RefuseApp = new ServiceRefusal("No.", "نه.");
+        await h.ConfirmAsync(id);
+        var made = LaunchJson.ReadIds(h.Row(id).ServiceIdsJson).Single();
+        h.ChangeRow(id, l => { l.ServiceIdsJson = null; l.FailedStep = LaunchStepKeys.Services; });
+
+        await h.Request().RetryAsync(id, null, default);
+
+        LaunchJson.ReadIds(h.Row(id).ServiceIdsJson).Should().Equal(made);
+    }
+
+    [Fact]
+    public async Task What_another_launch_made_of_the_same_repository_is_that_launchs()
+    {
+        using var h = new LaunchHarness();
+        var first = await h.ReadyGitAsync(NodeWithPostgres());
+        var second = await h.ReadyGitAsync(NodeWithPostgres());
+
+        // The first to be read is the second to be confirmed, so what the other made came after it began.
+        await h.ConfirmAsync(second);
+        await h.ConfirmAsync(first);
+        var mine = LaunchJson.ReadIds(h.Row(first).ServiceIdsJson).Single();
+        var theirs = LaunchJson.ReadIds(h.Row(second).ServiceIdsJson).Single();
+        var theirApp = h.Row(second).AppId;
+        ForgetWhatWasCreated(h, first);
+
+        await h.Request().RetryAsync(first, null, default);
+
+        LaunchJson.ReadIds(h.Row(first).ServiceIdsJson).Should().Equal(mine).And.NotContain(theirs);
+        h.Row(first).AppId.Should().NotBe(theirApp!.Value);
+    }
+
+    [Fact]
+    public async Task The_first_confirm_adopts_nothing_because_nothing_of_that_name_can_be_this_launchs_yet()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(NodeWithPostgres());
+        using (var db = h.Store())
+        {
+            // Made by hand in another tab, after this launch began and before it was confirmed.
+            db.ManagedServices.Add(new ManagedService
+            {
+                WorkspaceId = h.WorkspaceId, EnvironmentId = h.Environment!.Id, ServerId = h.ServerA.Id,
+                CreatedAt = DateTimeOffset.UtcNow.AddMinutes(1),
+                Name = "shop-postgresql", Type = ManagedServiceType.PostgreSql, Version = "16",
+                ContainerName = DatabaseProvisioningService.ContainerPrefix + "shop-postgresql",
+                VolumeName = "v", Username = "u", DatabaseName = "d", EncryptedPassword = "p"
+            });
+            db.SaveChanges();
+        }
+
+        await h.ConfirmAsync(id);
+
+        h.Creates.DatabasesCreated.Should().Be(1);
+        h.Store().ManagedServices.IgnoreQueryFilters().Should().Contain(s => s.Name == "shop-postgresql-2");
+    }
+
+    [Fact]
     public async Task A_create_interrupted_by_a_restart_is_handed_back_and_a_retry_finishes_it()
     {
         using var h = new LaunchHarness();
@@ -623,6 +912,150 @@ public sealed class LaunchServiceTests
 
         h.Row(id).Status.Should().Be(LaunchStatus.Succeeded);
         h.DeploymentsQueued.Should().Be(1, "the checks' retry does not deploy again");
+    }
+
+    // ---- what exists, from the rows --------------------------------------------------------------
+
+    [Fact]
+    public async Task What_a_launch_made_is_read_from_the_rows_with_a_link_and_whether_it_is_ready()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(NodeWithPostgres());
+
+        var before = await h.Request().GetAsync(id, default);
+        before!.Created.Should().BeEmpty("nothing has been made on a confirm screen");
+        before.AppGone.Should().BeFalse();
+
+        await h.ConfirmAsync(id);
+
+        var view = await h.Request().GetAsync(id, default);
+        var database = view!.Created!.Single(c => c.Kind == "database");
+        var app = view.Created!.Single(c => c.Kind == "app");
+        var appRow = h.Store().Apps.IgnoreQueryFilters().Single();
+        var databaseRow = h.Store().ManagedServices.IgnoreQueryFilters().Single();
+
+        database.Name.Should().Be(databaseRow.Name);
+        database.LinkPath.Should().Be($"/databases/{databaseRow.Id}");
+        database.Ready.Should().BeFalse("it is still being set up");
+        app.Name.Should().Be(appRow.Name);
+        app.LinkPath.Should().Be($"/apps/details/{appRow.Id}");
+        app.Ready.Should().BeFalse("nothing is deployed");
+
+        h.ServicesAre(ServiceStatus.Running);
+        using (var db = h.Store())
+        {
+            db.Apps.IgnoreQueryFilters().Single().Status = AppStatus.Running;
+            db.SaveChanges();
+        }
+
+        view = await h.Request().GetAsync(id, default);
+        view!.Created.Should().OnlyContain(c => c.Ready);
+    }
+
+    [Fact]
+    public async Task A_database_that_failed_is_named_as_there_and_not_ready()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(NodeWithPostgres());
+        await h.ConfirmAsync(id);
+        h.ServicesAre(ServiceStatus.Failed, "image pull failed");
+
+        (await h.Request().GetAsync(id, default))!.Created!.Single(c => c.Kind == "database").Ready.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task An_app_deleted_since_is_gone_whatever_the_status_says_and_is_no_longer_listed()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(NodeWithPostgres());
+        await h.ConfirmAsync(id);
+        h.ServicesAre(ServiceStatus.Running);
+        await h.TickAsync();
+        h.DeploymentIs(h.Row(id).DeploymentId!.Value, DeploymentStatus.Succeeded);
+        await h.TickAsync();
+        h.Advance(TimeSpan.FromSeconds(30));
+        await h.TickAsync();
+        h.Row(id).Status.Should().Be(LaunchStatus.Succeeded);
+
+        using (var db = h.Store())
+        {
+            db.Apps.RemoveRange(db.Apps.IgnoreQueryFilters());
+            db.SaveChanges();
+        }
+
+        var view = await h.Request().GetAsync(id, default);
+        view!.Status.Should().Be(LaunchStatus.Succeeded);
+        view.AppGone.Should().BeTrue();
+        view.PublicUrl.Should().BeNull();
+        view.Created.Should().ContainSingle().Which.Kind.Should().Be("database");
+    }
+
+    [Fact]
+    public async Task A_launch_that_has_made_no_app_yet_has_not_lost_one()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(NodeWithPostgres());
+        h.Creates.RefuseApp = new ServiceRefusal("No.", "نه.");
+        await h.ConfirmAsync(id);
+
+        var view = await h.Request().GetAsync(id, default);
+        view!.Status.Should().Be(LaunchStatus.Failed);
+        view.AppGone.Should().BeFalse();
+        view.Created.Should().ContainSingle().Which.Kind.Should().Be("database");
+    }
+
+    [Fact]
+    public async Task The_databases_step_says_what_the_rows_say_on_a_launch_that_stopped_past_it()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(NodeWithPostgres());
+        h.Creates.RefuseApp = new ServiceRefusal("No.", "نه.");
+        await h.ConfirmAsync(id);
+        h.Row(id).FailedStep.Should().Be(LaunchStepKeys.App);
+
+        async Task<LaunchStepView> DatabasesAsync() =>
+            (await h.Request().GetAsync(id, default))!.Steps.Single(s => s.Key == LaunchStepKeys.Services);
+
+        var serviceId = h.Store().ManagedServices.IgnoreQueryFilters().Single().Id;
+
+        var step = await DatabasesAsync();
+        step.State.Should().Be(LaunchStepState.Running, "it is still provisioning, whatever stopped the launch");
+        step.Detail.Should().Contain("shop-postgresql");
+        step.LinkPath.Should().Be($"/databases/{serviceId}");
+
+        h.ServicesAre(ServiceStatus.Failed, "image pull failed");
+        step = await DatabasesAsync();
+        step.State.Should().Be(LaunchStepState.Failed);
+        step.Detail.Should().Contain("image pull failed");
+        step.DetailFa.Should().Contain("image pull failed");
+        step.LinkPath.Should().Be($"/databases/{serviceId}");
+
+        h.ServicesAre(ServiceStatus.Running);
+        (await DatabasesAsync()).State.Should().Be(LaunchStepState.Done);
+    }
+
+    [Fact]
+    public async Task A_blank_posted_with_a_null_value_is_named_and_nothing_sets_it()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(NodeWithPostgres());
+
+        await h.ConfirmAsync(id, c => c with
+        {
+            EnvVars =
+            [
+                new LaunchEnvChoice("STRIPE_SECRET_KEY", null, IsSecret: true),
+                new LaunchEnvChoice("LOG_LEVEL", null),
+                new LaunchEnvChoice("JWT_SECRET", null, IsSecret: true)
+            ]
+        });
+
+        var set = h.Store().EnvironmentVariables.IgnoreQueryFilters().Select(v => v.Key).ToList();
+        set.Should().Equal("JWT_SECRET");
+
+        var app = (await h.Request().GetAsync(id, default))!.Steps.Single(s => s.Key == LaunchStepKeys.App);
+        app.Detail.Should().Contain("STRIPE_SECRET_KEY").And.Contain("LOG_LEVEL").And.NotContain("JWT_SECRET");
+        app.DetailFa.Should().Contain("STRIPE_SECRET_KEY");
     }
 
     // ---- tenancy -------------------------------------------------------------------------------
@@ -900,6 +1333,130 @@ public sealed class LaunchServiceTests
         outcome.Refusals.Should().Contain(r => r.MessageFa == "هیچ نودی جا ندارد.");
         h.Row(id).Status.Should().Be(LaunchStatus.AwaitingConfirmation);
         h.Store().ManagedServices.IgnoreQueryFilters().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_chosen_host_is_asked_about_all_of_it_together_because_the_form_always_chooses_one()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(TwoDatabases());
+        var choices = await h.DefaultsAsync(id) with { ServerId = h.ServerB.Id };
+
+        (await h.Request().ValidateConfirmAsync(id, choices, default)).Should().BeEmpty();
+
+        h.Scheduler.CheckAsked.Should().Contain((h.ServerB.Id, 3 * (1L << 30), 3.0), "two databases and the app");
+    }
+
+    [Fact]
+    public async Task A_chosen_host_that_fits_each_but_not_all_is_refused_before_anything_exists_and_charged()
+    {
+        using var h = new LaunchHarness();
+        h.Billing.Enabled = true;
+        using (var db = h.Store())
+        {
+            db.Wallets.Add(new Harbora.Domain.Billing.Wallet { WorkspaceId = h.WorkspaceId, BalanceMinor = 100_000 });
+            db.SaveChanges();
+        }
+        var id = await h.ReadyGitAsync(TwoDatabases());
+        var choices = await h.DefaultsAsync(id) with { ServerId = h.ServerB.Id };
+        h.Scheduler.RoomOnAChosenHost = 2L << 30;
+
+        (await h.Request().ValidateConfirmAsync(id, choices, default)).Should().ContainSingle(r => r.MessageFa == "آن سرور برای این جا ندارد.");
+
+        var outcome = await h.Request().ConfirmAsync(id, choices, null, default);
+
+        outcome.Ok.Should().BeFalse();
+        h.Row(id).Status.Should().Be(LaunchStatus.AwaitingConfirmation);
+        h.Store().ManagedServices.IgnoreQueryFilters().Should().BeEmpty();
+        h.Store().Apps.IgnoreQueryFilters().Should().BeEmpty();
+        h.Store().BillingLedger.IgnoreQueryFilters().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_quote_on_a_host_without_room_is_still_about_that_host()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(TwoDatabases());
+        var choices = await h.DefaultsAsync(id) with { ServerId = h.ServerB.Id };
+        h.Scheduler.RoomOnAChosenHost = 1;
+
+        await h.Request().QuoteAsync(id, choices, default);
+
+        h.Scheduler.Placements.Should().Be(0, "somebody chose it, so nothing else is asked for instead");
+    }
+
+    [Fact]
+    public async Task A_server_id_that_is_no_server_is_no_choice_at_all_the_way_the_create_services_read_it()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(Bare());
+
+        await h.ConfirmAsync(id, c => c with { ServerId = Guid.CreateVersion7() });
+
+        h.Store().Apps.IgnoreQueryFilters().Single().ServerId.Should().Be(h.ServerA.Id);
+    }
+
+    [Theory]
+    [InlineData(1, 0, "service")]
+    [InlineData(0, 2, "memory")]
+    public async Task A_plan_with_room_for_each_but_not_all_is_refused_before_anything_exists(int maxServices, int maxMemoryGb, string what)
+    {
+        using var h = new LaunchHarness();
+        using (var db = h.Store())
+        {
+            var plan = db.Plans.IgnoreQueryFilters().Single();
+            plan.MaxServices = maxServices;
+            plan.MaxMemoryBytes = maxMemoryGb * (1L << 30);
+            db.SaveChanges();
+        }
+        var id = await h.ReadyGitAsync(TwoDatabases());
+        var choices = await h.DefaultsAsync(id);
+
+        var refusals = await h.Request().ValidateConfirmAsync(id, choices, default);
+
+        refusals.Should().ContainSingle().Which.Message.Should().ContainEquivalentOf(what);
+        refusals[0].MessageFa.Should().NotBe(refusals[0].Message);
+
+        (await h.Request().ConfirmAsync(id, choices, null, default)).Ok.Should().BeFalse();
+        h.Row(id).Status.Should().Be(LaunchStatus.AwaitingConfirmation);
+        h.Store().ManagedServices.IgnoreQueryFilters().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_plan_that_is_already_full_says_so_once()
+    {
+        using var h = new LaunchHarness();
+        using (var db = h.Store())
+        {
+            db.Plans.IgnoreQueryFilters().Single().MaxApps = 1;
+            db.Apps.Add(new App
+            {
+                WorkspaceId = h.WorkspaceId, ServerId = h.ServerA.Id, EnvironmentId = h.Environment!.Id,
+                Name = "already", Slug = "already", SourceType = AppSourceType.PrebuiltImage, PrebuiltImage = "x:1"
+            });
+            db.SaveChanges();
+        }
+        var id = await h.ReadyGitAsync(Bare());
+
+        (await h.Request().ValidateConfirmAsync(id, await h.DefaultsAsync(id), default)).Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task A_plan_that_sells_past_its_caps_is_not_refused_by_the_batch_either()
+    {
+        using var h = new LaunchHarness();
+        h.Billing.Enabled = true;
+        using (var db = h.Store())
+        {
+            var plan = db.Plans.IgnoreQueryFilters().Single();
+            plan.MaxServices = 1;
+            plan.AllowsOverage = true;
+            db.Wallets.Add(new Harbora.Domain.Billing.Wallet { WorkspaceId = h.WorkspaceId, BalanceMinor = 100_000 });
+            db.SaveChanges();
+        }
+        var id = await h.ReadyGitAsync(TwoDatabases());
+
+        (await h.Request().ValidateConfirmAsync(id, await h.DefaultsAsync(id), default)).Should().BeEmpty();
     }
 
     // ---- naming --------------------------------------------------------------------------------
@@ -1229,8 +1786,13 @@ public sealed class LaunchServiceTests
         service.Aliases.Should().Equal(new AttachEnvAlias("DB_HOST", "PGHOST"));
 
         proposal.EnvFields.Select(f => f.Key).Should().BeEquivalentTo(
-            ["DB_HOST", "JWT_SECRET", "LOG_LEVEL", "STRIPE_SECRET_KEY"], "DATABASE_URL has nothing to ask");
+            ["DATABASE_URL", "DB_HOST", "JWT_SECRET", "LOG_LEVEL", "STRIPE_SECRET_KEY", "REDIS_URL"],
+            "the Redis it guessed at names nothing of its own in the example file, and may be somebody's own");
         var fields = proposal.EnvFields.ToDictionary(f => f.Key);
+        fields["DATABASE_URL"].Disposition.Should().Be(EnvVarDisposition.ProvidedByAttach);
+        fields["DATABASE_URL"].Service.Should().Be(ManagedServiceType.PostgreSql);
+        fields["DB_HOST"].Service.Should().Be(ManagedServiceType.PostgreSql);
+        fields["JWT_SECRET"].Service.Should().BeNull();
         fields["LOG_LEVEL"].SuggestedValue.Should().Be("info");
         fields["LOG_LEVEL"].IsSecret.Should().BeFalse();
         fields["JWT_SECRET"].SuggestedValue.Should().BeNull();
@@ -1239,6 +1801,7 @@ public sealed class LaunchServiceTests
         fields["STRIPE_SECRET_KEY"].SourceFile.Should().Be(ExampleFile);
 
         defaults.EnvVars.Select(v => v.Key).Should().NotContain("DB_HOST", "an alias of a ticked database has nothing to ask");
+        defaults.EnvVars.Select(v => v.Key).Should().NotContain("DATABASE_URL", "nor has a name its attachment sets");
 
         proposal.ServiceOptions.Select(o => o.Type).Should().BeEquivalentTo(ServiceCatalog.All.Keys);
         proposal.ServiceOptions.Single(o => o.Type == ManagedServiceType.Redis).Detected!.Certain.Should().BeFalse();
@@ -1291,6 +1854,62 @@ public sealed class LaunchServiceTests
         var id = await h.ReadyGitAsync(Bare());
 
         (await h.DefaultsAsync(id)).InstanceSizeKey.Should().Be("large");
+    }
+
+    [Fact]
+    public async Task A_platform_default_nobody_priced_is_passed_over_when_a_price_is_a_gate()
+    {
+        using var h = new LaunchHarness();
+        h.Billing.Enabled = true;
+        using (var db = h.Store())
+        {
+            db.Wallets.Add(new Harbora.Domain.Billing.Wallet { WorkspaceId = h.WorkspaceId, BalanceMinor = 100_000 });
+            db.InstanceSizes.Add(new InstanceSize { Key = "unpriced", Name = "Unpriced", SortOrder = 9, RunningRatePerHourMinor = null });
+            db.Settings.Add(new Setting { Key = SettingKeys.DefaultInstanceSize, Value = "unpriced" });
+            db.SaveChanges();
+        }
+        var id = await h.ReadyGitAsync(Bare());
+
+        var opensOn = (await h.DefaultsAsync(id)).InstanceSizeKey;
+
+        opensOn.Should().Be(LaunchHarness.SizeKey);
+        (await h.Request().QuoteAsync(id, await h.DefaultsAsync(id), default)).Refusal.Should().BeNull(
+            "the screen must not open on a refusal it chose by itself");
+    }
+
+    [Fact]
+    public async Task A_platform_default_nobody_priced_stays_when_billing_is_off_since_a_price_is_no_gate_then()
+    {
+        using var h = new LaunchHarness();
+        using (var db = h.Store())
+        {
+            db.InstanceSizes.Add(new InstanceSize { Key = "unpriced", Name = "Unpriced", SortOrder = 9, RunningRatePerHourMinor = null });
+            db.Settings.Add(new Setting { Key = SettingKeys.DefaultInstanceSize, Value = "unpriced" });
+            db.SaveChanges();
+        }
+        var id = await h.ReadyGitAsync(Bare());
+
+        (await h.DefaultsAsync(id)).InstanceSizeKey.Should().Be("unpriced");
+    }
+
+    [Theory]
+    [InlineData("no-such-tier")]
+    [InlineData("disabled")]
+    [InlineData("not-on-the-plan")]
+    public async Task A_platform_default_this_workspace_could_not_have_is_passed_over(string key)
+    {
+        using var h = new LaunchHarness();
+        using (var db = h.Store())
+        {
+            db.InstanceSizes.Add(new InstanceSize { Key = "disabled", Name = "D", IsEnabled = false, RunningRatePerHourMinor = 1 });
+            db.InstanceSizes.Add(new InstanceSize { Key = "not-on-the-plan", Name = "N", RunningRatePerHourMinor = 1 });
+            db.Plans.IgnoreQueryFilters().Single().AllowedSizeKeys = LaunchHarness.SizeKey;
+            db.Settings.Add(new Setting { Key = SettingKeys.DefaultInstanceSize, Value = key });
+            db.SaveChanges();
+        }
+        var id = await h.ReadyGitAsync(Bare());
+
+        (await h.DefaultsAsync(id)).InstanceSizeKey.Should().Be(LaunchHarness.SizeKey);
     }
 
     // ---- validating ----------------------------------------------------------------------------

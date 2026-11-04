@@ -672,7 +672,41 @@ public sealed class CliLaunchEndToEndTests : IClassFixture<LaunchPanelFixture>, 
         Launches.Quoted.Single().Choices.Services.Should().BeEmpty();
         Launches.Confirmed.Single().Choices.Services.Should().BeEmpty();
         output.Should().NotContain("PostgreSQL, because of");
+        output.Should().Contain("nothing will set DB_HOST, DATABASE_URL");
+        Launches.Confirmed.Single().Choices.EnvVars.Should().Contain(v => v.Key == "DATABASE_URL" && v.Value == null,
+            "so the timeline names it afterwards");
+    }
+
+    [Fact]
+    public async Task A_database_of_their_own_is_set_as_a_secret_and_not_called_a_mistake_and_what_is_left_is_named()
+    {
+        const string url = "postgres://me:neon-password@neon.example/db";
+        GivenALaunch(ending: [Succeeded(GivenAnApp("shop-own-db"), Guid.CreateVersion7(), Running)]);
+
+        var (exit, output) = await LaunchAsync(Run(noService: ["postgres"], set: [$"DATABASE_URL={url}"]));
+
+        exit.Should().Be(0, output);
+        output.Should().NotContain("nothing here asked for this");
+        output.Should().NotContain("neon-password");
         output.Should().Contain("nothing will set DB_HOST");
+        output.Should().NotContain("nothing will set DB_HOST, DATABASE_URL");
+
+        var own = Launches.Confirmed.Single().Choices.EnvVars.Single(v => v.Key == "DATABASE_URL");
+        own.Value.Should().Be(url);
+        own.IsSecret.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task A_database_of_their_own_with_no_example_file_to_name_it_is_not_called_a_mistake_either()
+    {
+        var id = Id;
+        GivenALaunch(LaunchScript.Proposal(id, fields: []), ending: [Succeeded(GivenAnApp("shop-own-db-bare"), Guid.CreateVersion7(), Running)]);
+
+        var (exit, output) = await LaunchAsync(Run(noService: ["postgres"], set: ["DATABASE_URL=postgres://me:pw@neon.example/db"]));
+
+        exit.Should().Be(0, output);
+        output.Should().NotContain("nothing here asked for this");
+        Launches.Confirmed.Single().Choices.EnvVars.Single(v => v.Key == "DATABASE_URL").IsSecret.Should().BeTrue();
     }
 
     [Fact]
@@ -707,7 +741,8 @@ public sealed class CliLaunchEndToEndTests : IClassFixture<LaunchPanelFixture>, 
         GivenALaunch(quote: LaunchScript.Charged with
         {
             BalanceMinor = 0,
-            Refusal = new ServiceRefusal("Your balance cannot pay for the first hour.", "موجودی کافی نیست.")
+            Refusal = new ServiceRefusal("Your balance cannot pay for the first hour.", "موجودی کافی نیست."),
+            RefusalIsAboutMoney = true
         });
         var person = new Person();
 
@@ -720,6 +755,23 @@ public sealed class CliLaunchEndToEndTests : IClassFixture<LaunchPanelFixture>, 
         person.Questions.Should().BeEmpty("there is no point asking anything it cannot go on to do");
         person.Confirmations.Should().BeEmpty();
         Launches.Validated.Should().BeEmpty();
+        Launches.Confirmed.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_refusal_more_credit_would_not_fix_sends_nobody_to_billing()
+    {
+        GivenALaunch(quote: LaunchScript.Charged with
+        {
+            Refusal = new ServiceRefusal("This size has no price yet.", "این اندازه هنوز قیمت ندارد.")
+        });
+
+        var (exit, output) = await LaunchAsync(Run());
+
+        exit.Should().Be(1);
+        output.Should().Contain("This size has no price yet.");
+        output.Should().Contain("Nothing was created.");
+        output.Should().NotContain("Add credit").And.NotContain("/billing");
         Launches.Confirmed.Should().BeEmpty();
     }
 
@@ -905,6 +957,79 @@ public sealed class CliLaunchEndToEndTests : IClassFixture<LaunchPanelFixture>, 
         output.Should().NotContain("✓ Does the address work?", "a skipped check is never printed as a pass");
 
         File.Exists(Path.Combine(_dir, "harbora.yml")).Should().BeTrue("the app exists, and deploying again is how this gets fixed");
+    }
+
+    [Fact]
+    public async Task Nothing_found_wrong_and_something_unchecked_is_not_called_wrong_and_names_what_could_not_be_checked()
+    {
+        var appId = GivenAnApp("shop-unsure");
+        GivenALaunch(ending:
+        [
+            LaunchScript.View(LaunchStatus.SucceededWithProblems, Id, appId, "shop", "https://shop.apps.example.com", Guid.CreateVersion7(),
+                checks:
+                [
+                    new AppCheck("running", AppCheckStatus.Skipped, "Is it still running?", "x", "The server did not answer."),
+                    new AppCheck("logs", AppCheckStatus.Passed, "Is its log quiet?", "x")
+                ])
+        ]);
+
+        var (exit, output) = await LaunchAsync(Run());
+
+        exit.Should().Be(2, output);
+        output.Should().Contain("It came up, but could not be confirmed as working");
+        output.Should().NotContain("something is wrong");
+        output.Should().Contain("Could not be checked: Is it still running?");
+    }
+
+    [Fact]
+    public async Task A_warning_is_still_something_wrong()
+    {
+        var appId = GivenAnApp("shop-warned");
+        GivenALaunch(ending:
+        [
+            LaunchScript.View(LaunchStatus.SucceededWithProblems, Id, appId, "shop", "https://shop.apps.example.com", Guid.CreateVersion7(),
+                checks: [Running, new AppCheck("logs", AppCheckStatus.Warning, "Is its log quiet?", "x", "ECONNREFUSED")])
+        ]);
+
+        var (exit, output) = await LaunchAsync(Run());
+
+        exit.Should().Be(2, output);
+        output.Should().Contain("It is running, but something is wrong");
+        output.Should().NotContain("could not be confirmed");
+    }
+
+    [Fact]
+    public async Task A_launch_whose_app_was_deleted_says_so_is_not_a_success_and_remembers_nothing()
+    {
+        GivenALaunch(ending:
+        [
+            LaunchScript.View(LaunchStatus.Succeeded, Id, appName: "shop", publicUrl: "https://shop.apps.example.com", appGone: true,
+                created: [new LaunchCreatedThing("database", "shop-postgresql", "/databases/one", Ready: true)])
+        ]);
+
+        var (exit, output) = await LaunchAsync(Run());
+
+        exit.Should().Be(1, output);
+        output.Should().Contain("has since been deleted");
+        output.Should().NotContain("Your app is running").And.NotContain("https://shop.apps.example.com");
+        output.Should().Contain($"The database shop-postgresql: {Server}/databases/one");
+        File.Exists(Path.Combine(_dir, "harbora.yml")).Should().BeFalse("there is no app to deploy to");
+    }
+
+    [Fact]
+    public async Task A_failed_launch_whose_app_was_deleted_says_why_and_does_not_offer_to_try_again()
+    {
+        GivenALaunch(ending:
+        [
+            LaunchScript.View(LaunchStatus.Failed, Id, failure: "The build failed.", canRetry: true, appGone: true, created: [],
+                steps: LaunchScript.Steps(deploy: LaunchStepState.Failed))
+        ]);
+
+        var (exit, output) = await LaunchAsync(Run());
+
+        exit.Should().Be(1, output);
+        output.Should().Contain("The build failed.").And.Contain("has since been deleted");
+        output.Should().NotContain("Trying again");
     }
 
     [Fact]

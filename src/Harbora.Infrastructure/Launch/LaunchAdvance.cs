@@ -1,6 +1,8 @@
 using Harbora.Data;
 using Harbora.Domain.Common;
 using Harbora.Domain.Launch;
+using Harbora.Infrastructure.Deployments;
+using Harbora.Infrastructure.Verification;
 using Microsoft.EntityFrameworkCore;
 
 namespace Harbora.Infrastructure.Launch;
@@ -62,6 +64,13 @@ public static class LaunchAdvance
     /// <summary>Above the inspection job's own 15-minute deadline: past this, its job was lost.</summary>
     public static readonly TimeSpan InspectingGiveUpAfter = TimeSpan.FromMinutes(20);
 
+    /// <summary>
+    /// A queue that keeps throwing something nobody expected fails no step of its own: the tick logs it
+    /// and comes back, while the page goes on saying it is getting it running. A real deployment's own
+    /// wait is not measured by this, only how long it can take to get one started at all.
+    /// </summary>
+    public static readonly TimeSpan QueueingGiveUpAfter = TimeSpan.FromMinutes(20);
+
     public static readonly TimeSpan ConfirmationLifetime = TimeSpan.FromHours(24);
 
     /// <summary>
@@ -91,7 +100,7 @@ public static class LaunchAdvance
         LaunchStatus.Inspecting => launch.Now - launch.StatusChangedAt > InspectingGiveUpAfter
             ? new LaunchMove(LaunchMoveKind.FailInspection, LaunchStepKeys.Source,
                 "Reading the source did not finish. Nothing was created. Please try again.",
-                "خواندن کد تمام نشد. چیزی ساخته نشد. لطفاً دوباره امتحان کنید.")
+                "خواندن کد تمام نشد. چیزی ساخته نشد. دوباره امتحان کن.")
             : LaunchMove.Stay,
 
         LaunchStatus.AwaitingConfirmation => launch.Now - launch.StatusChangedAt > ConfirmationLifetime
@@ -101,7 +110,7 @@ public static class LaunchAdvance
         LaunchStatus.Creating => launch.Now - launch.StatusChangedAt > CreatingGiveUpAfter
             ? Fail(launch.Services.Count < launch.ExpectedServices ? LaunchStepKeys.Services : LaunchStepKeys.App,
                 "The panel stopped while this launch was being created. Try again: only what is missing will be created.",
-                "وقتی این راه‌اندازی در حال ساخته شدن بود پنل متوقف شد. دوباره امتحان کنید: فقط چیزهایی که هنوز نیستند ساخته می‌شوند.")
+                "وقتی این راه‌اندازی در حال ساخته شدن بود پنل متوقف شد. دوباره امتحان کن: فقط چیزهایی که هنوز نیستند ساخته می‌شوند.")
             : LaunchMove.Stay,
 
         LaunchStatus.WaitingForServices => DecideWaiting(launch),
@@ -122,7 +131,7 @@ public static class LaunchAdvance
         if (launch.Services.Count < launch.ExpectedServices)
             return Fail(LaunchStepKeys.Services,
                 "A database this launch created no longer exists. Create it again from the Databases page, attach it to the app, and redeploy.",
-                "دیتابیسی که این راه‌اندازی ساخته بود دیگر وجود ندارد. آن را از صفحهٔ دیتابیس‌ها دوباره بسازید، به اپ وصل کنید و دوباره مستقر کنید.");
+                "دیتابیسی که این راه‌اندازی ساخته بود دیگر وجود ندارد. آن را از صفحهٔ دیتابیس‌ها دوباره بساز، به اپ وصل کن و دوباره مستقر کن.");
 
         if (launch.Services.FirstOrDefault(s => s.Status == ServiceStatus.Failed) is { } failed)
         {
@@ -149,12 +158,17 @@ public static class LaunchAdvance
     private static LaunchMove DecideDeploying(LaunchSnapshot launch)
     {
         if (launch.AppId is null) return AppGone();
-        if (launch.DeploymentId is null) return new LaunchMove(LaunchMoveKind.QueueDeployment);
+        if (launch.DeploymentId is null)
+            return launch.Now - launch.StatusChangedAt > QueueingGiveUpAfter
+                ? Fail(LaunchStepKeys.Deploy,
+                    $"The deployment could not be started in {QueueingGiveUpAfter.TotalMinutes:0} minutes. Try again, or deploy from the app's page.",
+                    $"استقرار در {QueueingGiveUpAfter.TotalMinutes:0} دقیقه شروع نشد. دوباره امتحان کن، یا از صفحهٔ اپ مستقرش کن.")
+                : new LaunchMove(LaunchMoveKind.QueueDeployment);
 
         if (launch.Deployment is null)
             return Fail(LaunchStepKeys.Deploy,
                 "The deployment this launch started no longer exists. Deploy again from the app's page.",
-                "استقراری که این راه‌اندازی شروع کرده بود دیگر وجود ندارد. از صفحهٔ اپ دوباره مستقر کنید.");
+                "استقراری که این راه‌اندازی شروع کرده بود دیگر وجود ندارد. از صفحهٔ اپ دوباره مستقر کن.");
 
         switch (launch.Deployment.Status)
         {
@@ -165,24 +179,38 @@ public static class LaunchAdvance
                 var happened = launch.Deployment.Status == DeploymentStatus.Failed
                     ? ("The deployment failed", "استقرار شکست خورد")
                     : ("The deployment was stopped", "استقرار متوقف شد");
-                var detail = string.IsNullOrWhiteSpace(launch.Deployment.ErrorMessage)
-                    ? ""
-                    : ": " + launch.Deployment.ErrorMessage;
+                var (detail, detailFa) = DeploymentSays(launch.Deployment.ErrorMessage);
 
                 // The pipeline consumes an upload on its first attempt, so there is nothing here to try
                 // again with. Saying so is what stops a person pressing a button that cannot help.
                 var (next, nextFa) = launch.Source == LaunchSourceKind.Upload
                     ? (" The uploaded code was used by that attempt: upload a new version from the app's page.",
-                        " کد آپلودشده در همان تلاش مصرف شد: نسخهٔ تازه را از صفحهٔ اپ آپلود کنید.")
+                        " کد آپلودشده در همان تلاش مصرف شد: نسخهٔ تازه را از صفحهٔ اپ آپلود کن.")
                     : ("", "");
                 return Fail(LaunchStepKeys.Deploy,
-                    $"{happened.Item1}{detail}.{next}", $"{happened.Item2}{detail}.{nextFa}");
+                    $"{happened.Item1}{detail}.{next}", $"{happened.Item2}{detailFa}.{nextFa}");
 
             default:
                 // Queued, building, or PendingApproval: none of them is a failure, and all of them end
                 // by themselves. An approval that is never given expires into Cancelled.
                 return LaunchMove.Stay;
         }
+    }
+
+    /// <summary>
+    /// A failed <c>RUN</c> comes back from the daemon as that whole step quoted, with an exit code on the
+    /// end. For a build that wrote no site that is a screen of shell with the one sentence that matters
+    /// buried in it as an <c>echo</c>, so here it is lifted out: it is the answer for a SvelteKit whose
+    /// adapter did not write a site, and for a compiled backend with no start script.
+    /// </summary>
+    private static (string Detail, string DetailFa) DeploymentSays(string? error)
+    {
+        if (string.IsNullOrWhiteSpace(error)) return ("", "");
+
+        return error.Contains(Buildpacks.NotASite, StringComparison.Ordinal)
+            ? (": " + Buildpacks.NotASite.TrimEnd('.'),
+                ": ساخت تمام شد ولی index.html نساخت، پس این یک سایت نیست. یک اسکریپت start در package.json می‌خواهد، یا یک Dockerfile")
+            : (": " + error, ": " + error);
     }
 
     private static LaunchMove DecideVerifying(LaunchSnapshot launch)
@@ -192,11 +220,35 @@ public static class LaunchAdvance
         if (launch.Now - (launch.VerifyStartedAt ?? launch.StatusChangedAt) > ChecksGiveUpAfter)
             return Fail(LaunchStepKeys.Verify,
                 "The app is deployed, but its checks could not be finished. Try again, or look at the app's page.",
-                "اپ مستقر شده، ولی بررسی‌هایش تمام نشد. دوباره امتحان کنید یا صفحهٔ اپ را ببینید.");
+                "اپ مستقر شده، ولی بررسی‌هایش تمام نشد. دوباره امتحان کن یا صفحهٔ اپ را ببین.");
 
         return launch.Now - launch.LastTouchedAt < ChecksEvery
             ? LaunchMove.Stay
             : new LaunchMove(LaunchMoveKind.RunChecks);
+    }
+
+    /// <summary>
+    /// What a finished run of the checks comes to. Green is a claim that the app works, so it has to be
+    /// earned: nothing failed, nothing is complaining, and the one check that proves it runs said so. A
+    /// hung daemon leaves <c>running</c>, <c>restarts</c> and <c>logs</c> all Skipped with not one Failed
+    /// among them, and an address answering 200 beside a log full of <c>ECONNREFUSED</c> is only a
+    /// Warning; each of those is somebody being told their app is up by a run that did not find that out.
+    ///
+    /// <para>
+    /// A kind that runs and exits has no <c>running</c> to ask: that check is Skipped by design every
+    /// time, so requiring it would make every cron job a problem. For one of those a deployment that
+    /// succeeded and databases that answer are all there is to know.
+    /// </para>
+    /// </summary>
+    public static LaunchStatus VerdictOn(IReadOnlyList<AppCheck> checks, ServiceKind kind)
+    {
+        if (checks.Any(c => c.Status is AppCheckStatus.Failed or AppCheckStatus.Warning))
+            return LaunchStatus.SucceededWithProblems;
+
+        var proven = !ServicePlan.IsLongRunning(kind)
+            || checks.Any(c => c.Key == AppVerifier.RunningKey && c.Status == AppCheckStatus.Passed);
+
+        return proven ? LaunchStatus.Succeeded : LaunchStatus.SucceededWithProblems;
     }
 
     private static LaunchMove AppGone() => Fail(LaunchStepKeys.App,

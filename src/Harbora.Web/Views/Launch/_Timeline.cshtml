@@ -11,7 +11,11 @@
     var isWorker = Model.AppKind == ServiceKind.Worker;
     var appPage = view.AppId is { } appId ? $"/apps/details/{appId}" : null;
     var failedStep = view.Steps.FirstOrDefault(s => s.State == LaunchStepState.Failed);
-    var finished = view.Status is LaunchStatus.Succeeded or LaunchStatus.SucceededWithProblems;
+
+    // Whatever the status still says, the app is not there to open. A failed launch keeps its own page,
+    // because why it stopped is still true and something else may be left from it.
+    var gone = view.AppGone && view.Status != LaunchStatus.Failed;
+    var finished = !gone && view.Status is LaunchStatus.Succeeded or LaunchStatus.SucceededWithProblems;
 
     // A person acts on what failed first. The rest of the list is still true, so it stays below.
     IReadOnlyList<AppCheck> checks = view.Checks
@@ -25,6 +29,14 @@
         })
         .ToList();
     var skipped = view.Checks.Any(c => c.Status == AppCheckStatus.Skipped);
+
+    // Up with a problem is one thing, and up with nothing to show either way is another. Saying "something
+    // isn't right" for a check that could not be run sends somebody looking for a fault nobody found.
+    var problemFound = view.Checks.Any(c => c.Status is AppCheckStatus.Failed or AppCheckStatus.Warning);
+    var notChecked = view.Checks
+        .Where(c => c.Status is AppCheckStatus.Skipped or AppCheckStatus.Pending)
+        .Select(c => isFa ? c.TitleFa : c.Title)
+        .ToList();
 
     // A host with no scheme still has to open as a link.
     var address = view.PublicUrl is { Length: > 0 } url
@@ -43,19 +55,22 @@
         (LaunchStatus.Verifying, false) => "Testing it…",
         _ => null
     };
-
-    // Nothing but the reading of the source had happened, so "nothing was made" is a thing that can be said.
-    var nothingMade = view.AppId is null && view.Steps
-        .Where(s => s.Key != LaunchStepKeys.Source)
-        .All(s => s.State is LaunchStepState.Waiting or LaunchStepState.Skipped);
-    var madeServices = view.Steps
-        .Where(s => s.Key == LaunchStepKeys.Services && s.State is LaunchStepState.Done or LaunchStepState.Failed)
-        .Select(s => isFa ? s.DetailFa : s.Detail)
-        .FirstOrDefault(d => d is { Length: > 0 });
 }
 
-@switch (view.Status)
+@switch (gone ? (LaunchStatus?)null : view.Status)
 {
+    case null:
+        <div class="text-center" data-launch-outcome="gone">
+            <h1 class="text-xl font-bold tracking-tight text-ink">@(isFa ? "این اپ بعداً پاک شده" : "This app has since been deleted")</h1>
+            <p class="mt-2 text-sm text-ink-muted">@(isFa ? "این راه‌اندازی آن را ساخته بود، ولی دیگر نیست و چیزی برای باز کردن نمانده." : "This launch made it, but it's no longer there, so there's nothing to open.")</p>
+            <a href="/launch" class="btn-secondary mt-5 justify-center">@(isFa ? "از اول" : "Start again")</a>
+            @if (view.Created is { Count: > 0 } left)
+            {
+                <div class="text-start"><partial name="_Created" model="left" /></div>
+            }
+        </div>
+        break;
+
     case LaunchStatus.Succeeded:
         <div class="text-center" data-launch-outcome="succeeded">
             <i data-lucide="circle-check" class="mx-auto h-10 w-10 text-ok"></i>
@@ -80,10 +95,21 @@
         break;
 
     case LaunchStatus.SucceededWithProblems:
-        @* Never the green treatment: it is running and being billed, and something about it is wrong. *@
+        @* Never the green treatment: it is running and being billed, and something about it is wrong or could not be shown to be right. *@
         <div class="text-center" data-launch-outcome="problems">
             <i data-lucide="triangle-alert" class="mx-auto h-10 w-10 text-warn"></i>
-            <h1 class="mt-3 text-2xl font-bold tracking-tight text-ink">@(isFa ? "اپ بالا آمد، ولی یک چیز درست نیست" : "The app came up, but something isn't right")</h1>
+            @if (problemFound)
+            {
+                <h1 class="mt-3 text-2xl font-bold tracking-tight text-ink">@(isFa ? "اپ بالا آمد، ولی یک چیز درست نیست" : "The app came up, but something isn't right")</h1>
+            }
+            else
+            {
+                <h1 class="mt-3 text-2xl font-bold tracking-tight text-ink" data-launch-not-sure>@(isFa ? "بالا آمد، ولی نتوانستم مطمئن شوم که کار می‌کند" : "It came up, but I couldn't make sure it works")</h1>
+                @if (notChecked.Count > 0)
+                {
+                    <p class="mt-2 break-words text-sm text-ink-muted" data-launch-not-checked>@(isFa ? "نتوانستم این‌ها را بررسی کنم: " : "I couldn't check: ")@string.Join(isFa ? "، " : ", ", notChecked)</p>
+                }
+            }
             @if (address is not null)
             {
                 <a href="@address" target="_blank" rel="noopener noreferrer" dir="ltr" class="mt-2 inline-block break-all text-sm text-accent-text hover:underline" data-launch-address-link>@address</a>
@@ -109,25 +135,15 @@
                 {
                     <p class="mt-2 break-words text-sm text-ink" data-launch-failure>@failure</p>
                 }
-                <p class="mt-3 break-words text-xs text-ink-muted" data-launch-exists>
-                    @if (nothingMade)
-                    {
-                        @(isFa ? "هنوز چیزی ساخته نشده." : "Nothing has been created yet.")
-                    }
-                    else
-                    {
-                        @(isFa ? "چیزی پاک نشد؛ آنچه تا اینجا ساخته شده سر جایش است." : "Nothing was removed: what was made so far is still there.")
-                        if (view.AppName is { Length: > 0 } && appPage is not null)
-                        {
-                            <text> </text><a href="@appPage" class="text-accent-text hover:underline" dir="ltr">@view.AppName</a>
-                        }
-                        if (madeServices is not null)
-                        {
-                            <text> · @madeServices</text>
-                        }
-                    }
-                </p>
-                @if (view.CanRetry && canCreate)
+                @if (view.AppGone)
+                {
+                    <p class="mt-2 break-words text-sm text-ink" data-launch-app-gone>@(isFa ? "اپی که این راه‌اندازی ساخته بود بعداً پاک شده." : "The app this launch made has since been deleted.")</p>
+                }
+                @if (view.Created is { Count: > 0 } created)
+                {
+                    <partial name="_Created" model="created" />
+                }
+                @if (view.CanRetry && canCreate && !view.AppGone)
                 {
                     <form method="post" action="/launch/@view.Id/retry" class="mt-4" data-launch-retry>
                         @Html.AntiForgeryToken()
@@ -141,12 +157,12 @@
     default:
         <div class="text-center" data-launch-outcome="moving">
             <h1 class="text-xl font-bold tracking-tight text-ink">@Moving()</h1>
-            <p class="mt-1 text-xs text-ink-muted">@(isFa ? "می‌توانی این صفحه را ببندی؛ کار ادامه دارد." : "You can close this page: it keeps going.")</p>
+            <p class="mt-1 text-xs text-ink-muted" data-launch-keeps-going>@(isFa ? "می‌توانی این صفحه را ببندی؛ کار ادامه دارد." : "You can close this page: it keeps going.")</p>
         </div>
         break;
 }
 
-@if (checks.Count > 0)
+@if (checks.Count > 0 && !gone)
 {
     <div class="mt-6" data-launch-checks>
         <partial name="Design/_AppChecks" model="checks" />
@@ -172,7 +188,7 @@
         <partial name="_Steps" model="Model" />
     </details>
 }
-else
+else if (!gone)
 {
     <div class="mt-6"><partial name="_Steps" model="Model" /></div>
 }
