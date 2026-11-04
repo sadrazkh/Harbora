@@ -26,7 +26,7 @@ Tests: `tests/Harbora.Tests/SourceInspectorTests.cs`, `SourceInspectorServiceTes
 
 Commands were the ones in CONSTRAINTS, with `MSBUILDDISABLENODEREUSE=1` and `-p:UseSharedCompilation=false`.
 
-- **Build:** `dotnet build Harbora.slnx --no-restore`: exit 0, 0 errors, 2 warnings. The warning shown was `NU1903` for `SSH.NET` in `tests/Harbora.Postgres.Tests`, a restore warning about a package this work does not touch. I did not read the second one separately; the log has 11 lines and the grep showed one distinct message. No compiler warnings.
+- **Build:** `dotnet build Harbora.slnx --no-restore`: exit 0, 0 errors, 2 warnings. Every warning line in the log is `NU1903` for `SSH.NET` in `tests/Harbora.Postgres.Tests`, a restore warning about a package this work does not touch. No compiler warnings. The full suite below ran on exactly the code at the head of this branch; only this report was committed after it.
 - **Full suite:** `dotnet test Harbora.slnx --no-build`: exit 0.
   - `Harbora.Tests.dll`: Passed 8016, Failed 0, Skipped 0 (baseline 7429, plus 587 inspector tests).
   - `Harbora.NodeAgent.Tests.dll`: Passed 500, Skipped 17, Failed 0.
