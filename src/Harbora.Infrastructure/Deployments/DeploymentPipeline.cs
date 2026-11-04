@@ -1114,10 +1114,15 @@ public sealed class DeploymentPipeline(
             {
                 image = $"{_opt.ImagePrefix}/{app.Slug}-{service.Name}:build-{deployment.Number}";
                 var dockerfile = service.Dockerfile ?? "Dockerfile";
+                var serviceBuildArgs = BuildArgsFor(app);
                 if (!File.Exists(Path.Combine(service.Build, dockerfile)))
                 {
                     var serviceKind = service.IsWeb ? ServiceKind.Web : ServiceKind.Worker;
-                    var pack = Buildpacks.Detect(service.Build, service.Port ?? app.ContainerPort, serviceKind);
+                    var servicePublicArgs = PublicBuildArgsFor(app);
+                    var pack = Buildpacks.Detect(
+                        service.Build, service.Port ?? app.ContainerPort, serviceKind,
+                        service.Command.Count > 0 ? string.Join(' ', service.Command) : null,
+                        servicePublicArgs.Keys);
                     if (pack is null)
                     {
                         var hint = Buildpacks.DetectionHint(service.Build);
@@ -1131,6 +1136,7 @@ public sealed class DeploymentPipeline(
                     await log(LogStream.System, $"Service '{service.Name}': detected {pack.Value.Stack}{serviceEntrySuffix}.");
                     if (pack.Value.Warning is { } serviceWarning)
                         await log(LogStream.System, $"⚠ Service '{service.Name}': {serviceWarning}");
+                    if (pack.Value.PublicBuildArgsOnly) serviceBuildArgs = servicePublicArgs;
                 }
 
                 await log(LogStream.System, $"Building {service.Name} → {image} …");
@@ -1145,7 +1151,7 @@ public sealed class DeploymentPipeline(
                 // ForceRebuild still applies, though: "no cache" from the deploy UI means no cache
                 // anywhere this deployment builds, not just on the single-container path.
                 image = await docker.BuildImageAsync(
-                    new DockerBuildRequest(service.Build, dockerfile, image, BuildArgsFor(app),
+                    new DockerBuildRequest(service.Build, dockerfile, image, serviceBuildArgs,
                         CacheFrom: null, NoCache: deployment.ForceRebuild),
                     buildLog, ct);
             }
@@ -1438,6 +1444,7 @@ public sealed class DeploymentPipeline(
             throw new InvalidOperationException(rootError);
 
         string dockerfile;
+        var buildArgs = BuildArgsFor(app);
         if (forceStatic)
         {
             dockerfile = "Dockerfile.harbora";
@@ -1458,7 +1465,8 @@ public sealed class DeploymentPipeline(
             }
             else if (!File.Exists(Path.Combine(contextPath, dockerfile)))
             {
-                var pack = Buildpacks.Detect(contextPath, app.ContainerPort, app.Kind);
+                var publicArgs = PublicBuildArgsFor(app);
+                var pack = Buildpacks.Detect(contextPath, app.ContainerPort, app.Kind, app.StartCommand, publicArgs.Keys);
                 if (pack is null)
                 {
                     var hint = Buildpacks.DetectionHint(contextPath);
@@ -1472,6 +1480,7 @@ public sealed class DeploymentPipeline(
                 var entrySuffix = pack.Value.Entry is { } entry ? $" (entry: {entry})" : "";
                 await log(LogStream.System, $"No Dockerfile — auto-detected {pack.Value.Stack}{entrySuffix}; using a generated build.");
                 if (pack.Value.Warning is { } warning) await log(LogStream.System, $"⚠ {warning}");
+                if (pack.Value.PublicBuildArgsOnly) buildArgs = publicArgs;
             }
         }
 
@@ -1484,7 +1493,7 @@ public sealed class DeploymentPipeline(
         await log(LogStream.System, $"Build cache: {cachePlan.Reason}");
 
         await log(LogStream.System, $"Building image {imageTag} …");
-        var request = new DockerBuildRequest(contextPath, dockerfile, imageTag, BuildArgsFor(app),
+        var request = new DockerBuildRequest(contextPath, dockerfile, imageTag, buildArgs,
             cachePlan.CacheFrom, NoCache: deployment.ForceRebuild);
 
         try
@@ -1519,6 +1528,21 @@ public sealed class DeploymentPipeline(
     private Dictionary<string, string> BuildArgsFor(App app) =>
         app.EnvironmentVariables
             .Where(e => e.AvailableAtBuild)
+            .ToDictionary(e => e.Key, e => e.IsSecret ? SafeUnprotect(e.Value) : e.Value);
+
+    /// <summary>
+    /// What a frontend's build gets in place of <see cref="BuildArgsFor"/>: see
+    /// <see cref="Harbora.Shared.Inspection.PublicBuildVariables"/>. Decided by name, and in
+    /// both directions. A <c>VITE_</c> variable reaches the build whether or not anybody ticked
+    /// <see cref="EnvironmentVariable.AvailableAtBuild"/>, and wherever it came from (a config group
+    /// included, which <see cref="BuildArgsFor"/> cannot see), because the running container is no use
+    /// to it. Anything else stays out even with that box ticked, because this build's output is sent to
+    /// every visitor. A secret with a public name is decrypted like any other: the prefix is the
+    /// person saying it is public, and it could not work otherwise.
+    /// </summary>
+    private Dictionary<string, string> PublicBuildArgsFor(App app) =>
+        Harbora.Infrastructure.Apps.EffectiveEnvironmentBuilder.Compute(app, protector, _storageOpt.CustomerEndpoint)
+            .Where(e => Harbora.Shared.Inspection.PublicBuildVariables.IsPublic(e.Key))
             .ToDictionary(e => e.Key, e => e.IsSecret ? SafeUnprotect(e.Value) : e.Value);
 
     /// <summary>

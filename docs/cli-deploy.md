@@ -340,10 +340,21 @@ values in the app's **Environment Variables**.
    nothing, so it gives way to .NET, Go, PHP or Python when one of those is present: it is that
    app's frontend. The generated image does not build that frontend, and the deploy log says so
    when there is a `build` script; add a Dockerfile if it needs building.
+
+   With none of those present and a `build` script, it is a frontend (a Vite app, say): the build
+   runs, a failed build fails the deployment, and the first `index.html` found in `dist`, `build`,
+   `out` or `.output/public`, or shallowly under `dist` and `build`, is served by nginx on the app's
+   container port, with unknown paths falling back to `index.html`. No `index.html` also fails the
+   deployment. A `Worker`, or an app with its own start command, stays Node instead.
 4. Otherwise the deployment fails with a message saying exactly this
 
 Auto-detected builds set `ENV PORT` to the app's container port, so `process.env.PORT` and the
 equivalents work without configuration.
+
+A frontend's build reads variables named `VITE_*`, `REACT_APP_*`, `NEXT_PUBLIC_*` or `PUBLIC_*`,
+from the app's variables and its config groups, with no need to mark them as available at build.
+Their values end up in files every visitor can read, and changing one takes a new deploy. No other
+variable reaches that build, even one marked as available at build.
 
 ---
 

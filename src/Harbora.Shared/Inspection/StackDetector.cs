@@ -54,6 +54,17 @@ internal static class StackDetector
         return HasAny(app, ComposeNames) ? DetectedStack.Compose : DetectedStack.Unknown;
     }
 
+    /// <summary>
+    /// The one part of <c>Buildpacks.Detect</c> that needs the app's kind and start command, which the
+    /// inspector only knows after reading the project files. A worker, or anything with its own start
+    /// command, does not care that <c>npm start</c> has nothing to run.
+    /// </summary>
+    public static DetectedStack WithKnownKind(SourceTree app, DetectedStack stack, DetectedAppKind kind, string? startCommand) =>
+        stack == DetectedStack.Node && kind == DetectedAppKind.Web && string.IsNullOrWhiteSpace(startCommand) &&
+        !NodeStartRule.CanStart(app) && NodeStartRule.HasBuildScript(app)
+            ? DetectedStack.Frontend
+            : stack;
+
     /// <summary>Something directly in this folder says the app is here. Project files further down do not count: see <see cref="LooksLikeAnApp"/>.</summary>
     public static bool HoldsSomething(SourceTree folder) =>
         HasAny(folder, DockerfileNames) || HasAny(folder, ComposeNames) || HasAny(folder, PhpMarkers) ||

@@ -11,7 +11,10 @@ public enum DetectedStack
     Go = 5,
     Php = 6,
     Python = 7,
-    Static = 8
+    Static = 8,
+
+    /// <summary>A <c>package.json</c> whose <c>build</c> script makes the site: built, then served by nginx. See <c>Buildpacks.Frontend</c>.</summary>
+    Frontend = 9
 }
 
 /// <summary>

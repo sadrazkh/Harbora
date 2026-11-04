@@ -173,6 +173,29 @@ public class CliDoctorTests : IDisposable
         check.Detail.Should().Contain("Node");
     }
 
+    [Fact]
+    public void A_build_script_with_nothing_to_start_is_reported_as_a_frontend_and_says_what_it_cannot_see()
+    {
+        Write("package.json", """{"scripts":{"build":"vite build"}}""");
+
+        var (checks, _) = Doctor.CheckBuild(_root, new ProjectConfig());
+
+        var check = Single(checks, "Dockerfile");
+        check.Level.Should().Be(Doctor.Level.Ok);
+        check.Detail.Should().Contain("auto-detected as frontend (");
+        check.Detail.Should().Contain("own start command").And.Contain("worker").And.NotContain("ENV PORT");
+    }
+
+    [Fact]
+    public void A_package_json_with_neither_start_nor_build_is_reported_as_node()
+    {
+        Write("package.json", """{"dependencies":{"left-pad":"1"}}""");
+
+        var (checks, _) = Doctor.CheckBuild(_root, new ProjectConfig());
+
+        Single(checks, "Dockerfile").Detail.Should().Contain("auto-detected as Node (");
+    }
+
     [Theory]
     [InlineData("composer.json", "PHP")]
     [InlineData("requirements.txt", "Python")]
@@ -229,6 +252,7 @@ public class CliDoctorTests : IDisposable
                 {
                     "Node.js" => "Node (",
                     "Static (Nginx)" => "static (",
+                    Harbora.Infrastructure.Deployments.Buildpacks.FrontendStack => "frontend (",
                     var stack => stack + " ("
                 };
                 var (checks, _) = Doctor.CheckBuild(_root, new ProjectConfig());

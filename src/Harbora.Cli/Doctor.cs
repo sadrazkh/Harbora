@@ -151,8 +151,11 @@ public static class Doctor
                     "static) — deploy fails with \"the stack couldn't be auto-detected\". Add a Dockerfile, or " +
                     "dockerfileLines: in harbora.yml.")
                 : new Check("Dockerfile", Level.Ok,
-                    $"no {dockerfileRel}; auto-detected as {stack} — Harbora generates a build and sets ENV PORT " +
-                    "for you."));
+                    $"no {dockerfileRel}; auto-detected as {stack} — " + (stack == FrontendLabel
+                        ? "Harbora builds it and serves what it produces on the app's port. An app with its own " +
+                          "start command, or a worker, builds as Node instead; those are set on the server, " +
+                          "where this check cannot see them."
+                        : "Harbora generates a build and sets ENV PORT for you.")));
             return (checks, referenced);
         }
 
@@ -166,12 +169,14 @@ public static class Doctor
         return (checks, referenced);
     }
 
+    private const string FrontendLabel = "frontend (package.json build script, served by Nginx)";
+
     /// <summary>
     /// The stack the server's <c>Buildpacks.Detect</c> will choose, in its order, as
     /// <c>docs/cli-deploy.md</c> §5 "How the build is chosen" describes it. This reports the build
     /// before it happens, so a label that named a different stack from the one deployed would be
     /// worse than no check. A <c>package.json</c> that can start nothing comes after every other
-    /// stack: see <see cref="NodeStartRule"/>.
+    /// stack: see <see cref="NodeStartRule"/>. With a <c>build</c> script it is then a frontend.
     /// </summary>
     private static string? DetectStack(string contextDir)
     {
@@ -186,7 +191,7 @@ public static class Doctor
         if (Has("go.mod")) return "Go (go.mod)";
         if (Has("composer.json", "index.php")) return "PHP (composer.json/index.php)";
         if (Has("requirements.txt", "pyproject.toml", "Pipfile")) return "Python (requirements.txt/pyproject.toml/Pipfile)";
-        if (hasPackage) return "Node (package.json)";
+        if (hasPackage) return NodeStartRule.HasBuildScript(contextDir) ? FrontendLabel : "Node (package.json)";
         if (Has("index.html", "index.htm")) return "static (index.html)";
 
         return null;

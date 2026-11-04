@@ -35,7 +35,14 @@ internal static class KindDetector
         // A compose stack is several things at once, and its file says what each is.
         if (stack == DetectedStack.Compose) return (DetectedAppKind.Web, null);
 
-        if (ReadProcfile(app) is { } declared) return declared;
+        if (ReadProcfile(app) is { } declared)
+        {
+            // A `web:` command is left to the image's own CMD, except where that CMD is `npm start`
+            // with nothing to start. There it is the app's only way to run, and without it a compiled
+            // backend would be taken for a frontend and given nginx.
+            var cannotStart = stack == DetectedStack.Node && !NodeStartRule.CanStart(app);
+            return declared.Kind == DetectedAppKind.Web && !cannotStart ? (DetectedAppKind.Web, null) : declared;
+        }
 
         if (facts.DotNetSdk is { } sdk)
         {
@@ -55,7 +62,7 @@ internal static class KindDetector
     }
 
     /// <summary>Null when there is no Procfile or it names neither process, so the other evidence gets its say.</summary>
-    private static (DetectedAppKind, string?)? ReadProcfile(SourceTree app)
+    private static (DetectedAppKind Kind, string? Command)? ReadProcfile(SourceTree app)
     {
         if (app.ReadText("Procfile") is not { } text) return null;
 
@@ -66,8 +73,9 @@ internal static class KindDetector
             if (line.Length == 0 || line[0] == '#') continue;
             if (ProcfileLine.Match(line) is not { Success: true } match) continue;
 
-            if (match.Groups[1].Value == "web") return (DetectedAppKind.Web, null);
-            if (match.Groups[1].Value == "worker" && match.Groups[2].Value.Trim() is { Length: > 0 } command) worker ??= command;
+            var command = match.Groups[2].Value.Trim();
+            if (match.Groups[1].Value == "web") return (DetectedAppKind.Web, command.Length > 0 ? command : null);
+            if (match.Groups[1].Value == "worker" && command.Length > 0) worker ??= command;
         }
 
         return worker is null ? null : (DetectedAppKind.Worker, worker);

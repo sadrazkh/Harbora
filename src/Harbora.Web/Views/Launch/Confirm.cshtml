@@ -37,6 +37,8 @@
             (DetectedStack.Unknown, _, false) => "I couldn't tell what this code is written in. You can still try, but it may not build: a Dockerfile would settle it.",
             (DetectedStack.Static, _, true) => "یک سایت ساده که فایل‌هایش همان‌طور که هستند روی وب نشان داده می‌شوند",
             (DetectedStack.Static, _, false) => "A plain website, served on the web just as its files are",
+            (DetectedStack.Frontend, _, true) => "یک فرانت‌اند که اول ساخته می‌شود و بعد خروجی‌اش روی وب نشان داده می‌شود",
+            (DetectedStack.Frontend, _, false) => "A frontend that will be built, with what it produces served on the web",
             (DetectedStack.Compose, _, true) => "یک پروژه‌ی Docker Compose",
             (DetectedStack.Compose, _, false) => "A Docker Compose project",
             (DetectedStack.Dockerfile, true, true) => "یک ربات با Dockerfile که پس‌زمینه اجرا می‌شود (آدرس وب لازم ندارد)",

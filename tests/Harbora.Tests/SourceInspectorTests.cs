@@ -482,9 +482,9 @@ public class SourceInspectorTests : InspectorTreeTests
     }
 
     [Fact]
-    public void A_package_json_alone_with_no_start_is_still_node_and_nothing_is_ambiguous()
+    public void A_package_json_alone_with_neither_start_nor_build_is_still_node_and_nothing_is_ambiguous()
     {
-        Write("package.json", FrontendOnly);
+        Write("package.json", "{\"dependencies\":{\"left-pad\":\"1\"}}");
 
         var result = Inspect();
 
@@ -523,7 +523,7 @@ public class SourceInspectorTests : InspectorTreeTests
     [Fact]
     public void An_index_html_is_not_another_stack()
     {
-        Write("package.json", FrontendOnly);
+        Write("package.json", "{}");
         Write("index.html", "<html></html>");
 
         var result = Inspect();
@@ -596,6 +596,172 @@ public class SourceInspectorTests : InspectorTreeTests
 
         result.Stack.Should().Be(DetectedStack.Unknown);
         Codes(result).Should().Equal("no-stack-recognised");
+    }
+
+    // --- A frontend: built, then served ------------------------------------------------------
+
+    private const string ViteShaped =
+        """{"name":"site","scripts":{"dev":"vite","build":"vite build","preview":"vite preview"},"devDependencies":{"vite":"5"}}""";
+
+    [Fact]
+    public void A_vite_app_is_a_frontend_on_the_web_at_port_80_with_nothing_to_release()
+    {
+        Write("package.json", ViteShaped);
+        Write("index.html", "<html></html>");
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.Frontend);
+        result.Kind.Should().Be(DetectedAppKind.Web);
+        result.Port.Should().Be(80);
+        result.StartCommand.Should().BeNull();
+        result.ReleaseCommand.Should().BeNull();
+        Codes(result).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void A_dev_servers_port_in_the_example_file_is_not_the_frontends()
+    {
+        Write("package.json", ViteShaped);
+        Write(".env.example", "PORT=5173\n");
+
+        Inspect().Port.Should().Be(80);
+    }
+
+    [Fact]
+    public void A_frontend_in_a_wrapper_folder_is_found_there()
+    {
+        Write("repo-main/package.json", ViteShaped);
+
+        var result = Inspect();
+
+        result.RootDirectory.Should().Be("repo-main");
+        result.Stack.Should().Be(DetectedStack.Frontend);
+    }
+
+    [Theory]
+    [InlineData("{\"scripts\":{\"build\":\"x\",\"start\":\"y\"}}", null)]
+    [InlineData("{\"scripts\":{\"build\":\"x\"}}", "server.js")]
+    public void A_build_with_a_way_to_start_stays_node(string packageJson, string? alongside)
+    {
+        Write("package.json", packageJson);
+        if (alongside is not null) Write(alongside);
+
+        Inspect().Stack.Should().Be(DetectedStack.Node);
+    }
+
+    [Fact]
+    public void Laravel_with_vite_stays_php_and_keeps_its_note_about_the_assets()
+    {
+        Write("package.json", ViteShaped);
+        Write("composer.json", "{}");
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.Php);
+        Codes(result).Should().Contain("frontend-assets-not-built");
+    }
+
+    [Fact]
+    public void A_bot_with_a_build_script_stays_a_node_worker()
+    {
+        Write("package.json", "{\"scripts\":{\"build\":\"tsc\"},\"dependencies\":{\"telegraf\":\"4\"}}");
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.Node);
+        result.Kind.Should().Be(DetectedAppKind.Worker);
+        result.Port.Should().BeNull();
+    }
+
+    [Fact]
+    public void A_procfile_worker_with_a_build_script_stays_node_with_its_start_command()
+    {
+        Write("package.json", ViteShaped);
+        Write("Procfile", "worker: node dist/jobs.js\n");
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.Node);
+        result.Kind.Should().Be(DetectedAppKind.Worker);
+        result.StartCommand.Should().Be("node dist/jobs.js");
+    }
+
+    [Fact]
+    public void A_procfile_web_line_on_a_package_that_cannot_start_is_its_start_command_and_keeps_it_node()
+    {
+        Write("package.json", "{\"scripts\":{\"build\":\"tsc\"}}");
+        Write("Procfile", "web: node dist/index.js\n");
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.Node);
+        result.Kind.Should().Be(DetectedAppKind.Web);
+        result.StartCommand.Should().Be("node dist/index.js");
+        result.Port.Should().Be(3000);
+    }
+
+    [Fact]
+    public void A_procfile_web_line_is_still_left_alone_where_the_stack_can_start_by_itself()
+    {
+        Write("package.json", RealNodeApp);
+        Write("Procfile", "web: node other.js\n");
+
+        Inspect().StartCommand.Should().BeNull();
+    }
+
+    [Fact]
+    public void A_public_variable_that_needs_an_answer_gets_one_note_however_many_there_are()
+    {
+        Write("package.json", ViteShaped);
+        Write(".env.example", "VITE_API_URL=\nVITE_MAP_KEY=\nREACT_APP_TITLE=changeme\nPUBLIC_THING=https://real.value.test\n");
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.Frontend);
+        result.Notes.Where(n => n.Code == "public-variables-read-at-build").Should().ContainSingle();
+    }
+
+    [Fact]
+    public void A_public_variable_with_a_usable_value_needs_no_such_note()
+    {
+        Write("package.json", ViteShaped);
+        Write(".env.example", "VITE_TITLE=Shop\n");
+
+        var result = Inspect();
+
+        Var(result, "VITE_TITLE").Disposition.Should().Be(EnvVarDisposition.KeepExample);
+        Codes(result).Should().NotContain("public-variables-read-at-build");
+    }
+
+    [Fact]
+    public void Another_variable_that_needs_an_answer_is_not_about_the_build()
+    {
+        Write("package.json", ViteShaped);
+        Write(".env.example", "SOMETHING_ELSE=\n");
+
+        Codes(Inspect()).Should().NotContain("public-variables-read-at-build");
+    }
+
+    [Fact]
+    public void The_same_names_on_a_node_app_are_read_at_run_time_and_get_no_such_note()
+    {
+        Write("package.json", RealNodeApp);
+        Write(".env.example", "VITE_API_URL=\n");
+
+        Codes(Inspect()).Should().NotContain("public-variables-read-at-build");
+    }
+
+    [Fact]
+    public void The_note_about_build_time_speaks_both_languages()
+    {
+        Write("package.json", ViteShaped);
+        Write(".env.example", "VITE_API_URL=\n");
+
+        var note = Inspect().Notes.Single(n => n.Code == "public-variables-read-at-build");
+
+        note.Message.Should().Contain("built");
+        note.MessageFa.Should().Contain("ساخت");
     }
 
     // --- Kind and start command --------------------------------------------------------------

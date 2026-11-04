@@ -184,6 +184,7 @@ public class BuildpackTests : IDisposable
 
     private const string FrontendOnly = """{"scripts":{"build":"vite build"},"devDependencies":{"vite":"5"}}""";
     private const string RealNodeApp = """{"scripts":{"start":"node app.js"}}""";
+    private const string NeitherStartNorBuild = """{"dependencies":{"left-pad":"1"}}""";
 
     [Fact]
     public void Laravel_with_a_frontend_package_json_builds_as_PHP()
@@ -282,9 +283,9 @@ public class BuildpackTests : IDisposable
     }
 
     [Fact]
-    public void A_package_json_alone_with_no_start_is_still_node()
+    public void A_package_json_alone_with_neither_start_nor_build_is_still_node()
     {
-        Touch("package.json", FrontendOnly);
+        Touch("package.json", NeitherStartNorBuild);
 
         var pack = Buildpacks.Detect(_dir, 3000)!.Value;
 
@@ -293,13 +294,13 @@ public class BuildpackTests : IDisposable
     }
 
     [Fact]
-    public void A_package_json_with_no_start_still_outranks_its_own_index_html()
+    public void A_package_json_with_neither_still_outranks_its_own_index_html()
     {
-        Touch("package.json", FrontendOnly);
+        Touch("package.json", NeitherStartNorBuild);
         Touch("index.html", "<html></html>");
 
         Buildpacks.Detect(_dir, 3000)!.Value.Stack.Should().Be("Node.js",
-            "index.html is not another stack's marker: in a frontend it is the source, not the site");
+            "index.html is not another stack's marker");
     }
 
     [Theory]
@@ -409,5 +410,502 @@ public class BuildpackTests : IDisposable
 
         log.Should().Contain("Service 'web': detected PHP.");
         log.Should().Contain("⚠ Service 'web': " + NodeStartRule.AssetsNotBuilt);
+    }
+
+    // --- A frontend: built, then served ----------------------------------------------------------
+
+    private const string ViteShaped =
+        """{"name":"site","scripts":{"dev":"vite","build":"vite build","preview":"vite preview"},"devDependencies":{"vite":"5"}}""";
+
+    // Create React App's own template has a `start` too, which is its dev server, so a real one stays
+    // Node: see Create_React_App_as_generated_keeps_its_dev_server_start_and_stays_node.
+    private const string CraShapedWithoutItsStart =
+        """{"name":"site","scripts":{"build":"react-scripts build","test":"react-scripts test"},"dependencies":{"react-scripts":"5"}}""";
+
+    private const string CraAsGenerated =
+        """{"name":"site","scripts":{"start":"react-scripts start","build":"react-scripts build"},"dependencies":{"react-scripts":"5"}}""";
+
+    [Theory]
+    [InlineData(ViteShaped)]
+    [InlineData(CraShapedWithoutItsStart)]
+    public void A_build_script_with_nothing_to_start_is_a_frontend(string packageJson)
+    {
+        Touch("package.json", packageJson);
+        Touch("index.html", "<html></html>");
+
+        var pack = Buildpacks.Detect(_dir, 8123)!.Value;
+
+        pack.Stack.Should().Be(Buildpacks.FrontendStack);
+        pack.Entry.Should().Be("npm run build");
+        pack.PublicBuildArgsOnly.Should().BeTrue();
+        pack.Warning.Should().BeNull();
+    }
+
+    [Fact]
+    public void The_frontend_image_builds_in_one_stage_and_serves_from_nginx_on_the_port_it_was_given()
+    {
+        Touch("package.json", ViteShaped);
+
+        var dockerfile = Buildpacks.Detect(_dir, 8123)!.Value.Dockerfile;
+
+        dockerfile.Should().Contain("FROM node:20-alpine AS build");
+        dockerfile.Should().Contain("RUN npm install\n");
+        dockerfile.Should().Contain("RUN npm run build\n");
+        dockerfile.Should().NotContain("|| true", "a failed build has to fail this deployment");
+        dockerfile.Should().NotContain("--if-present");
+
+        dockerfile.Should().Contain("FROM nginx:alpine");
+        dockerfile.Should().Contain("COPY --from=build /app/.harbora-site/ /usr/share/nginx/html/");
+        dockerfile.Should().Contain("listen 8123;").And.Contain("EXPOSE 8123").And.NotContain("listen 80;");
+        dockerfile.Should().Contain("try_files $uri $uri/ /index.html;");
+        dockerfile.Should().Contain("autoindex off;");
+        dockerfile.Should().NotContain("CMD", "nginx:alpine already runs nginx, in the foreground");
+    }
+
+    [Theory]
+    [InlineData("pnpm-lock.yaml", "RUN corepack enable && pnpm install\n", "RUN pnpm run build\n", "pnpm run build")]
+    [InlineData("yarn.lock", "RUN corepack enable && yarn install --frozen-lockfile || yarn install\n", "RUN yarn build\n", "yarn build")]
+    public void A_frontend_builds_with_the_package_manager_its_lockfile_names(string lockfile, string install, string build, string entry)
+    {
+        Touch("package.json", ViteShaped);
+        Touch(lockfile);
+
+        var pack = Buildpacks.Detect(_dir, 80)!.Value;
+
+        pack.Dockerfile.Should().Contain(install).And.Contain(build).And.NotContain("build || true");
+        pack.Entry.Should().Be(entry);
+    }
+
+    [Fact]
+    public void The_node_image_is_byte_for_byte_what_it_was()
+    {
+        Touch("package.json", RealNodeApp);
+
+        Buildpacks.Detect(_dir, 3000)!.Value.Dockerfile.ReplaceLineEndings("\n").Should().Be(
+            """
+            # Auto-generated by Harbora (Node buildpack)
+            FROM node:20-alpine
+            WORKDIR /app
+            COPY . .
+            RUN npm install
+            RUN npm run build --if-present
+            ENV NODE_ENV=production
+            ENV PORT=3000
+            EXPOSE 3000
+            CMD ["sh", "-c", "npm start"]
+            """.ReplaceLineEndings("\n"));
+    }
+
+    [Fact]
+    public void A_build_and_a_start_stays_node()
+    {
+        Touch("package.json", """{"scripts":{"build":"tsc","start":"node dist/index.js"}}""");
+
+        Buildpacks.Detect(_dir, 3000)!.Value.Stack.Should().Be("Node.js");
+    }
+
+    [Fact]
+    public void A_build_and_a_server_js_stays_node()
+    {
+        Touch("package.json", """{"scripts":{"build":"tsc"}}""");
+        Touch("server.js");
+
+        Buildpacks.Detect(_dir, 3000)!.Value.Stack.Should().Be("Node.js");
+    }
+
+    [Fact]
+    public void Create_React_App_as_generated_keeps_its_dev_server_start_and_stays_node()
+    {
+        // Pinned because it surprises: "a package.json that can start something wins" treats
+        // `react-scripts start` as an app. The rule was asked for as it stands, so this is what it does.
+        Touch("package.json", CraAsGenerated);
+
+        Buildpacks.Detect(_dir, 3000)!.Value.Stack.Should().Be("Node.js");
+    }
+
+    [Fact]
+    public void Laravel_with_vite_stays_php()
+    {
+        Touch("package.json", ViteShaped);
+        Touch("composer.json", "{}");
+        Touch("artisan");
+
+        Buildpacks.Detect(_dir, 80)!.Value.Stack.Should().Be("PHP");
+    }
+
+    [Theory]
+    [InlineData(ServiceKind.Worker)]
+    [InlineData(ServiceKind.Private)]
+    [InlineData(ServiceKind.Cron)]
+    [InlineData(ServiceKind.ReleaseTask)]
+    [InlineData(ServiceKind.Static)]
+    public void A_build_on_anything_but_a_web_kind_stays_node(ServiceKind kind)
+    {
+        Touch("package.json", ViteShaped);
+
+        Buildpacks.Detect(_dir, 3000, kind)!.Value.Stack.Should().Be("Node.js");
+    }
+
+    [Fact]
+    public void A_build_with_its_own_start_command_stays_node_since_npm_start_never_runs()
+    {
+        Touch("package.json", """{"scripts":{"build":"tsc"}}""");
+
+        Buildpacks.Detect(_dir, 3000, ServiceKind.Web, "node dist/index.js")!.Value.Stack.Should().Be("Node.js");
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void A_blank_start_command_is_none_as_it_is_at_run_time(string blank)
+    {
+        Touch("package.json", ViteShaped);
+
+        Buildpacks.Detect(_dir, 80, ServiceKind.Web, blank)!.Value.Stack.Should().Be(Buildpacks.FrontendStack);
+    }
+
+    [Theory]
+    [InlineData("""{"scripts":{"build":""}}""")]
+    [InlineData("""{"scripts":{"build":3}}""")]
+    [InlineData("""{"build":"vite build"}""")]
+    [InlineData("not json")]
+    public void A_build_script_that_is_not_one_stays_node(string packageJson)
+    {
+        Touch("package.json", packageJson);
+
+        Buildpacks.Detect(_dir, 3000)!.Value.Stack.Should().Be("Node.js");
+    }
+
+    // --- Build-time variables --------------------------------------------------------------------
+
+    [Fact]
+    public void Public_names_in_the_example_files_are_declared_with_no_value_and_nothing_else_is()
+    {
+        Touch("package.json", ViteShaped);
+        Touch(".env.example", """
+            VITE_API_URL=https://api.example.com
+            REACT_APP_TITLE=Shop
+            NEXT_PUBLIC_KEY=abc
+            PUBLIC_ORIGIN=https://shop.example.com
+            SECRET_TOKEN=hunter2
+            DATABASE_URL=postgres://u:hunter2@db/x
+            vite_lower=x
+            """);
+
+        var dockerfile = Buildpacks.Detect(_dir, 80)!.Value.Dockerfile;
+
+        dockerfile.Should().Contain("ARG VITE_API_URL\n").And.Contain("ARG REACT_APP_TITLE\n")
+            .And.Contain("ARG NEXT_PUBLIC_KEY\n").And.Contain("ARG PUBLIC_ORIGIN\n");
+        dockerfile.Should().NotContain("SECRET_TOKEN").And.NotContain("DATABASE_URL").And.NotContain("hunter2")
+            .And.NotContain("vite_lower");
+        dockerfile.Should().NotContain("api.example.com", "an example's value is not a setting");
+    }
+
+    [Fact]
+    public void Names_the_caller_passes_are_declared_if_public_in_a_stable_order_before_the_build()
+    {
+        Touch("package.json", ViteShaped);
+        Touch(".env.example", "VITE_FROM_EXAMPLE=x\nVITE_BOTH=x\n");
+
+        var dockerfile = Buildpacks.Detect(_dir, 80, ServiceKind.Web, null,
+            ["VITE_FROM_APP", "VITE_BOTH", "API_SECRET", "VITE_BAD-NAME", "VITE_"])!.Value.Dockerfile;
+
+        var args = dockerfile.Split('\n').Where(l => l.StartsWith("ARG ")).ToList();
+        args.Should().Equal("ARG VITE_BOTH", "ARG VITE_FROM_APP", "ARG VITE_FROM_EXAMPLE");
+
+        dockerfile.IndexOf("RUN npm install", StringComparison.Ordinal).Should()
+            .BeLessThan(dockerfile.IndexOf("ARG VITE_BOTH", StringComparison.Ordinal), "a new value should not reinstall everything");
+        dockerfile.IndexOf("ARG VITE_FROM_EXAMPLE", StringComparison.Ordinal).Should()
+            .BeLessThan(dockerfile.IndexOf("RUN npm run build", StringComparison.Ordinal));
+        dockerfile.LastIndexOf("ARG ", StringComparison.Ordinal).Should()
+            .BeLessThan(dockerfile.IndexOf("FROM nginx", StringComparison.Ordinal), "the image that ships declares none of them");
+    }
+
+    // --- Finding the output: the real step, under a real shell -----------------------------------
+
+    /// <summary>
+    /// Runs the generated step as Docker would hand it to a shell, with its continuations joined. Null
+    /// where there is no <c>sh</c>, which only a Windows machine without Git would lack.
+    /// </summary>
+    private (int ExitCode, string Output)? RunOutputStep()
+    {
+        Touch("package.json", ViteShaped);
+        var lines = Buildpacks.Detect(_dir, 80)!.Value.Dockerfile.Split('\n')
+            .SkipWhile(l => !l.StartsWith("RUN found=", StringComparison.Ordinal)).ToList();
+
+        var step = new System.Text.StringBuilder();
+        foreach (var line in lines)
+        {
+            if (!line.EndsWith('\\'))
+            {
+                step.Append(line);
+                break;
+            }
+            step.Append(line[..^1]);
+        }
+
+        var start = new System.Diagnostics.ProcessStartInfo("sh")
+        {
+            WorkingDirectory = _dir,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        start.ArgumentList.Add("-c");
+
+        // The PATH is for Git's sh on Windows, where a bare `find` can otherwise be System32's.
+        start.ArgumentList.Add("PATH=\"/usr/bin:/bin:$PATH\"; " + step.ToString()["RUN ".Length..]);
+
+        try
+        {
+            using var shell = System.Diagnostics.Process.Start(start)!;
+            var output = shell.StandardOutput.ReadToEndAsync();
+            var error = shell.StandardError.ReadToEndAsync();
+            shell.WaitForExit();
+            return (shell.ExitCode, output.Result + error.Result);
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return null;
+        }
+    }
+
+    private void Place(string relative, string content)
+    {
+        var path = Path.Combine(_dir, relative.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, content);
+    }
+
+    [Theory]
+    [InlineData("dist/index.html")]
+    [InlineData("build/index.html")]
+    [InlineData("out/index.html")]
+    [InlineData(".output/public/index.html")]
+    [InlineData("dist/shop/index.html")]
+    [InlineData("dist/shop/browser/index.html")]
+    [InlineData("build/client/index.html")]
+    public void The_output_is_found_where_each_tool_puts_it(string index)
+    {
+        Place(index, index);
+        Place(index.Replace("index.html", "assets/app.js"), "js");
+
+        if (RunOutputStep() is not { } run) return;
+
+        run.ExitCode.Should().Be(0, run.Output);
+        run.Output.Should().Contain($"Serving the site the build wrote to {index.Replace("/index.html", "")}/");
+        File.ReadAllText(Path.Combine(_dir, ".harbora-site", "index.html")).Should().Be(index);
+        File.Exists(Path.Combine(_dir, ".harbora-site", "assets", "app.js")).Should().BeTrue();
+    }
+
+    [Fact]
+    public void Top_level_output_wins_in_the_order_the_tools_are_listed_and_outranks_a_nested_one()
+    {
+        Place("build/index.html", "build");
+        Place("dist/index.html", "dist");
+        Place("dist/nested/index.html", "nested");
+
+        if (RunOutputStep() is not { } run) return;
+
+        run.ExitCode.Should().Be(0, run.Output);
+        File.ReadAllText(Path.Combine(_dir, ".harbora-site", "index.html")).Should().Be("dist");
+    }
+
+    [Fact]
+    public void Hidden_files_in_the_output_are_kept()
+    {
+        Place("dist/index.html", "site");
+        Place("dist/.well-known/security.txt", "hello");
+
+        if (RunOutputStep() is not { } run) return;
+
+        run.ExitCode.Should().Be(0, run.Output);
+        File.Exists(Path.Combine(_dir, ".harbora-site", ".well-known", "security.txt")).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("README.md")]
+    [InlineData("dist/app.js")]
+    [InlineData("out/shop/index.html")]
+    [InlineData(".next/server/index.html")]
+    [InlineData("public/index.html")]
+    [InlineData("index.html")]
+    public void No_index_html_in_the_output_stops_the_build_and_says_why(string file)
+    {
+        Place(file, "x");
+
+        if (RunOutputStep() is not { } run) return;
+
+        run.ExitCode.Should().NotBe(0, "an nginx serving nothing would be reported as a success");
+        run.Output.Should().Contain("The build finished without producing an index.html, so this is not a site.");
+        run.Output.Should().Contain("start script").And.Contain("Dockerfile");
+        Directory.Exists(Path.Combine(_dir, ".harbora-site")).Should().BeFalse();
+    }
+
+    // --- Through the pipeline --------------------------------------------------------------------
+
+    private static Fakes.PipelineHarness GitApp(string packageJson)
+    {
+        var h = new Fakes.PipelineHarness(sourceType: AppSourceType.GitRepository).WithGitSource();
+        File.WriteAllText(Path.Combine(h.WorkDir, "package.json"), packageJson);
+        return h;
+    }
+
+    private static string GeneratedDockerfile(Fakes.PipelineHarness h) =>
+        File.ReadAllText(Path.Combine(h.WorkDir, "Dockerfile.harbora"));
+
+    private static void AddVariable(
+        Fakes.PipelineHarness h, string key, string value, bool availableAtBuild = false, bool secret = false)
+    {
+        h.Db.EnvironmentVariables.Add(new Harbora.Domain.Apps.EnvironmentVariable
+        {
+            AppId = h.App.Id, Key = key, IsSecret = secret, AvailableAtBuild = availableAtBuild,
+            Value = secret ? h.Protector.Protect(value) : value
+        });
+        h.Db.SaveChanges();
+    }
+
+    [Fact]
+    public async Task A_vite_app_is_built_and_served_and_the_deploy_log_says_so()
+    {
+        using var h = GitApp(ViteShaped).WithContainerPort(8123);
+
+        var log = await DeployAndReadLog(h);
+
+        log.Should().Contain($"No Dockerfile — auto-detected {Buildpacks.FrontendStack} (entry: npm run build); using a generated build.");
+        h.Docker.BuildRequests.Should().ContainSingle().Which.Dockerfile.Should().Be("Dockerfile.harbora");
+
+        var dockerfile = GeneratedDockerfile(h);
+        dockerfile.Should().Contain("FROM nginx:alpine").And.Contain("listen 8123;").And.Contain("EXPOSE 8123");
+    }
+
+    [Fact]
+    public async Task A_public_variable_reaches_the_build_with_nobody_having_ticked_anything()
+    {
+        using var h = GitApp(ViteShaped);
+        AddVariable(h, "VITE_API_URL", "https://api.shop.example");
+        AddVariable(h, "REACT_APP_NAME", "Shop", availableAtBuild: true);
+        AddVariable(h, "PUBLIC_KEY", "pk_live", secret: true);
+
+        await DeployAndReadLog(h);
+
+        var build = h.Docker.BuildRequests.Should().ContainSingle().Subject;
+        build.BuildArgs.Should().Contain("VITE_API_URL", "https://api.shop.example");
+        build.BuildArgs.Should().Contain("REACT_APP_NAME", "Shop");
+        build.BuildArgs.Should().Contain("PUBLIC_KEY", "pk_live");
+
+        var dockerfile = GeneratedDockerfile(h);
+        dockerfile.Should().Contain("ARG VITE_API_URL\n").And.Contain("ARG REACT_APP_NAME\n").And.Contain("ARG PUBLIC_KEY\n");
+        dockerfile.Should().NotContain("https://api.shop.example").And.NotContain("pk_live",
+            "a value travels as a build arg, not written into a file on disk");
+    }
+
+    [Fact]
+    public async Task A_public_variable_from_a_config_group_reaches_the_build_too()
+    {
+        using var h = GitApp(ViteShaped);
+        var group = new Harbora.Domain.Apps.ConfigGroup { WorkspaceId = h.Workspace.Id, Name = "shared" };
+        h.Db.ConfigGroups.Add(group);
+        h.Db.ConfigGroupEntries.Add(new Harbora.Domain.Apps.ConfigGroupEntry
+        {
+            ConfigGroupId = group.Id, Key = "VITE_FROM_GROUP", Value = "yes"
+        });
+        h.Db.AppConfigGroups.Add(new Harbora.Domain.Apps.AppConfigGroup { AppId = h.App.Id, ConfigGroupId = group.Id, AttachOrder = 1 });
+        h.Db.SaveChanges();
+
+        await DeployAndReadLog(h);
+
+        h.Docker.BuildRequests.Should().ContainSingle().Which.BuildArgs.Should().Contain("VITE_FROM_GROUP", "yes");
+        GeneratedDockerfile(h).Should().Contain("ARG VITE_FROM_GROUP\n");
+    }
+
+    [Fact]
+    public async Task A_variable_with_no_public_prefix_never_reaches_the_build_even_if_marked_for_it()
+    {
+        using var h = GitApp(ViteShaped);
+        AddVariable(h, "SECRET_TOKEN", "hunter2", availableAtBuild: true);
+        AddVariable(h, "DATABASE_PASSWORD", "hunter2", availableAtBuild: true, secret: true);
+        AddVariable(h, "LOG_LEVEL", "info");
+        AddVariable(h, "VITE_FINE", "yes");
+
+        await DeployAndReadLog(h);
+
+        h.Docker.BuildRequests.Should().ContainSingle().Which.BuildArgs.Keys.Should().Equal("VITE_FINE");
+        GeneratedDockerfile(h).Should().NotContain("SECRET_TOKEN").And.NotContain("DATABASE_PASSWORD").And.NotContain("hunter2");
+    }
+
+    [Fact]
+    public async Task Every_other_build_gets_exactly_what_it_got_before()
+    {
+        using var h = GitApp(RealNodeApp);
+        AddVariable(h, "BUILD_FLAG", "yes", availableAtBuild: true);
+        AddVariable(h, "VITE_NOT_MARKED", "no");
+
+        await DeployAndReadLog(h);
+
+        h.Docker.BuildRequests.Should().ContainSingle().Which.BuildArgs.Keys.Should().Equal("BUILD_FLAG");
+    }
+
+    [Fact]
+    public async Task A_typescript_backend_with_its_own_start_command_stays_node_through_the_pipeline()
+    {
+        using var h = GitApp("""{"scripts":{"build":"tsc"}}""").WithStartCommand("node dist/index.js");
+
+        var log = await DeployAndReadLog(h);
+
+        log.Should().Contain("No Dockerfile — auto-detected Node.js; using a generated build.");
+        GeneratedDockerfile(h).Should().NotContain("nginx");
+    }
+
+    [Fact]
+    public async Task A_worker_with_a_build_script_stays_node_through_the_pipeline()
+    {
+        using var h = GitApp(ViteShaped);
+        h.App.Kind = ServiceKind.Worker;
+        h.Db.SaveChanges();
+
+        var log = await DeployAndReadLog(h);
+
+        log.Should().Contain("No Dockerfile — auto-detected Node.js; using a generated build.");
+    }
+
+    [Fact]
+    public async Task A_compose_service_can_be_a_frontend_on_its_own_port()
+    {
+        using var h = new Fakes.PipelineHarness().WithComposeFile("""
+            services:
+              web:
+                build: .
+                ports:
+                  - "8123:8123"
+            """);
+        File.WriteAllText(Path.Combine(h.WorkDir, "package.json"), ViteShaped);
+        AddVariable(h, "VITE_API_URL", "https://api.shop.example");
+        AddVariable(h, "SECRET_TOKEN", "hunter2", availableAtBuild: true);
+
+        var log = await DeployAndReadLog(h);
+
+        log.Should().Contain($"Service 'web': detected {Buildpacks.FrontendStack} (entry: npm run build).");
+        GeneratedDockerfile(h).Should().Contain("listen 8123;");
+        h.Docker.BuildRequests.Should().ContainSingle().Which.BuildArgs.Keys.Should().Equal("VITE_API_URL");
+    }
+
+    [Fact]
+    public async Task A_compose_service_with_its_own_command_stays_node()
+    {
+        using var h = new Fakes.PipelineHarness().WithComposeFile("""
+            services:
+              web:
+                build: .
+                command: node dist/index.js
+                ports:
+                  - "8123:8123"
+            """);
+        File.WriteAllText(Path.Combine(h.WorkDir, "package.json"), ViteShaped);
+
+        var log = await DeployAndReadLog(h);
+
+        log.Should().Contain("Service 'web': detected Node.js.");
     }
 }
