@@ -130,6 +130,16 @@ public sealed class HarboraRuntimeOptions
     public double HealthHttpTimeoutSeconds { get; set; } = 5;
 
     /// <summary>
+    /// How many times a new database is asked whether it answers before its setup counts as failed. With
+    /// the pause below and the second or so each try takes, a little over five minutes, which is well
+    /// inside the job's own deadline and allows for a first start at a small size.
+    /// </summary>
+    public int ServiceAnswerAttempts { get; set; } = 100;
+
+    /// <summary>Seconds between those tries.</summary>
+    public double ServiceAnswerPollSeconds { get; set; } = 3;
+
+    /// <summary>
     /// After the proxy accepts a new configuration, make one request through it for the app's
     /// primary domain and fail the deployment if nothing answers.
     ///
@@ -178,6 +188,7 @@ public sealed class HarboraRuntimeOptions
     public double ServiceWaitPollSeconds { get; set; } = 3;
 
     internal TimeSpan HealthPollInterval => TimeSpan.FromSeconds(Math.Max(0, HealthPollIntervalSeconds));
+    internal TimeSpan ServiceAnswerPollInterval => TimeSpan.FromSeconds(Math.Max(0, ServiceAnswerPollSeconds));
     internal TimeSpan HealthHttpTimeout => TimeSpan.FromSeconds(Math.Max(0.001, HealthHttpTimeoutSeconds));
     internal TimeSpan ReleaseTaskTimeout => TimeSpan.FromMinutes(Math.Max(0.0001, ReleaseTaskTimeoutMinutes));
     internal TimeSpan ServiceWait => TimeSpan.FromMinutes(Math.Max(0, ServiceWaitMinutes));

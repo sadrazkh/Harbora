@@ -87,7 +87,11 @@ services:
   # certificate-managed. The console is deliberately not published: it is a second way in to every
   # bucket, authenticated separately from the panel.
   minio:
-    image: quay.io/minio/minio@sha256:9535594ad4122b7a78c6632788a989b96d9199b483d3bd71a5ceae73a922cdfa
+    # MinIO stopped publishing images and archived its repository, and quay.io/minio/minio now answers
+    # 401 for everything, so this pin stopped a fresh install at its first pull. This is MinIO's own
+    # release built from its own Dockerfile by another project, with the same entrypoint, the same
+    # /data and the same mc: see ObjectStorageOptions.ClientImage, which must stay the same pin.
+    image: ghcr.io/coollabsio/minio@sha256:69b55a1c1c5dc285ce04db96689f5b2102317fc77a50680a1874ca6efd1c87f9
     container_name: harbora-minio
     restart: unless-stopped
     command: server /data

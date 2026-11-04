@@ -253,6 +253,10 @@ public sealed partial class LaunchService
 
         var capacities = await capacity.GetAllAsync(ct);
 
+        // Nothing charges the provider's own workspace, so a price is no gate there: see the chooser.
+        var priceIsAGate = billing.Value.Enabled && !await db.Workspaces.IgnoreQueryFilters().AsNoTracking()
+            .Where(w => w.Id == workspaceId).Select(w => w.IsDefault).FirstOrDefaultAsync(ct);
+
         bool Selectable(Server server, InstanceSize size)
         {
             var reading = capacities.FirstOrDefault(c => c.ServerId == server.Id);
@@ -264,7 +268,7 @@ public sealed partial class LaunchService
             if (allowedKeys.Count > 0 && !allowedKeys.Contains(size.Key)) return false;
             if (!ServerRates.OffersNewWork(offer)) return false;
             if (reading is not null && !reading.CanFit(size.MemoryBytes, size.CpuCores)) return false;
-            return !billing.Value.Enabled || ServerRates.ForWorkload(size, offer, BilledRunState.Running) is not null;
+            return !priceIsAGate || ServerRates.ForWorkload(size, offer, BilledRunState.Running) is not null;
         }
 
         var preferred = sizes.FirstOrDefault(s => string.Equals(s.Key, platformDefault, StringComparison.OrdinalIgnoreCase));
