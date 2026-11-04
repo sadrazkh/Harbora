@@ -179,6 +179,7 @@ report_host_state() {
   command -v docker >/dev/null 2>&1 || return 0
   annotate "the panel's log - errors first" "$( { docker logs harbora-panel 2>&1 | grep -E '^[0-9:]+ (fail|crit): ' | tail -c 2200; \
     echo '--- the last lines ---'; docker logs --tail 15 harbora-panel 2>&1 | cut -c1-200; } 2>/dev/null || true)"
+  annotate "traefik's log - errors" "$(docker logs harbora-traefik 2>&1 | grep -E ' (ERR|WRN) |level=(error|warn)' | cut -c1-400 | tail -c 3700 || true)"
   annotate "docker ps -a" "$(docker ps -a --format '{{.Names}}  {{.Image}}  {{.Status}}' 2>/dev/null | cut -c1-160 | tail -c 3700 || true)"
 }
 
