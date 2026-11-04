@@ -95,6 +95,54 @@ public sealed class LaunchSizeDefaultParityTests
     }
 
     [Fact]
+    public async Task Keeping_an_unpriced_tier_in_the_providers_own_workspace_because_nothing_charges_it()
+    {
+        using var h = new LaunchHarness();
+        h.Billing.Enabled = true;
+        Seed(h, db =>
+        {
+            db.Workspaces.IgnoreQueryFilters().Single(w => w.Id == h.WorkspaceId).IsDefault = true;
+            db.InstanceSizes.Add(Tier("unpriced", -1, rate: null));
+        });
+
+        await AgreesAsync(h, "unpriced");
+    }
+
+    [Fact]
+    public async Task A_fresh_install_can_be_launched_on_with_billing_on_and_nothing_priced()
+    {
+        // The launch proof's first real launches: every one of them, on a clean machine, on the defaults,
+        // ended "InstanceSizeKey: Choose a size." with "Nothing is charged to this workspace" just above it.
+        // Billing ships on, the seeded tiers ship unpriced, and the first workspace is the provider's own.
+        using var h = new LaunchHarness();
+        h.Billing.Enabled = true;
+        Seed(h, db =>
+        {
+            db.Workspaces.IgnoreQueryFilters().Single(w => w.Id == h.WorkspaceId).IsDefault = true;
+            foreach (var tier in db.InstanceSizes) tier.RunningRatePerHourMinor = null;
+        });
+
+        var id = await h.ReadyGitAsync(Bare());
+        var defaults = await h.DefaultsAsync(id);
+
+        defaults.InstanceSizeKey.Should().NotBeNullOrWhiteSpace();
+        (await h.Request().ValidateConfirmAsync(id, defaults, default)).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_customers_workspace_on_that_same_install_still_needs_a_priced_tier()
+    {
+        using var h = new LaunchHarness();
+        h.Billing.Enabled = true;
+        Seed(h, db =>
+        {
+            foreach (var tier in db.InstanceSizes) tier.RunningRatePerHourMinor = null;
+        });
+
+        await AgreesAsync(h, null);
+    }
+
+    [Fact]
     public async Task Skipping_a_disabled_tier()
     {
         using var h = new LaunchHarness();
