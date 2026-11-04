@@ -422,9 +422,14 @@ internal sealed class LaunchHarness : IDisposable
         /// <summary>Every folder named in <see cref="Folders"/> that was really on disk when it was read.</summary>
         public List<string> FoundOnDisk { get; } = [];
 
+        /// <summary>Reads the tree with the real inspector, for the tests that exist to run the two together.</summary>
+        public bool UseRealInspector { get; set; }
+
         public SourceInspection Read(string root)
         {
             ReadFrom.Add(root);
+            if (UseRealInspector) return SourceInspector.Inspect(root);
+
             var path = root.Replace('\\', '/');
             foreach (var (folder, inspection) in Folders)
             {

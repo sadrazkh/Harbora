@@ -310,7 +310,7 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
         (await File.ReadAllBytesAsync(started.ArchivePath!)).Should().Equal(bytes);
 
         // The path is all the launch has to name the app from, so the person's name has to survive in it.
-        Path.GetFileName(started.ArchivePath).Should().Be("my-shop.zip");
+        LaunchSource.LabelForArchive(started.ArchivePath!).Should().Be("my-shop.zip");
     }
 
     [Theory]
@@ -327,12 +327,12 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
         await client.PostAsync("/launch", Upload(token, Zip(), claimed));
 
         var started = Launches.Started.Should().ContainSingle().Subject;
-        Path.GetFileName(started.ArchivePath).Should().Be(stored);
+        LaunchSource.LabelForArchive(started.ArchivePath!).Should().Be(stored);
         Path.GetFullPath(started.ArchivePath!).Should().StartWith(Path.GetFullPath(Path.Combine(_fixture.WorkDir, "_uploads")));
     }
 
     [Fact]
-    public async Task A_refused_start_deletes_the_upload_and_its_folder_and_says_why_on_the_form()
+    public async Task A_refused_start_deletes_the_upload_and_says_why_on_the_form()
     {
         Launches.StartRefusal = new ServiceRefusal("Suspended.", "این فضای کاری معلق است.");
         var client = await Owner();
@@ -345,7 +345,6 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
 
         var path = Launches.Started.Should().ContainSingle().Subject.ArchivePath!;
         File.Exists(path).Should().BeFalse("a launch that never started owns nothing");
-        Directory.Exists(Path.GetDirectoryName(path)).Should().BeFalse();
     }
 
     [Fact]

@@ -1,0 +1,184 @@
+using System.IO.Compression;
+using FluentAssertions;
+using Harbora.Domain.Common;
+using Harbora.Domain.Launch;
+using Harbora.Domain.Services;
+using Harbora.Infrastructure.Launch;
+using Harbora.Infrastructure.Services;
+using Harbora.Shared.Inspection;
+using Xunit;
+
+namespace Harbora.Tests.Launch;
+
+/// <summary>
+/// The service and the inspector were written apart, each with a fake of the other. These run the real
+/// inspector over a real archive through the real service, because what a folder's path looks like, what
+/// a candidate is called and what a role resolves to are all things the two could disagree about while
+/// both sets of tests stayed green.
+/// </summary>
+public sealed class LaunchWithRealInspectorTests
+{
+    private static async Task<Guid> UploadAsync(LaunchHarness h, string fileName, Dictionary<string, string> files)
+    {
+        h.Reader.UseRealInspector = true;
+
+        var uploads = Path.Combine(h.WorkDir, "_uploads");
+        Directory.CreateDirectory(uploads);
+        var path = Path.Combine(uploads, fileName);
+        using (var file = File.Create(path))
+        using (var zip = new ZipArchive(file, ZipArchiveMode.Create))
+        {
+            foreach (var (name, content) in files)
+            {
+                using var writer = new StreamWriter(zip.CreateEntry(name).Open());
+                writer.Write(content);
+            }
+        }
+
+        var started = await h.Request().StartAsync(new LaunchStartRequest
+        {
+            WorkspaceId = h.WorkspaceId, UserId = h.UserId, Source = LaunchSourceKind.Upload, ArchivePath = path
+        }, default);
+        started.Ok.Should().BeTrue();
+        await h.Worker().InspectAsync(started.Value, default);
+        return started.Value;
+    }
+
+    private const string NodeWithPostgres =
+        """{"name":"shop","scripts":{"start":"node server.js"},"dependencies":{"express":"^4.0.0","pg":"^8.0.0"}}""";
+
+    [Fact]
+    public async Task A_node_app_with_postgres_comes_out_as_one_screen_with_one_question()
+    {
+        using var h = new LaunchHarness();
+        var id = await UploadAsync(h, "my-shop-0123456789abcdef0123456789abcdef.zip", new()
+        {
+            ["package.json"] = NodeWithPostgres,
+            ["server.js"] = "require('express')().listen(process.env.PORT)",
+            [".env.example"] = "DATABASE_URL=\nDB_HOST=\nJWT_SECRET=\nTELEGRAM_BOT_TOKEN=\nLOG_LEVEL=info\nPORT=4000\n",
+            [".env"] = "SOMETHING_ONLY_ON_MY_LAPTOP=hunter2\n"
+        });
+
+        var proposal = await h.Request().ProposeAsync(id, default);
+
+        proposal.Should().NotBeNull();
+        proposal!.AppName.Should().Be("my-shop");
+        proposal.Inspection.Stack.Should().Be(DetectedStack.Node);
+        proposal.Defaults.Kind.Should().Be(ServiceKind.Web);
+        proposal.Defaults.ContainerPort.Should().Be(4000);
+
+        var service = proposal.Defaults.Services.Should().ContainSingle().Subject;
+        service.Type.Should().Be(ManagedServiceType.PostgreSql);
+        service.Aliases.Should().Contain(new AttachEnvAlias("DB_HOST", "PGHOST"));
+
+        proposal.EnvFields.Where(f => f.Disposition == EnvVarDisposition.NeedsAnswer).Select(f => f.Key)
+            .Should().Equal("TELEGRAM_BOT_TOKEN");
+        proposal.EnvFields.Single(f => f.Key == "JWT_SECRET").Disposition.Should().Be(EnvVarDisposition.GeneratedSecret);
+        proposal.EnvFields.Single(f => f.Key == "JWT_SECRET").SuggestedValue.Should().BeNull();
+        proposal.EnvFields.Single(f => f.Key == "LOG_LEVEL").SuggestedValue.Should().Be("info");
+        proposal.EnvFields.Should().NotContain(f => f.Key == "DATABASE_URL", "the attachment sets that one");
+        proposal.EnvFields.Should().NotContain(f => f.Key == "SOMETHING_ONLY_ON_MY_LAPTOP", ".env never leaves the archive");
+    }
+
+    [Fact]
+    public async Task A_repository_with_two_apps_asks_which_and_then_proposes_only_for_that_one()
+    {
+        using var h = new LaunchHarness();
+        var id = await UploadAsync(h, "monorepo-0123456789abcdef0123456789abcdef.zip", new()
+        {
+            ["api/package.json"] = NodeWithPostgres,
+            ["api/server.js"] = "",
+            ["api/.env.example"] = "DB_HOST=\nPORT=8080\n",
+            ["web/package.json"] = """{"name":"web","scripts":{"start":"node index.js"},"dependencies":{"express":"^4.0.0"}}""",
+            ["web/index.js"] = ""
+        });
+
+        var asked = await h.Request().ProposeAsync(id, default);
+        asked!.Inspection.RootDirectory.Should().BeNull();
+        asked.Inspection.RootCandidates.Should().BeEquivalentTo(["api", "web"]);
+
+        var api = await h.Request().ChooseRootAsync(id, "api", default);
+        api.Ok.Should().BeTrue();
+        api.Value!.Defaults.RootDirectory.Should().Be("api");
+        api.Value.Defaults.ContainerPort.Should().Be(8080);
+        api.Value.Defaults.Services.Should().ContainSingle().Which.Aliases
+            .Should().Contain(new AttachEnvAlias("DB_HOST", "PGHOST"));
+
+        // Changing one's mind reads what was stored for the other folder, not what the first one said.
+        var web = await h.Request().ChooseRootAsync(id, "web", default);
+        web.Ok.Should().BeTrue();
+        web.Value!.Defaults.RootDirectory.Should().Be("web");
+        web.Value.Defaults.Services.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_zip_that_wraps_everything_in_one_folder_builds_from_that_folder()
+    {
+        using var h = new LaunchHarness();
+        var id = await UploadAsync(h, "shop-main-0123456789abcdef0123456789abcdef.zip", new()
+        {
+            ["shop-main/package.json"] = NodeWithPostgres,
+            ["shop-main/server.js"] = ""
+        });
+
+        var proposal = await h.Request().ProposeAsync(id, default);
+
+        proposal!.Inspection.RootDirectory.Should().Be("shop-main");
+        proposal.Defaults.RootDirectory.Should().Be("shop-main");
+        proposal.Inspection.Stack.Should().Be(DetectedStack.Node);
+        proposal.Defaults.Services.Should().ContainSingle().Which.Type.Should().Be(ManagedServiceType.PostgreSql);
+    }
+
+    [Fact]
+    public async Task A_python_bot_is_a_worker_and_asks_only_for_its_token()
+    {
+        using var h = new LaunchHarness();
+        var id = await UploadAsync(h, "my-bot-0123456789abcdef0123456789abcdef.zip", new()
+        {
+            ["requirements.txt"] = "python-telegram-bot==21.0\n",
+            ["bot.py"] = "print('hello')\n",
+            ["Procfile"] = "worker: python bot.py\n",
+            [".env.example"] = "TELEGRAM_BOT_TOKEN=\n"
+        });
+
+        var proposal = await h.Request().ProposeAsync(id, default);
+
+        proposal!.Inspection.Stack.Should().Be(DetectedStack.Python);
+        proposal.Defaults.Kind.Should().Be(ServiceKind.Worker);
+        proposal.Defaults.Services.Should().BeEmpty();
+        proposal.EnvFields.Should().ContainSingle(f => f.Disposition == EnvVarDisposition.NeedsAnswer)
+            .Which.Key.Should().Be("TELEGRAM_BOT_TOKEN");
+    }
+
+    /// <summary>
+    /// A role the engine has no variable for is dropped by <c>AliasesFor</c> without a word and the app
+    /// starts without it, so every spelling the inspector can put a role on has to resolve to something.
+    /// </summary>
+    [Theory]
+    [InlineData("pg", ManagedServiceType.PostgreSql)]
+    [InlineData("mysql2", ManagedServiceType.MySql)]
+    [InlineData("mongoose", ManagedServiceType.MongoDb)]
+    public async Task Every_generic_database_spelling_resolves_for_every_database(string dependency, ManagedServiceType type)
+    {
+        string[] names =
+        [
+            "DB_URL", "DB_URI", "DB_HOST", "DATABASE_HOST", "DB_PORT", "DATABASE_PORT", "DB_USER", "DB_USERNAME",
+            "DATABASE_USER", "DB_PASSWORD", "DB_PASS", "DATABASE_PASSWORD", "DB_NAME", "DB_DATABASE", "DATABASE_NAME"
+        ];
+
+        using var h = new LaunchHarness();
+        var id = await UploadAsync(h, "app-0123456789abcdef0123456789abcdef.zip", new()
+        {
+            ["package.json"] = $$$"""{"name":"a","scripts":{"start":"node s.js"},"dependencies":{"{{{dependency}}}":"1.0.0"}}""",
+            ["s.js"] = "",
+            [".env.example"] = string.Join('\n', names.Select(n => n + "=")) + "\n"
+        });
+
+        var proposal = await h.Request().ProposeAsync(id, default);
+
+        var service = proposal!.Defaults.Services.Should().ContainSingle().Subject;
+        service.Type.Should().Be(type);
+        service.Aliases!.Select(a => a.Name).Should().BeEquivalentTo(names);
+        proposal.EnvFields.Where(f => f.Disposition == EnvVarDisposition.NeedsAnswer).Should().BeEmpty();
+    }
+}
