@@ -40,15 +40,25 @@ public static class Buildpacks
     /// and must not be mistaken for a site.
     /// </param>
     /// <param name="publicVariables">
-    /// Names the caller will pass as build args, for a build that has to declare them. Any name
-    /// <see cref="PublicBuildVariables.IsPublic"/> refuses is not declared.
+    /// The app's variables with a public prefix, which the Node and frontend images read at build with
+    /// nobody having ticked anything. Any name <see cref="PublicBuildVariables.IsPublic"/> refuses is
+    /// ignored.
+    /// </param>
+    /// <param name="markedVariables">
+    /// The app's variables marked <c>AvailableAtBuild</c>, which every image with a build step declares,
+    /// except the frontend's: what that one produces is sent to every visitor. The result's
+    /// <see cref="BuildpackResult.BuildArgNames"/> says which of all these the chosen image declared.
     /// </param>
     public static BuildpackResult? Detect(
         string contextPath, int port, ServiceKind kind = ServiceKind.Web,
-        string? startCommand = null, IEnumerable<string>? publicVariables = null)
+        string? startCommand = null, IEnumerable<string>? publicVariables = null,
+        IEnumerable<string>? markedVariables = null)
     {
         bool Has(string file) => File.Exists(Path.Combine(contextPath, file));
         bool HasAny(params string[] files) => files.Any(Has);
+
+        var marked = Declarable(markedVariables);
+        var onNode = Declarable(markedVariables, publicVariables?.Where(PublicBuildVariables.IsPublic));
 
         // What the chosen image will not do, said in the deploy log because this deploys and serves a
         // page with no CSS. Without the sentence, nothing would explain why.
@@ -58,16 +68,16 @@ public static class Buildpacks
                 : pack;
 
         var hasPackage = Has("package.json");
-        if (hasPackage && NodeStartRule.CanStart(contextPath)) return Node(contextPath, port);
-        if (FindCsproj(contextPath) is { } csproj) return BesidePackage(DotNet(csproj, port));
-        if (Has("go.mod")) return BesidePackage(Go(port));
-        if (HasAny("composer.json", "index.php")) return BesidePackage(Php(contextPath, port));
-        if (HasAny("requirements.txt", "pyproject.toml", "Pipfile")) return BesidePackage(Python(contextPath, port, kind));
+        if (hasPackage && NodeStartRule.CanStart(contextPath)) return Node(contextPath, port, onNode);
+        if (FindCsproj(contextPath) is { } csproj) return BesidePackage(DotNet(csproj, port, marked));
+        if (Has("go.mod")) return BesidePackage(Go(port, marked));
+        if (HasAny("composer.json", "index.php")) return BesidePackage(Php(contextPath, port, marked));
+        if (HasAny("requirements.txt", "pyproject.toml", "Pipfile")) return BesidePackage(Python(contextPath, port, kind, marked));
         if (hasPackage)
         {
             return kind == ServiceKind.Web && string.IsNullOrWhiteSpace(startCommand) && NodeStartRule.HasBuildScript(contextPath)
                 ? Frontend(contextPath, port, publicVariables)
-                : Node(contextPath, port);
+                : Node(contextPath, port, onNode);
         }
 
         if (HasAny("index.html", "index.htm")) return Static();
@@ -93,6 +103,34 @@ public static class Buildpacks
                "Add a Dockerfile, or add one of those files.";
     }
 
+    // --- Build variables ---
+
+    /// <summary>
+    /// The <c>ARG</c> lines a generated image declares, every one of them from here. A build arg only
+    /// reaches a build if the Dockerfile declares it, so <c>AvailableAtBuild</c> used to do nothing on
+    /// any generated image, with no error to say so. Nothing to declare gives an empty string, which is
+    /// what keeps those images byte for byte what they were.
+    ///
+    /// <para>
+    /// <c>ARG</c> and never <c>ENV</c>, so nothing lands in the running image's environment by this
+    /// route. But an <c>ARG</c>'s value stays readable in <c>docker history</c>, on the final image of a
+    /// single-stage build, which is what ticking <c>AvailableAtBuild</c> means. A hand-written Dockerfile
+    /// never comes through here: it declares its own.
+    /// </para>
+    /// </summary>
+    private static string ArgLines(string[] names) => string.Concat(names.Select(name => $"ARG {name}\n"));
+
+    /// <summary>In a stable order, since it decides the layer cache, and only what an <c>ARG</c> line can legally hold.</summary>
+    private static string[] Declarable(params IEnumerable<string>?[] names) =>
+        names.SelectMany(n => n ?? []).Where(IsArgName)
+            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+
+    private static bool IsArgName(string name) =>
+        name.Length > 0 && (char.IsAsciiLetter(name[0]) || name[0] == '_') &&
+        name.All(c => char.IsAsciiLetterOrDigit(c) || c == '_');
+
+    private static string[]? Declared(string[] names) => names.Length > 0 ? names : null;
+
     // --- Node ---
 
     /// <param name="OptionalBuild">For an app that can start without it, so a failing build does not stop the deploy.</param>
@@ -106,7 +144,9 @@ public static class Buildpacks
             ? new("RUN corepack enable && yarn install --frozen-lockfile || yarn install", "RUN yarn build || true", "yarn build", "yarn start")
             : new("RUN npm install", "RUN npm run build --if-present", "npm run build", "npm start");
 
-    private static BuildpackResult Node(string ctx, int port)
+    // The ARGs come before the install, not just the build: a marked NPM_TOKEN is no use to a private
+    // package any later. The price is a reinstall when a value changes.
+    private static BuildpackResult Node(string ctx, int port, string[] args)
     {
         var tooling = ToolingFor(ctx);
         var df =
@@ -115,14 +155,14 @@ public static class Buildpacks
             FROM node:20-alpine
             WORKDIR /app
             COPY . .
-            {tooling.Install}
+            {ArgLines(args)}{tooling.Install}
             {tooling.OptionalBuild}
             ENV NODE_ENV=production
             ENV PORT={port}
             EXPOSE {port}
             CMD ["sh", "-c", "{tooling.Start}"]
             """;
-        return new BuildpackResult(df, "Node.js");
+        return new BuildpackResult(df, "Node.js", BuildArgNames: Declared(args));
     }
 
     // --- Frontend ---
@@ -143,18 +183,17 @@ public static class Buildpacks
     /// <para>
     /// The <c>ARG</c>s come after the install, so that changing a value does not reinstall everything,
     /// and only in the build stage, so that the image that ships has nothing of them but what the
-    /// framework itself wrote into the site.
+    /// framework itself wrote into the site. Public names only, marked or not, and the example files
+    /// add to them: a name with no value yet does no harm, and this image cannot be rebuilt later just
+    /// because one turned up.
     /// </para>
     /// </summary>
     private static BuildpackResult Frontend(string ctx, int port, IEnumerable<string>? publicVariables)
     {
         var tooling = ToolingFor(ctx);
-        var args = string.Join('\n',
-            PublicBuildVariables.NamedInExampleFiles(ctx)
-                .Concat((publicVariables ?? []).Where(PublicBuildVariables.IsPublic))
-                .Distinct(StringComparer.Ordinal)
-                .Order(StringComparer.Ordinal)
-                .Select(name => $"ARG {name}"));
+        var args = Declarable(
+            PublicBuildVariables.NamedInExampleFiles(ctx),
+            publicVariables?.Where(PublicBuildVariables.IsPublic));
 
         var df =
             $$"""
@@ -163,8 +202,7 @@ public static class Buildpacks
             WORKDIR /app
             COPY . .
             {{tooling.Install}}
-            {{args}}
-            RUN {{tooling.Build}}
+            {{ArgLines(args)}}RUN {{tooling.Build}}
             {{FrontendOutputStep}}
 
             FROM nginx:alpine
@@ -185,14 +223,17 @@ public static class Buildpacks
 
         // This text's line endings are the source file's, and a checkout on Windows has CRLF. A shell
         // step is the one place that could matter, so this image does not depend on it.
-        return new BuildpackResult(df.ReplaceLineEndings("\n"), FrontendStack, tooling.Build, PublicBuildArgsOnly: true);
+        return new BuildpackResult(df.ReplaceLineEndings("\n"), FrontendStack, tooling.Build, BuildArgNames: Declared(args));
     }
 
     /// <summary>
     /// Where the build put the site: <c>dist</c> (Vite), <c>build</c> (Create React App, SvelteKit),
     /// <c>out</c> (a Next export), <c>.output/public</c> (Nuxt), then a shallow search under <c>dist</c>
-    /// and <c>build</c>, where Angular nests it under the project's name. Plain sh and busybox, since
-    /// this runs on Alpine, and a test runs this exact text under a real shell.
+    /// and <c>build</c>, where Angular nests it under the project's name. Last, <c>public</c>, which is
+    /// Gatsby's output and only that: everywhere else that folder holds the source's own
+    /// <c>index.html</c>, and serving that would be a blank page reported as a success, so it needs a
+    /// <c>gatsby-config</c> beside it. Plain sh and busybox, since this runs on Alpine, and a test runs
+    /// this exact text under a real shell.
     /// </summary>
     private const string FrontendOutputStep =
         """
@@ -204,6 +245,7 @@ public static class Buildpacks
               index="$(find dist build -mindepth 2 -maxdepth 4 -type f -name index.html 2>/dev/null | sort | head -n 1)"; \
               if [ -n "$index" ]; then found="$(dirname "$index")"; fi; \
             fi; \
+            if [ -z "$found" ] && [ -f public/index.html ] && ls gatsby-config.* >/dev/null 2>&1; then found="public"; fi; \
             if [ -z "$found" ]; then \
               echo "The build finished without producing an index.html, so this is not a site. It needs a start script in package.json, or a Dockerfile." >&2; \
               exit 1; \
@@ -213,7 +255,7 @@ public static class Buildpacks
         """;
 
     // --- .NET ---
-    private static BuildpackResult DotNet(string csprojRel, int port)
+    private static BuildpackResult DotNet(string csprojRel, int port, string[] args)
     {
         var assembly = Path.GetFileNameWithoutExtension(csprojRel);
         var df =
@@ -222,7 +264,7 @@ public static class Buildpacks
             FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
             WORKDIR /src
             COPY . .
-            RUN dotnet publish "{csprojRel.Replace('\\', '/')}" -c Release -o /app
+            {ArgLines(args)}RUN dotnet publish "{csprojRel.Replace('\\', '/')}" -c Release -o /app
 
             FROM mcr.microsoft.com/dotnet/aspnet:9.0
             WORKDIR /app
@@ -231,18 +273,18 @@ public static class Buildpacks
             EXPOSE {port}
             ENTRYPOINT ["dotnet", "{assembly}.dll"]
             """;
-        return new BuildpackResult(df, ".NET");
+        return new BuildpackResult(df, ".NET", BuildArgNames: Declared(args));
     }
 
     // --- Go ---
-    private static BuildpackResult Go(int port)
+    private static BuildpackResult Go(int port, string[] args)
     {
         var df =
             $"""
             # Auto-generated by Harbora (Go buildpack)
             FROM golang:1.22-alpine AS build
             WORKDIR /src
-            COPY go.* ./
+            {ArgLines(args)}COPY go.* ./
             RUN go mod download || true
             COPY . .
             RUN CGO_ENABLED=0 go build -o /app/server .
@@ -254,11 +296,11 @@ public static class Buildpacks
             EXPOSE {port}
             CMD ["/server"]
             """;
-        return new BuildpackResult(df, "Go");
+        return new BuildpackResult(df, "Go", BuildArgNames: Declared(args));
     }
 
     // --- PHP ---
-    private static BuildpackResult Php(string ctx, int port)
+    private static BuildpackResult Php(string ctx, int port, string[] args)
     {
         var composer = File.Exists(Path.Combine(ctx, "composer.json"))
             ? "RUN if [ -f composer.json ]; then curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer && composer install --no-dev --no-interaction || true; fi"
@@ -273,14 +315,14 @@ public static class Buildpacks
              && sed -ri "s/:80>/:{port}>/" /etc/apache2/sites-enabled/000-default.conf
             WORKDIR /var/www/html
             COPY . /var/www/html/
-            {composer}
+            {ArgLines(args)}{composer}
             EXPOSE {port}
             """;
-        return new BuildpackResult(df, "PHP");
+        return new BuildpackResult(df, "PHP", BuildArgNames: Declared(args));
     }
 
     // --- Python ---
-    private static BuildpackResult? Python(string ctx, int port, ServiceKind kind)
+    private static BuildpackResult? Python(string ctx, int port, ServiceKind kind, string[] args)
     {
         var entry = PythonEntryCandidates.FirstOrDefault(f => File.Exists(Path.Combine(ctx, f)));
         if (entry is null) return null; // No guessing — an image that can't start is worse than none.
@@ -295,7 +337,7 @@ public static class Buildpacks
             "FROM python:3.12-slim",
             "WORKDIR /app",
             "COPY . .",
-            install,
+            ArgLines(args) + install,
             // Python buffers stdout when it isn't a TTY. Without this, a working bot's print()
             // sits in the buffer and the panel's log view stays empty forever.
             "ENV PYTHONUNBUFFERED=1",
@@ -313,7 +355,7 @@ public static class Buildpacks
 
         lines.Add($"CMD [\"python\", \"{entry}\"]");
 
-        return new BuildpackResult(string.Join('\n', lines), "Python", entry);
+        return new BuildpackResult(string.Join('\n', lines), "Python", entry, BuildArgNames: Declared(args));
     }
 
     /// <summary>Public entry for a forced static-site (Nginx) build, used by StaticSite deploys.</summary>
@@ -354,8 +396,9 @@ public static class Buildpacks
 /// naming (currently just Python's <c>CMD</c> file) — null for stacks where "the stack" already is
 /// the answer. Lets the pipeline log which guess it made instead of just which stack it picked.
 /// <paramref name="Warning"/> is what this build will leave undone without failing, for the deploy log.
-/// <paramref name="PublicBuildArgsOnly"/> says what this build produces is sent to every visitor, so it
-/// gets the variables <see cref="PublicBuildVariables"/> calls public and no others.
+/// <paramref name="BuildArgNames"/> is what this image declares and so the only build args worth
+/// passing it, or null for none. Each image's own rule for which variables those are lives in
+/// <see cref="Buildpacks.Detect"/>.
 /// </summary>
 public readonly record struct BuildpackResult(
-    string Dockerfile, string Stack, string? Entry = null, string? Warning = null, bool PublicBuildArgsOnly = false);
+    string Dockerfile, string Stack, string? Entry = null, string? Warning = null, string[]? BuildArgNames = null);

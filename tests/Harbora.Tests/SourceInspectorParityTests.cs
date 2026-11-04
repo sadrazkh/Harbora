@@ -85,6 +85,9 @@ public class SourceInspectorParityTests : InspectorTreeTests
     [InlineData("""{"scripts":{"build":"vite build"}}""")]
     [InlineData("""{"scripts":{"start":"node a.js","build":"vite build"}}""")]
     [InlineData("""{"scripts":{"start":""}}""")]
+    [InlineData("""{"scripts":{"start":"react-scripts start","build":"react-scripts build"}}""")]
+    [InlineData("""{"scripts":{"start":"ng serve --host 0.0.0.0","build":"ng build"}}""")]
+    [InlineData("""{"scripts":{"start":"vite"}}""")]
     [InlineData("{}")]
     [InlineData("not json")]
     public void Every_combination_beside_each_kind_of_package_json_detects_the_same_stack(string packageJson)

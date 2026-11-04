@@ -7,13 +7,15 @@ namespace Harbora.Shared.Inspection;
 ///
 /// <para>
 /// The prefixes are each framework's own line between public and private, and they are the only
-/// thing that may cross into such a build. What is built here is sent to every visitor, so a name
-/// without one of them must never reach it, whatever else it has been marked as.
+/// thing that may cross into a frontend's build. What is built there is sent to every visitor, so a
+/// name without one of them must never reach it, whatever else it has been marked as. On the Node
+/// image, where a Next.js client bundle has the same need, they reach the build too, unmarked.
 /// </para>
 /// </summary>
 public static class PublicBuildVariables
 {
-    private static readonly string[] Prefixes = ["VITE_", "REACT_APP_", "NEXT_PUBLIC_", "PUBLIC_"];
+    private static readonly string[] Prefixes =
+        ["VITE_", "REACT_APP_", "NEXT_PUBLIC_", "PUBLIC_", "VUE_APP_", "GATSBY_", "NUXT_PUBLIC_"];
 
     /// <summary>Exact case, as the frameworks compare it. The name also has to be one a Dockerfile's <c>ARG</c> can declare.</summary>
     public static bool IsPublic(string name) =>

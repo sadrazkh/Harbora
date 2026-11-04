@@ -417,18 +417,18 @@ public class BuildpackTests : IDisposable
     private const string ViteShaped =
         """{"name":"site","scripts":{"dev":"vite","build":"vite build","preview":"vite preview"},"devDependencies":{"vite":"5"}}""";
 
-    // Create React App's own template has a `start` too, which is its dev server, so a real one stays
-    // Node: see Create_React_App_as_generated_keeps_its_dev_server_start_and_stays_node.
-    private const string CraShapedWithoutItsStart =
+    private const string ReactScriptsWithNoStart =
         """{"name":"site","scripts":{"build":"react-scripts build","test":"react-scripts test"},"dependencies":{"react-scripts":"5"}}""";
 
-    private const string CraAsGenerated =
-        """{"name":"site","scripts":{"start":"react-scripts start","build":"react-scripts build"},"dependencies":{"react-scripts":"5"}}""";
+    // The scripts Create React App's own template writes.
+    private const string CreateReactAppTemplate =
+        """{"name":"site","version":"0.1.0","private":true,"dependencies":{"react":"^18.2.0","react-dom":"^18.2.0","react-scripts":"5.0.1"},"scripts":{"start":"react-scripts start","build":"react-scripts build","test":"react-scripts test","eject":"react-scripts eject"}}""";
 
     [Theory]
     [InlineData(ViteShaped)]
-    [InlineData(CraShapedWithoutItsStart)]
-    public void A_build_script_with_nothing_to_start_is_a_frontend(string packageJson)
+    [InlineData(ReactScriptsWithNoStart)]
+    [InlineData(CreateReactAppTemplate)]
+    public void A_build_script_with_nothing_that_can_serve_is_a_frontend(string packageJson)
     {
         Touch("package.json", packageJson);
         Touch("index.html", "<html></html>");
@@ -437,8 +437,89 @@ public class BuildpackTests : IDisposable
 
         pack.Stack.Should().Be(Buildpacks.FrontendStack);
         pack.Entry.Should().Be("npm run build");
-        pack.PublicBuildArgsOnly.Should().BeTrue();
         pack.Warning.Should().BeNull();
+    }
+
+    private static string Scripts(string start, string? build = "x") =>
+        build is null
+            ? $$$"""{"scripts":{"start":"{{{start}}}"}}"""
+            : $$$"""{"scripts":{"start":"{{{start}}}","build":"{{{build}}}"}}""";
+
+    [Theory]
+    [InlineData("react-scripts start")]
+    [InlineData("react-app-rewired start")]
+    [InlineData("craco start")]
+    [InlineData("ng serve")]
+    [InlineData("gatsby develop")]
+    [InlineData("vue-cli-service serve")]
+    [InlineData("vite")]
+    [InlineData("webpack serve")]
+    [InlineData("webpack-dev-server")]
+    [InlineData("  vite  ")]
+    public void A_dev_server_is_not_a_start_beside_a_build_script(string command)
+    {
+        Touch("package.json", Scripts(command));
+
+        NodeStartRule.CanStart(_dir).Should().BeFalse();
+        Buildpacks.Detect(_dir, 80)!.Value.Stack.Should().Be(Buildpacks.FrontendStack);
+    }
+
+    [Theory]
+    [InlineData("react-scripts start")]
+    [InlineData("ng serve")]
+    [InlineData("vite")]
+    public void Without_a_build_script_nothing_changes(string command)
+    {
+        Touch("package.json", Scripts(command, build: null));
+
+        NodeStartRule.CanStart(_dir).Should().BeTrue();
+        Buildpacks.Detect(_dir, 3000)!.Value.Stack.Should().Be("Node.js");
+    }
+
+    [Theory]
+    [InlineData("ng serve --host 0.0.0.0")]
+    [InlineData("vite --host")]
+    [InlineData("vite preview")]
+    [InlineData("react-scripts start --no-open")]
+    [InlineData("gatsby develop -H 0.0.0.0")]
+    [InlineData("webpack serve --host 0.0.0.0")]
+    [InlineData("CI=true react-scripts start")]
+    [InlineData("VITE")]
+    public void Anything_but_the_exact_command_is_somebody_who_meant_it_and_stays_node(string command)
+    {
+        Touch("package.json", Scripts(command));
+
+        NodeStartRule.CanStart(_dir).Should().BeTrue();
+        Buildpacks.Detect(_dir, 3000)!.Value.Stack.Should().Be("Node.js");
+    }
+
+    [Fact]
+    public void A_laravel_repo_with_a_dev_server_for_a_start_is_php()
+    {
+        Touch("package.json", Scripts("vite", "vite build"));
+        Touch("composer.json", "{}");
+
+        var pack = Buildpacks.Detect(_dir, 80)!.Value;
+
+        pack.Stack.Should().Be("PHP");
+        pack.Warning.Should().Be(NodeStartRule.AssetsNotBuilt);
+    }
+
+    [Fact]
+    public void A_server_js_beside_a_dev_server_start_still_counts_and_stays_node()
+    {
+        Touch("package.json", Scripts("vite"));
+        Touch("server.js");
+
+        Buildpacks.Detect(_dir, 3000)!.Value.Stack.Should().Be("Node.js");
+    }
+
+    [Fact]
+    public void A_dev_server_start_on_an_app_with_its_own_start_command_stays_node()
+    {
+        Touch("package.json", Scripts("vite"));
+
+        Buildpacks.Detect(_dir, 3000, ServiceKind.Web, "node server/index.js")!.Value.Stack.Should().Be("Node.js");
     }
 
     [Fact]
@@ -509,16 +590,6 @@ public class BuildpackTests : IDisposable
     {
         Touch("package.json", """{"scripts":{"build":"tsc"}}""");
         Touch("server.js");
-
-        Buildpacks.Detect(_dir, 3000)!.Value.Stack.Should().Be("Node.js");
-    }
-
-    [Fact]
-    public void Create_React_App_as_generated_keeps_its_dev_server_start_and_stays_node()
-    {
-        // Pinned because it surprises: "a package.json that can start something wins" treats
-        // `react-scripts start` as an app. The rule was asked for as it stands, so this is what it does.
-        Touch("package.json", CraAsGenerated);
 
         Buildpacks.Detect(_dir, 3000)!.Value.Stack.Should().Be("Node.js");
     }
@@ -715,6 +786,20 @@ public class BuildpackTests : IDisposable
         File.ReadAllText(Path.Combine(_dir, ".harbora-site", "index.html")).Should().Be("dist");
     }
 
+    [Theory]
+    [InlineData("gatsby-config.js")]
+    [InlineData("gatsby-config.ts")]
+    public void Gatsbys_public_folder_is_its_output_where_a_gatsby_config_says_so(string config)
+    {
+        Place("public/index.html", "gatsby");
+        Place(config, "");
+
+        if (RunOutputStep() is not { } run) return;
+
+        run.ExitCode.Should().Be(0, run.Output);
+        File.ReadAllText(Path.Combine(_dir, ".harbora-site", "index.html")).Should().Be("gatsby");
+    }
+
     [Fact]
     public void Hidden_files_in_the_output_are_kept()
     {
@@ -857,18 +942,6 @@ public class BuildpackTests : IDisposable
 
         h.Docker.BuildRequests.Should().ContainSingle().Which.BuildArgs.Keys.Should().Equal("VITE_FINE");
         GeneratedDockerfile(h).Should().NotContain("SECRET_TOKEN").And.NotContain("DATABASE_PASSWORD").And.NotContain("hunter2");
-    }
-
-    [Fact]
-    public async Task Every_other_build_gets_exactly_what_it_got_before()
-    {
-        using var h = GitApp(RealNodeApp);
-        AddVariable(h, "BUILD_FLAG", "yes", availableAtBuild: true);
-        AddVariable(h, "VITE_NOT_MARKED", "no");
-
-        await DeployAndReadLog(h);
-
-        h.Docker.BuildRequests.Should().ContainSingle().Which.BuildArgs.Keys.Should().Equal("BUILD_FLAG");
     }
 
     [Fact]

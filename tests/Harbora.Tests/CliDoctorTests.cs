@@ -186,6 +186,19 @@ public class CliDoctorTests : IDisposable
         check.Detail.Should().Contain("own start command").And.Contain("worker").And.NotContain("ENV PORT");
     }
 
+    [Theory]
+    [InlineData("react-scripts start", "frontend (")]
+    [InlineData("vite", "frontend (")]
+    [InlineData("ng serve --host 0.0.0.0", "Node (")]
+    public void A_dev_server_for_a_start_is_reported_as_the_server_will_treat_it(string command, string expected)
+    {
+        Write("package.json", $$$"""{"scripts":{"start":"{{{command}}}","build":"x"}}""");
+
+        var (checks, _) = Doctor.CheckBuild(_root, new ProjectConfig());
+
+        Single(checks, "Dockerfile").Detail.Should().Contain($"auto-detected as {expected}");
+    }
+
     [Fact]
     public void A_package_json_with_neither_start_nor_build_is_reported_as_node()
     {

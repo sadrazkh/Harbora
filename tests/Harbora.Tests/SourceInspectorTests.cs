@@ -744,12 +744,97 @@ public class SourceInspectorTests : InspectorTreeTests
     }
 
     [Fact]
-    public void The_same_names_on_a_node_app_are_read_at_run_time_and_get_no_such_note()
+    public void A_node_app_gets_no_such_note_since_whether_its_code_reads_them_at_run_time_is_its_own_business()
     {
         Write("package.json", RealNodeApp);
         Write(".env.example", "VITE_API_URL=\n");
 
         Codes(Inspect()).Should().NotContain("public-variables-read-at-build");
+    }
+
+    [Theory]
+    [InlineData("VUE_APP_API=")]
+    [InlineData("GATSBY_API=")]
+    [InlineData("NUXT_PUBLIC_API=")]
+    public void The_newer_public_prefixes_get_the_note_too(string line)
+    {
+        Write("package.json", ViteShaped);
+        Write(".env.example", line + "\n");
+
+        Codes(Inspect()).Should().Contain("public-variables-read-at-build");
+    }
+
+    private const string CreateReactAppTemplate =
+        """{"name":"site","version":"0.1.0","private":true,"dependencies":{"react":"^18.2.0","react-dom":"^18.2.0","react-scripts":"5.0.1"},"scripts":{"start":"react-scripts start","build":"react-scripts build","test":"react-scripts test","eject":"react-scripts eject"}}""";
+
+    [Fact]
+    public void A_create_react_app_project_as_its_template_writes_it_is_a_frontend()
+    {
+        Write("package.json", CreateReactAppTemplate);
+        Write("public/index.html", "<html></html>");
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.Frontend);
+        result.Kind.Should().Be(DetectedAppKind.Web);
+        result.Port.Should().Be(80);
+        Codes(result).Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("react-scripts start")]
+    [InlineData("react-app-rewired start")]
+    [InlineData("craco start")]
+    [InlineData("ng serve")]
+    [InlineData("gatsby develop")]
+    [InlineData("vue-cli-service serve")]
+    [InlineData("vite")]
+    [InlineData("webpack serve")]
+    [InlineData("webpack-dev-server")]
+    public void A_dev_server_beside_a_build_script_is_a_frontend_and_without_one_stays_node(string command)
+    {
+        Write("package.json", $$$"""{"scripts":{"start":"{{{command}}}","build":"x"}}""");
+        Inspect().Stack.Should().Be(DetectedStack.Frontend);
+
+        Write("package.json", $$$"""{"scripts":{"start":"{{{command}}}"}}""");
+        Inspect().Stack.Should().Be(DetectedStack.Node);
+    }
+
+    [Theory]
+    [InlineData("ng serve --host 0.0.0.0")]
+    [InlineData("vite --host")]
+    [InlineData("react-scripts start --no-open")]
+    public void A_dev_server_somebody_added_a_flag_to_stays_node(string command)
+    {
+        Write("package.json", $$$"""{"scripts":{"start":"{{{command}}}","build":"x"}}""");
+
+        Inspect().Stack.Should().Be(DetectedStack.Node);
+    }
+
+    [Fact]
+    public void A_laravel_repo_with_a_dev_server_for_a_start_is_php_with_its_migrations_and_the_note_about_assets()
+    {
+        Write("package.json", """{"scripts":{"start":"vite","build":"vite build"}}""");
+        Write("composer.json", "{}");
+        Write("artisan");
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.Php);
+        result.ReleaseCommand.Should().Be("php artisan migrate --force");
+        Codes(result).Should().Contain("frontend-assets-not-built").And.NotContain("stack-ambiguous");
+    }
+
+    [Fact]
+    public void A_procfile_web_line_beside_a_dev_server_start_is_the_start_command_and_keeps_it_node()
+    {
+        Write("package.json", """{"scripts":{"start":"vite","build":"vite build"}}""");
+        Write("Procfile", "web: node server/index.js\n");
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.Node);
+        result.StartCommand.Should().Be("node server/index.js");
     }
 
     [Fact]

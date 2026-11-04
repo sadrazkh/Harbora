@@ -33,10 +33,10 @@ internal static class NodeManifest
         });
     }
 
-    /// <summary>False for a script that is not there, is not text or is blank, and for a file that cannot be read at all.</summary>
-    public static bool HasScript(SourceTree folder, string name)
+    /// <summary>Null for a script that is not there, is not text or is blank, and for a file that cannot be read at all.</summary>
+    public static string? Script(SourceTree folder, string name)
     {
-        if (folder.ReadText(File) is not { } text) return false;
+        if (folder.ReadText(File) is not { } text) return null;
 
         try
         {
@@ -46,11 +46,14 @@ internal static class NodeManifest
                    scripts.ValueKind == JsonValueKind.Object &&
                    scripts.TryGetProperty(name, out var script) &&
                    script.ValueKind == JsonValueKind.String &&
-                   !string.IsNullOrWhiteSpace(script.GetString());
+                   script.GetString() is { } command &&
+                   !string.IsNullOrWhiteSpace(command)
+                ? command
+                : null;
         }
         catch (JsonException)
         {
-            return false;
+            return null;
         }
     }
 
