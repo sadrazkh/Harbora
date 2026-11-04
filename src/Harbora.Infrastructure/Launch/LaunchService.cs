@@ -116,12 +116,12 @@ public sealed partial class LaunchService(
                 if (archivePath is null)
                     return ServiceOutcome<Guid>.Refused(new ServiceRefusal(
                         "The uploaded file could not be found. Please upload it again.",
-                        "فایل آپلودشده پیدا نشد. لطفاً دوباره آپلود کنید.", nameof(LaunchStartRequest.ArchivePath)));
+                        "فایل آپلودشده پیدا نشد. دوباره آپلود کن.", nameof(LaunchStartRequest.ArchivePath)));
                 break;
 
             default:
                 return ServiceOutcome<Guid>.Refused(new ServiceRefusal(
-                    "Give a repository URL or an archive.", "آدرس مخزن یا یک فایل فشرده بدهید."));
+                    "Give a repository URL or an archive.", "آدرس مخزن یا یک فایل فشرده بده."));
         }
 
         var now = clock.UtcNow;
@@ -322,7 +322,7 @@ public sealed partial class LaunchService(
     {
         var reason = LogText.Clean(Scrub(ex.Message, token)).Trim();
         return ($"Could not read this repository. The URL may be wrong, or the repository may be private: if it is, add an access token and try again. Nothing was created. ({reason})",
-            $"این مخزن خوانده نشد. شاید آدرس اشتباه باشد یا مخزن خصوصی باشد؛ اگر خصوصی است، توکن دسترسی را هم بدهید و دوباره امتحان کنید. چیزی ساخته نشد. ({reason})");
+            $"این مخزن خوانده نشد. شاید آدرس اشتباه باشد یا مخزن خصوصی باشد؛ اگر خصوصی است، توکن دسترسی را هم بده و دوباره امتحان کن. چیزی ساخته نشد. ({reason})");
     }
 
     /// <summary>

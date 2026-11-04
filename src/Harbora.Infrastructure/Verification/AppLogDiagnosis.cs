@@ -146,45 +146,45 @@ public static class AppLogDiagnosis
             "The app is looking for its database inside its own container, so it is ignoring the address it was given. " +
             "Make it read DATABASE_URL, or the name shown on the app's page.",
             "اپ دیتابیس را داخل کانتینر خودش می‌جوید، یعنی آدرسی را که به آن داده شده نمی‌خواند. " +
-            "کاری کنید DATABASE_URL یا نامی را که در صفحهٔ اپ نوشته شده بخواند.",
+            "کاری کن DATABASE_URL یا نامی را که در صفحهٔ اپ نوشته شده بخواند.",
             MatchSelfConnection),
 
         new(CannotReach,
             "The app cannot reach something it needs: the address is wrong, or whatever is there is not answering. " +
             "Check the addresses in its variables, and that the service is running.",
             "اپ به چیزی که لازم دارد نمی‌رسد: یا آدرس غلط است یا آنجا کسی جواب نمی‌دهد. " +
-            "آدرس‌های داخل متغیرها و روشن بودن آن سرویس را بررسی کنید.",
+            "آدرس‌های داخل متغیرها و روشن بودن آن سرویس را بررسی کن.",
             line => First(CannotReachWords, line)),
 
         new(WrongCredentials,
             "The app reached the database with the wrong username or password. " +
             "Often an old value in the app's own variables is outranking the attachment: remove it.",
             "اپ به دیتابیس رسیده ولی نام کاربری یا رمزش غلط است. " +
-            "معمولاً یک مقدار قدیمی در متغیرهای خود اپ جای مقدار اتصال را گرفته؛ آن را پاک کنید.",
+            "معمولاً یک مقدار قدیمی در متغیرهای خود اپ جای مقدار اتصال را گرفته؛ آن را پاک کن.",
             line => First(WrongCredentialWords, line)),
 
         new(MigrationsNotRun,
             "The database is empty: the app's tables do not exist, so its migrations have not run. " +
             "Set a release command that runs them.",
             "دیتابیس خالی است: جدول‌های اپ وجود ندارند، پس مایگریشن‌هایش اجرا نشده. " +
-            "یک «دستور پیش از انتشار» بگذارید که آن‌ها را اجرا کند.",
+            "یک «دستور پیش از انتشار» بگذار که آن‌ها را اجرا کند.",
             line => First(MissingTableWords, line)),
 
         new(MissingDependency,
             "A dependency is missing from the build: the app is asking for code that is not in its image. " +
             "Add it to the project's dependency file and deploy again.",
             "یک وابستگی در بیلد نیست: اپ کدی را می‌خواهد که داخل ایمیجش نیست. " +
-            "آن را به فایل وابستگی‌های پروژه اضافه کنید و دوباره مستقر کنید.",
+            "آن را به فایل وابستگی‌های پروژه اضافه کن و دوباره مستقر کن.",
             line => First(MissingDependencyWords, line)),
 
         new(PortInUse,
             "Two things inside the container want the same port. Make sure only one of them listens on it.",
-            "دو چیز داخل کانتینر یک پورت را می‌خواهند. کاری کنید فقط یکی روی آن گوش بدهد.",
+            "دو چیز داخل کانتینر یک پورت را می‌خواهند. کاری کن فقط یکی روی آن گوش بدهد.",
             line => First(PortInUseWords, line)),
 
         new(ListeningOnLoopback,
             "It listens only inside its own container, so nothing can reach it. Make it listen on 0.0.0.0.",
-            "فقط داخل کانتینر خودش گوش می‌دهد، پس هیچ‌چیز به آن نمی‌رسد. کاری کنید روی 0.0.0.0 گوش بدهد.",
+            "فقط داخل کانتینر خودش گوش می‌دهد، پس هیچ‌چیز به آن نمی‌رسد. کاری کن روی 0.0.0.0 گوش بدهد.",
             line => First(LoopbackBindWords, line))
     ];
 

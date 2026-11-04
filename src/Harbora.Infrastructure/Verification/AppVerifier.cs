@@ -209,7 +209,7 @@ public sealed class AppVerifier(
                 "This app has no active deployment, so nothing can be running.",
                 "این اپ استقرار فعالی ندارد، پس چیزی در حال اجرا نیست.",
                 "Deploy it, or see why the last deployment failed.",
-                "آن را مستقر کنید، یا ببینید استقرار قبلی چرا شکست خورد.",
+                "آن را مستقر کن، یا ببین استقرار قبلی چرا شکست خورد.",
                 run.DeploymentsPath);
 
         return await AskAsync(new Asking(RunningKey, "Could not tell whether it is running", "نشد فهمید در حال اجراست یا نه"),
@@ -236,7 +236,7 @@ public sealed class AppVerifier(
                         $"فقط {running} کانتینر از {names.Count} کانتینرش در حال اجراست",
                         null, null,
                         "Read its log to see why the others stopped. Deploying again starts them all.",
-                        "لاگ را بخوانید تا ببینید بقیه چرا ایستاده‌اند. استقرار دوباره همه را راه می‌اندازد.",
+                        "لاگ را بخوان تا ببین بقیه چرا ایستاده‌اند. استقرار دوباره همه را راه می‌اندازد.",
                         run.LogsPath);
 
                 var stopped = app.Status == AppStatus.Stopped;
@@ -250,7 +250,7 @@ public sealed class AppVerifier(
                         ? "کانتینرش روی سرور پیدا نشد."
                         : $"وضعیت کانتینرش: {state.Status}.",
                     stopped ? "It was stopped. Start it from this page." : "Read its log to see why it stopped, then deploy again.",
-                    stopped ? "متوقف شده است. از همین صفحه آن را روشن کنید." : "لاگ را بخوانید تا ببینید چرا ایستاده، بعد دوباره مستقر کنید.",
+                    stopped ? "متوقف شده است. از همین صفحه آن را روشن کن." : "لاگ را بخوان تا ببین چرا ایستاده، بعد دوباره مستقر کن.",
                     run.LogsPath);
             });
     }
@@ -297,7 +297,7 @@ public sealed class AppVerifier(
                     $"از شروع این استقرار {restarts} بار از کار افتاده و دوباره راه افتاده."
                         + (tail is null ? "" : $"\nآخرین خط‌های لاگش:\n{tail}"),
                     "Read its log: the reason is almost always in the last lines, usually a missing variable or a service it cannot reach.",
-                    "لاگ را بخوانید: دلیلش تقریباً همیشه در خط‌های آخر است، معمولاً یک متغیر جاافتاده یا سرویسی که به آن نمی‌رسد.",
+                    "لاگ را بخوان: دلیلش تقریباً همیشه در خط‌های آخر است، معمولاً یک متغیر جاافتاده یا سرویسی که به آن نمی‌رسد.",
                     run.LogsPath);
             }
 
@@ -344,7 +344,7 @@ public sealed class AppVerifier(
                 token => ServiceAsync(run, attached, token),
                 timedOut: (
                     "The connection test did not finish in time, so this database was not checked. It may still be downloading its client: check again in a few minutes.",
-                    "آزمایش اتصال به‌موقع تمام نشد، پس این دیتابیس بررسی نشد. شاید هنوز دارد کلاینتش را دانلود می‌کند؛ چند دقیقه بعد دوباره بررسی کنید."));
+                    "آزمایش اتصال به‌موقع تمام نشد، پس این دیتابیس بررسی نشد. شاید هنوز دارد کلاینتش را دانلود می‌کند؛ چند دقیقه بعد دوباره بررسی کن."));
 
             checks.Add(attached.HasUnpublishedChanges ? WithUnpublishedChanges(check, svc, run) : check);
         }
@@ -371,7 +371,7 @@ public sealed class AppVerifier(
                 "It was still being set up when the checks stopped waiting for it.",
                 "وقتی بررسی‌ها دیگر منتظر نماندند، هنوز داشت آماده می‌شد.",
                 "Open its page to see how far it got.",
-                "صفحه‌اش را باز کنید تا ببینید تا کجا رسیده.",
+                "صفحه‌اش را باز کن تا ببین تا کجا رسیده.",
                 servicePath);
         }
 
@@ -383,7 +383,7 @@ public sealed class AppVerifier(
                 why.Length > 0 ? why : null,
                 why.Length > 0 ? why : null,
                 "Open its page and start it, or read why it failed.",
-                "صفحه‌اش را باز کنید و روشنش کنید، یا ببینید چرا شکست خورده.",
+                "صفحه‌اش را باز کن و روشنش کن، یا ببین چرا شکست خورده.",
                 servicePath);
         }
 
@@ -396,7 +396,7 @@ public sealed class AppVerifier(
                 "An app and its database have to share a server: private networks do not reach across servers, so the address this app was given cannot work.",
                 "اپ و دیتابیسش باید روی یک سرور باشند: شبکهٔ خصوصی از یک سرور به سرور دیگر نمی‌رسد، پس آدرسی که به این اپ داده شده کار نمی‌کند.",
                 "Create the database on this app's server, or move the app to the database's server.",
-                "دیتابیس را روی سرور همین اپ بسازید، یا اپ را به سرور دیتابیس ببرید.",
+                "دیتابیس را روی سرور همین اپ بساز، یا اپ را به سرور دیتابیس ببر.",
                 servicePath);
 
         // Not healed, unlike the same-environment case below: joining one environment's database to
@@ -409,7 +409,7 @@ public sealed class AppVerifier(
                 wiring.Reason,
                 "این دو در محیط‌های متفاوتی هستند و هر محیط شبکهٔ خصوصی جداگانه‌ای است؛ اپ نام میزبانی می‌گیرد که نمی‌تواند آن را پیدا کند.",
                 "Move the app or the database so they share one environment.",
-                "اپ یا دیتابیس را جابه‌جا کنید تا هر دو در یک محیط باشند.",
+                "اپ یا دیتابیس را جابه‌جا کن تا هر دو در یک محیط باشند.",
                 servicePath);
 
         if (ConnectionProbe.WhyUnsupported(svc.Type) is { } unsupported)
@@ -445,7 +445,7 @@ public sealed class AppVerifier(
                 english,
                 Clean(ConnectionProbe.InPersian(failure), run),
                 "Open its page and check that it is running. Its Test connection button repeats this test.",
-                "صفحه‌اش را باز کنید و ببینید روشن است یا نه. دکمهٔ آزمایش اتصال همان‌جا همین آزمایش را تکرار می‌کند.",
+                "صفحه‌اش را باز کن و ببین روشن است یا نه. دکمهٔ آزمایش اتصال همان‌جا همین آزمایش را تکرار می‌کند.",
                 servicePath);
         }
 
@@ -519,7 +519,7 @@ public sealed class AppVerifier(
             Detail = check.Detail is { Length: > 0 } d ? $"{stale} {d}" : stale,
             DetailFa = check.DetailFa is { Length: > 0 } f ? $"{staleFa} {f}" : staleFa,
             Fix = "Redeploy the app so it picks them up.",
-            FixFa = "اپ را دوباره مستقر کنید تا آن‌ها را بگیرد.",
+            FixFa = "اپ را دوباره مستقر کن تا آن‌ها را بگیرد.",
             LinkPath = run.DeploymentsPath
         };
     }
@@ -583,7 +583,7 @@ public sealed class AppVerifier(
                     $"{url} answered {status}.",
                     $"{url} با کد {status} جواب داد.",
                     "The address reaches the app and the app is failing. Read its log.",
-                    "آدرس به اپ می‌رسد و خود اپ خطا می‌دهد. لاگش را بخوانید.",
+                    "آدرس به اپ می‌رسد و خود اپ خطا می‌دهد. لاگش را بخوان.",
                     run.LogsPath);
             }
 
@@ -600,7 +600,7 @@ public sealed class AppVerifier(
                 "Its address does not answer from outside", "آدرسش از بیرون جواب نمی‌دهد",
                 detail, detail,
                 "Check that the domain's DNS points at this server and that port 80 is open: without both, no certificate can be issued and nothing reaches the app.",
-                "بررسی کنید DNS دامنه به همین سرور اشاره کند و پورت 80 باز باشد: بدون این دو، گواهی صادر نمی‌شود و چیزی به اپ نمی‌رسد.",
+                "بررسی کن DNS دامنه به همین سرور اشاره کند و پورت 80 باز باشد: بدون این دو، گواهی صادر نمی‌شود و چیزی به اپ نمی‌رسد.",
                 run.OverviewPath);
         });
     }

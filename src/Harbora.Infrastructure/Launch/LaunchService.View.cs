@@ -205,7 +205,7 @@ public sealed partial class LaunchService
         {
             var named = string.Join(", ", unset);
             unsetDetail = $"Not set: {named}. Set them on the app's page if it needs them.";
-            unsetDetailFa = $"تنظیم نشده: {named}. اگر اپ لازمشان دارد، در صفحهٔ اپ تنظیمشان کنید.";
+            unsetDetailFa = $"تنظیم نشده: {named}. اگر اپ لازمشان دارد، در صفحهٔ اپ تنظیمشان کن.";
         }
 
         LaunchStepView appStep;

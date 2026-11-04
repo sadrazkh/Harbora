@@ -422,7 +422,7 @@ public sealed partial class LaunchService
 
     private static readonly ServiceRefusal NoLongerConfirmable = new(
         "This launch can no longer be confirmed. Start again from the beginning.",
-        "این راه‌اندازی دیگر قابل تأیید نیست. از اول شروع کنید.");
+        "این راه‌اندازی دیگر قابل تأیید نیست. از اول شروع کن.");
 
     /// <summary>A second submit of a screen that has already been accepted: not a refusal, it simply has nothing left to do.</summary>
     private static bool AlreadyConfirmed(LaunchStatus status) => status is LaunchStatus.Creating
@@ -439,13 +439,13 @@ public sealed partial class LaunchService
         foreach (var variable in choices.EnvVars.Where(v => !EnvConfigFileEditor.IsValidKey(v.Key ?? "")))
             refusals.Add(new ServiceRefusal(
                 $"'{variable.Key}' cannot be a variable name: use letters, digits and underscores, and do not start with a digit.",
-                $"«{variable.Key}» نمی‌تواند نام متغیر باشد: از حرف، عدد و زیرخط استفاده کنید و با عدد شروع نکنید.",
+                $"«{variable.Key}» نمی‌تواند نام متغیر باشد: از حرف، عدد و زیرخط استفاده کن و با عدد شروع نکن.",
                 nameof(LaunchChoices.EnvVars)));
 
         // No tier at all is an install that has defined none, where there is nothing to choose. On any
         // other install a blank here would create an unlimited workload nobody asked for.
         if (string.IsNullOrWhiteSpace(choices.InstanceSizeKey) && await db.InstanceSizes.AsNoTracking().AnyAsync(s => s.IsEnabled, ct))
-            refusals.Add(new ServiceRefusal("Choose a size.", "یک اندازه انتخاب کنید.", nameof(LaunchChoices.InstanceSizeKey)));
+            refusals.Add(new ServiceRefusal("Choose a size.", "یک اندازه انتخاب کن.", nameof(LaunchChoices.InstanceSizeKey)));
 
         // A folder named only in this form was never chosen, and what is about to be created was worked
         // out from a different one: the wrong database, the wrong variables and the wrong port, with
@@ -456,13 +456,13 @@ public sealed partial class LaunchService
             if (stored.Chosen is null)
                 refusals.Add(new ServiceRefusal(
                     $"This holds several apps. Choose which folder to launch: {string.Join(", ", folders)}.",
-                    $"این کد چند اپ دارد. انتخاب کنید کدام پوشه راه بیفتد: {string.Join("، ", folders)}.",
+                    $"این کد چند اپ دارد. انتخاب کن کدام پوشه راه بیفتد: {string.Join("، ", folders)}.",
                     nameof(LaunchChoices.RootDirectory)));
             else if (!string.IsNullOrWhiteSpace(choices.RootDirectory)
                      && AppRootDirectory.Normalise(choices.RootDirectory) != AppRootDirectory.Normalise(inspection.RootDirectory))
                 refusals.Add(new ServiceRefusal(
                     $"This was worked out for the folder {stored.Chosen}. To launch another one, choose it from the list: {string.Join(", ", folders)}.",
-                    $"این پیشنهاد برای پوشهٔ {stored.Chosen} آماده شده است. برای راه انداختن پوشهٔ دیگر، آن را از فهرست انتخاب کنید: {string.Join("، ", folders)}.",
+                    $"این پیشنهاد برای پوشهٔ {stored.Chosen} آماده شده است. برای راه انداختن پوشهٔ دیگر، آن را از فهرست انتخاب کن: {string.Join("، ", folders)}.",
                     nameof(LaunchChoices.RootDirectory)));
         }
 
@@ -472,7 +472,7 @@ public sealed partial class LaunchService
         if (launch.SourceKind == LaunchSourceKind.Upload && inspection.Stack == DetectedStack.Compose)
             refusals.Add(new ServiceRefusal(
                 "A project that runs only from a Docker Compose file cannot be launched from an upload yet. Push it to a Git repository and launch that, or add a Dockerfile.",
-                "پروژه‌ای که فقط با فایل Docker Compose اجرا می‌شود فعلاً از راه آپلود راه نمی‌افتد. آن را در یک مخزن گیت بگذارید و از آنجا راه بیندازید، یا یک Dockerfile اضافه کنید."));
+                "پروژه‌ای که فقط با فایل Docker Compose اجرا می‌شود فعلاً از راه آپلود راه نمی‌افتد. آن را در یک مخزن گیت بگذار و از آنجا راه بینداز، یا یک Dockerfile اضافه کن."));
 
         if (server.Refusal is { } placement) refusals.Add(placement);
         var serverId = server.ServerId;

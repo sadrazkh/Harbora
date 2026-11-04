@@ -396,7 +396,7 @@ public sealed partial class LaunchService
         if (lost.Count > 0)
         {
             message += $" What you typed for {string.Join(", ", lost)} was not kept: after trying again, set it on the app's page.";
-            messageFa += $" آنچه برای {string.Join("، ", lost)} وارد کرده بودید نگه داشته نشد: بعد از تلاش دوباره، آن را در صفحهٔ اپ تنظیم کنید.";
+            messageFa += $" آنچه برای {string.Join("، ", lost)} وارد کرده بودی نگه داشته نشد: بعد از تلاش دوباره، آن را در صفحهٔ اپ تنظیم کن.";
         }
 
         await UpdateAsync(launchId, l =>

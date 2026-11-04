@@ -100,7 +100,7 @@ public static class LaunchAdvance
         LaunchStatus.Inspecting => launch.Now - launch.StatusChangedAt > InspectingGiveUpAfter
             ? new LaunchMove(LaunchMoveKind.FailInspection, LaunchStepKeys.Source,
                 "Reading the source did not finish. Nothing was created. Please try again.",
-                "خواندن کد تمام نشد. چیزی ساخته نشد. لطفاً دوباره امتحان کنید.")
+                "خواندن کد تمام نشد. چیزی ساخته نشد. دوباره امتحان کن.")
             : LaunchMove.Stay,
 
         LaunchStatus.AwaitingConfirmation => launch.Now - launch.StatusChangedAt > ConfirmationLifetime
@@ -110,7 +110,7 @@ public static class LaunchAdvance
         LaunchStatus.Creating => launch.Now - launch.StatusChangedAt > CreatingGiveUpAfter
             ? Fail(launch.Services.Count < launch.ExpectedServices ? LaunchStepKeys.Services : LaunchStepKeys.App,
                 "The panel stopped while this launch was being created. Try again: only what is missing will be created.",
-                "وقتی این راه‌اندازی در حال ساخته شدن بود پنل متوقف شد. دوباره امتحان کنید: فقط چیزهایی که هنوز نیستند ساخته می‌شوند.")
+                "وقتی این راه‌اندازی در حال ساخته شدن بود پنل متوقف شد. دوباره امتحان کن: فقط چیزهایی که هنوز نیستند ساخته می‌شوند.")
             : LaunchMove.Stay,
 
         LaunchStatus.WaitingForServices => DecideWaiting(launch),
@@ -131,7 +131,7 @@ public static class LaunchAdvance
         if (launch.Services.Count < launch.ExpectedServices)
             return Fail(LaunchStepKeys.Services,
                 "A database this launch created no longer exists. Create it again from the Databases page, attach it to the app, and redeploy.",
-                "دیتابیسی که این راه‌اندازی ساخته بود دیگر وجود ندارد. آن را از صفحهٔ دیتابیس‌ها دوباره بسازید، به اپ وصل کنید و دوباره مستقر کنید.");
+                "دیتابیسی که این راه‌اندازی ساخته بود دیگر وجود ندارد. آن را از صفحهٔ دیتابیس‌ها دوباره بساز، به اپ وصل کن و دوباره مستقر کن.");
 
         if (launch.Services.FirstOrDefault(s => s.Status == ServiceStatus.Failed) is { } failed)
         {
@@ -168,7 +168,7 @@ public static class LaunchAdvance
         if (launch.Deployment is null)
             return Fail(LaunchStepKeys.Deploy,
                 "The deployment this launch started no longer exists. Deploy again from the app's page.",
-                "استقراری که این راه‌اندازی شروع کرده بود دیگر وجود ندارد. از صفحهٔ اپ دوباره مستقر کنید.");
+                "استقراری که این راه‌اندازی شروع کرده بود دیگر وجود ندارد. از صفحهٔ اپ دوباره مستقر کن.");
 
         switch (launch.Deployment.Status)
         {
@@ -185,7 +185,7 @@ public static class LaunchAdvance
                 // again with. Saying so is what stops a person pressing a button that cannot help.
                 var (next, nextFa) = launch.Source == LaunchSourceKind.Upload
                     ? (" The uploaded code was used by that attempt: upload a new version from the app's page.",
-                        " کد آپلودشده در همان تلاش مصرف شد: نسخهٔ تازه را از صفحهٔ اپ آپلود کنید.")
+                        " کد آپلودشده در همان تلاش مصرف شد: نسخهٔ تازه را از صفحهٔ اپ آپلود کن.")
                     : ("", "");
                 return Fail(LaunchStepKeys.Deploy,
                     $"{happened.Item1}{detail}.{next}", $"{happened.Item2}{detailFa}.{nextFa}");
@@ -220,7 +220,7 @@ public static class LaunchAdvance
         if (launch.Now - (launch.VerifyStartedAt ?? launch.StatusChangedAt) > ChecksGiveUpAfter)
             return Fail(LaunchStepKeys.Verify,
                 "The app is deployed, but its checks could not be finished. Try again, or look at the app's page.",
-                "اپ مستقر شده، ولی بررسی‌هایش تمام نشد. دوباره امتحان کنید یا صفحهٔ اپ را ببینید.");
+                "اپ مستقر شده، ولی بررسی‌هایش تمام نشد. دوباره امتحان کن یا صفحهٔ اپ را ببین.");
 
         return launch.Now - launch.LastTouchedAt < ChecksEvery
             ? LaunchMove.Stay

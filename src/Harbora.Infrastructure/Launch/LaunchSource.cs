@@ -42,7 +42,7 @@ public static partial class LaunchSource
             || uri.Host.Length == 0)
             return Refused(
                 $"Only http and https repository URLs can be read. Try https://{text.TrimStart('/')}",
-                $"فقط آدرس‌های http و https خوانده می‌شوند. این را امتحان کنید: https://{text.TrimStart('/')}");
+                $"فقط آدرس‌های http و https خوانده می‌شوند. این را امتحان کن: https://{text.TrimStart('/')}");
 
         var token = TokenIn(uri.UserInfo);
         var clean = new UriBuilder(uri) { UserName = "", Password = "", Query = "", Fragment = "" }.Uri.AbsoluteUri;
@@ -63,7 +63,7 @@ public static partial class LaunchSource
 
     private static CloneUrlReading SshRefused(string https) => Refused(
         $"An SSH address cannot be read here; use the https form instead: {https}",
-        $"آدرس SSH اینجا خوانده نمی‌شود؛ شکل https آن را بدهید: {https}");
+        $"آدرس SSH اینجا خوانده نمی‌شود؛ شکل https آن را بده: {https}");
 
     private static CloneUrlReading Refused(string en, string fa) => new(null, null, new ServiceRefusal(en, fa, UrlField));
 
