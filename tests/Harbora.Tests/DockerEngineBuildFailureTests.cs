@@ -118,6 +118,107 @@ public class DockerEngineBuildFailureTests
         message.Should().NotContain("Step");
     }
 
+    [Fact]
+    public void What_the_failing_step_printed_comes_first_so_the_last_line_of_the_log_is_the_reason()
+    {
+        const string sentence = "The build finished without producing an index.html, so this is not a site.";
+        var shell = "found=\"\"; " + new string('x', 900);
+        var failure = new JSONMessage
+        {
+            Error = new JSONError { Message = $"The command '/bin/sh -c {shell}' returned a non-zero code: 1" }
+        };
+
+        var message = DockerEngine.BuildFailureMessage("harbora/site:build-1", $"Step 8/14 : RUN {shell}", failure, sentence);
+
+        message.Should().StartWith(sentence);
+        message.Should().Contain("returned a non-zero code: 1");
+        message.Should().Contain("Step 8/14");
+        message.Should().Contain("harbora/site:build-1");
+        message.Length.Should().BeLessThan(500, "the whole command twice would push the reason out of a clipped line");
+    }
+
+    [Fact]
+    public void A_step_that_printed_nothing_keeps_the_message_it_always_had()
+    {
+        var failure = new JSONMessage { Error = new JSONError { Message = "The command '/bin/sh -c false' returned a non-zero code: 1" } };
+
+        DockerEngine.BuildFailureMessage("harbora/app:build-1", "Step 2/3 : RUN false", failure)
+            .Should().Be("Build of harbora/app:build-1 failed at Step 2/3 : RUN false: The command returned a non-zero code: 1");
+    }
+
+    [Fact]
+    public void The_daemons_text_about_a_cache_it_could_not_restore_survives_the_wording()
+    {
+        // BuildCache keys on this text to decide whether to build again without the cache.
+        var failure = new JSONMessage { Error = new JSONError { Message = "failed to restore cached image from \"sha256:a\" to sha256:b" } };
+
+        Harbora.Infrastructure.Deployments.BuildCache.IsCacheRestoreFailure(
+            DockerEngine.BuildFailureMessage("harbora/app:build-1", "Step 2/3 : COPY . .", failure, "something it printed"))
+            .Should().BeTrue();
+    }
+
+    [Fact]
+    public void A_step_keeps_only_what_it_printed_itself()
+    {
+        var output = new BuildStepOutput();
+
+        output.Note("Step 5/14 : RUN npm install");
+        output.Note(" ---> Running in 1a2b3c");
+        output.Note("added 214 packages in 3s\n");
+        output.Note("Removing intermediate container 1a2b3c");
+        output.Note(" ---> 9f8e7d");
+        output.Said.Should().Be("added 214 packages in 3s");
+
+        output.Note("Step 6/14 : RUN npm run build");
+        output.Said.Should().BeNull("nothing the last step said is about this one");
+
+        output.Note(" ---> Running in 4d5e6f");
+        output.Note("\n> site@1.0.0 build\n> vite build\n\n");
+        output.Note("error during build:\n");
+        output.Note("Could not resolve entry module \"index.html\".\n");
+        output.Said.Should().Be("error during build: | Could not resolve entry module \"index.html\".");
+    }
+
+    [Fact]
+    public void What_a_step_wrote_to_stderr_comes_through_without_its_colour_codes()
+    {
+        // As the real daemon sent it: the classic builder wraps stderr, and the closing code can arrive
+        // on a line of its own.
+        var output = new BuildStepOutput();
+
+        output.Note("Step 5/11 : RUN npm run build");
+        output.Note("\u001b[91mproof: this build fails on purpose\n\u001b[0m");
+
+        output.Said.Should().Be("proof: this build fails on purpose");
+    }
+
+    [Fact]
+    public void Npms_advice_to_upgrade_does_not_push_the_reason_out()
+    {
+        var output = new BuildStepOutput();
+
+        output.Note("Step 4/11 : RUN npm install");
+        output.Note("npm error 404 Not Found - GET https://registry.npmjs.org/no-such-package\n");
+        output.Note("\u001b[91mnpm notice\nnpm notice New major version of npm available! 10.8.2 -> 12.2.1\n" +
+                    "npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.1\n" +
+                    "npm notice To update run: npm install -g npm@12.2.1\nnpm notice\n\u001b[0m");
+
+        output.Said.Should().Be("npm error 404 Not Found - GET https://registry.npmjs.org/no-such-package");
+    }
+
+    [Fact]
+    public void A_step_that_prints_a_lot_is_kept_short_from_its_last_lines()
+    {
+        var output = new BuildStepOutput();
+
+        output.Note("Step 6/14 : RUN npm run build");
+        for (var i = 1; i <= 20; i++) output.Note($"line {i}");
+        output.Note(new string('y', 2000));
+
+        output.Said.Should().StartWith("line 17 | line 18 | line 19 | line 20 | yyy");
+        output.Said!.Length.Should().BeLessThan(400);
+    }
+
     // ---- BuildParameters (round-two 1.1: build cache between deploys) ----
     //
     // What this engine actually asks Docker.DotNet for — the seam DeploymentPipeline's own

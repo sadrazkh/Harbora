@@ -74,6 +74,10 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
         const int TailLineChars = 300;
         var tail = new Queue<string>(TailLines);
 
+        // What the step that failed printed, which is the reason, and which the daemon's own error
+        // never has: all that says is that the command returned a non-zero code.
+        var stepOutput = new BuildStepOutput();
+
         // Reports inline, not through Progress<T>: that posts every message to the thread pool, so
         // when the build call returns the final messages — the ones carrying a failure, and the ones
         // the image check below quotes — may not have been handled yet. Both are read the moment the
@@ -93,6 +97,8 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
                 var kept = trimmed.Trim();
                 if (tail.Count == TailLines) tail.Dequeue();
                 tail.Enqueue(kept.Length <= TailLineChars ? kept : kept[..TailLineChars] + "…");
+
+                if (!DescribesBuildFailure(m)) stepOutput.Note(trimmed);
             }
             if (DescribesBuildFailure(m)) failure ??= m;
         });
@@ -120,7 +126,7 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
         }
 
         if (failure is not null)
-            throw new DockerBuildException(BuildFailureMessage(imageTag, lastStep, failure));
+            throw new DockerBuildException(BuildFailureMessage(imageTag, lastStep, failure, stepOutput.Said));
 
         // The backstop. Everything above only catches a failure the daemon put in a shape this code
         // knows to look for, and the daemon's shapes are not a closed set: Docker 29's cache-restore
@@ -225,14 +231,32 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
     /// The message a caller actually needs: which image, which Dockerfile step (when one was seen
     /// before the failure arrived), and the daemon's own words — not a downstream symptom like
     /// "No such image" from whatever tries to run what was never built.
+    ///
+    /// <para>
+    /// What the step itself printed goes first, because this becomes the last line of the deploy log
+    /// and the launch's own message, and the reason is the one thing a person came to read. Both of
+    /// the daemon's parts quote the whole command, which for the frontend image is a dozen lines of
+    /// shell, and the text is cut from the end when it is stored: left in front, they would push the
+    /// reason off the line altogether.
+    /// </para>
     /// </summary>
-    internal static string BuildFailureMessage(string imageTag, string? lastStep, JSONMessage failure)
+    internal static string BuildFailureMessage(string imageTag, string? lastStep, JSONMessage failure, string? stepSaid = null)
     {
-        var detail = failure.Error?.Message ?? "the daemon reported no detail";
-        return lastStep is null
+        var detail = NonZeroExit.Replace(failure.Error?.Message ?? "the daemon reported no detail", "The command returned a non-zero code");
+        var step = lastStep is { Length: > MaxStepChars } ? lastStep[..MaxStepChars] + "…" : lastStep;
+        var where = step is null
             ? $"Build of {imageTag} failed: {detail}"
-            : $"Build of {imageTag} failed at {lastStep}: {detail}";
+            : $"Build of {imageTag} failed at {step}: {detail}";
+
+        return string.IsNullOrWhiteSpace(stepSaid) ? where : $"{stepSaid} ({where})";
     }
+
+    private const int MaxStepChars = 160;
+
+    /// <summary>The classic builder's sentence, which repeats the whole command between its quotes.</summary>
+    private static readonly System.Text.RegularExpressions.Regex NonZeroExit = new(
+        @"^The command '.*' returned a non-zero code",
+        System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     public async Task PullImageAsync(
         string image, IProgress<string> log, CancellationToken ct, RegistryPullCredential? credential = null)
