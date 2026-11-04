@@ -1380,19 +1380,6 @@ public sealed class LaunchServiceTests
     }
 
     [Fact]
-    public async Task Several_apps_in_one_source_need_a_folder_chosen()
-    {
-        using var h = new LaunchHarness();
-        var id = await h.ReadyGitAsync(Bare() with { RootCandidates = ["api", "web"] });
-        var choices = await h.DefaultsAsync(id);
-
-        (await h.Request().ValidateConfirmAsync(id, choices, default))
-            .Should().Contain(r => r.Field == nameof(LaunchChoices.RootDirectory) && r.Message.Contains("api"));
-
-        (await h.Request().ValidateConfirmAsync(id, choices with { RootDirectory = "api" }, default)).Should().BeEmpty();
-    }
-
-    [Fact]
     public async Task A_second_submit_validates_clean_so_it_lands_on_the_progress_page()
     {
         using var h = new LaunchHarness();

@@ -66,6 +66,9 @@ public sealed partial class LaunchService(
     private const int MaxRefLength = 255;
     private const int MaxArchivePathLength = 1024;
 
+    /// <summary>How many levels of "a folder of folders of apps" are followed. A repository deeper than this is one nobody chooses from a list.</summary>
+    private const int MaxCandidateDepth = 4;
+
     private static readonly ServiceRefusal NotFound = new(
         "This launch does not exist.", "این راه‌اندازی وجود ندارد.");
 
@@ -220,11 +223,11 @@ public sealed partial class LaunchService(
                 root = work;
             }
 
-            var inspection = WithLaunchNotes(reader.Read(root), root, launch.GitRef, branch);
+            var stored = ReadTree(root, launch.GitRef, branch);
 
             await UpdateAsync(launchId, l =>
             {
-                l.InspectionJson = LaunchJson.Write(inspection);
+                l.InspectionJson = LaunchJson.Write(stored);
                 l.ResolvedBranch = branch is { Length: <= MaxRefLength } ? branch : null;
             }, ct);
             await LaunchMoves.TryMoveAsync(db, launchId, LaunchStatus.Inspecting, LaunchStatus.AwaitingConfirmation, clock.UtcNow, ct);
@@ -251,6 +254,44 @@ public sealed partial class LaunchService(
     }
 
     private string WorkDirFor(Guid launchId) => Path.Combine(runtime.Value.WorkDir, "_launch", launchId.ToString());
+
+    /// <summary>
+    /// The tree, and every folder in it a person might choose: this is the last moment any of them can
+    /// be read. A folder that turns out to hold several apps of its own is replaced by those apps, so
+    /// the list a person chooses from never leads to another list.
+    /// </summary>
+    private StoredInspection ReadTree(string root, string? asked, string? got)
+    {
+        var top = reader.Read(root);
+
+        var candidates = new Dictionary<string, SourceInspection>(StringComparer.Ordinal);
+        foreach (var candidate in top.RootCandidates)
+            ReadCandidate(root, candidate, candidates, depth: 1);
+
+        return new StoredInspection(
+            WithLaunchNotes(top with { RootCandidates = candidates.Keys.Order(StringComparer.Ordinal).ToList() }, root, asked, got),
+            candidates.ToDictionary(c => c.Key, c => WithLaunchNotes(c.Value, root, asked, got), StringComparer.Ordinal));
+    }
+
+    private void ReadCandidate(string root, string candidate, Dictionary<string, SourceInspection> into, int depth)
+    {
+        var found = reader.Read(Path.Combine(root, candidate));
+
+        if (found.RootCandidates.Count > 0 && depth < MaxCandidateDepth)
+        {
+            foreach (var inner in found.RootCandidates)
+                ReadCandidate(root, $"{candidate}/{inner}", into, depth + 1);
+            return;
+        }
+
+        // The inspector answered about this folder, so its answer is relative to this folder, and the
+        // pipeline will read it from the top of the tree.
+        into[candidate] = found with
+        {
+            RootDirectory = string.IsNullOrWhiteSpace(found.RootDirectory) ? candidate : $"{candidate}/{found.RootDirectory}",
+            RootCandidates = []
+        };
+    }
 
     /// <summary>
     /// What only this step can see, because the tree is gone afterwards. An <c>artisan</c> file is what

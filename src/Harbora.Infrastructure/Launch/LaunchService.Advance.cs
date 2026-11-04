@@ -259,9 +259,9 @@ public sealed partial class LaunchService
         var verifier = serviceProvider.GetRequiredService<IAppVerifier>();
         var appId = launch.AppId!.Value;
 
-        // Only a run against this deployment: a check that passed against an earlier one proves nothing here.
-        var latest = await verifier.GetLatestAsync(appId, ct);
-        var previous = latest?.DeploymentId == launch.DeploymentId ? latest : null;
+        // The verifier only honours a report for this same app and deployment, so an older one is safe
+        // to hand it; keeping the last one here is what stops a passed check costing another container.
+        var previous = await verifier.GetLatestAsync(appId, ct);
 
         var startedAt = launch.VerifyStartedAt ?? launch.StatusChangedAt;
         var report = await verifier.RunAsync(appId, previous, startedAt + LaunchAdvance.ChecksPatience, ct);

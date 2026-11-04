@@ -53,6 +53,8 @@ public sealed partial class LaunchService
         var settled = choices with
         {
             ServerId = server.ServerId,
+            // A form that does not post the folder still means the one that was chosen.
+            RootDirectory = string.IsNullOrWhiteSpace(choices.RootDirectory) ? inspection.RootDirectory : choices.RootDirectory,
             Services = choices.Services
                 .Select(s => s with { Aliases = s.Aliases ?? AliasesFor(inspection, s.Type) })
                 .ToList()

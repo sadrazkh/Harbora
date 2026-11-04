@@ -397,7 +397,13 @@ internal sealed class LaunchHarness : IDisposable
             if (FailWith is { } failure) throw new InvalidOperationException(failure);
 
             Directory.CreateDirectory(workingDir);
-            foreach (var file in Files) File.WriteAllText(Path.Combine(workingDir, file), "");
+            foreach (var file in Files)
+            {
+                var path = Path.Combine(workingDir, file);
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path, "");
+            }
+
             return Task.FromResult(new GitCheckout("abc1234", "test commit", "tester", workingDir, Branch));
         }
 
@@ -410,9 +416,23 @@ internal sealed class LaunchHarness : IDisposable
         public SourceInspection Inspection { get; set; } = SourceInspection.Nothing;
         public List<string> ReadFrom { get; } = [];
 
+        /// <summary>What a folder of the tree says when it is read by itself, by its path from the tree's top.</summary>
+        public Dictionary<string, SourceInspection> Folders { get; } = [];
+
+        /// <summary>Every folder named in <see cref="Folders"/> that was really on disk when it was read.</summary>
+        public List<string> FoundOnDisk { get; } = [];
+
         public SourceInspection Read(string root)
         {
             ReadFrom.Add(root);
+            var path = root.Replace('\\', '/');
+            foreach (var (folder, inspection) in Folders)
+            {
+                if (!path.EndsWith("/" + folder, StringComparison.Ordinal)) continue;
+                if (Directory.Exists(root)) FoundOnDisk.Add(folder);
+                return inspection;
+            }
+
             return Inspection;
         }
     }

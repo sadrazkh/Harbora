@@ -9,6 +9,7 @@ using Harbora.Infrastructure.Apps;
 using Harbora.Infrastructure.Billing;
 using Harbora.Infrastructure.Configuration;
 using Harbora.Infrastructure.Services;
+using Harbora.Shared;
 using Harbora.Shared.Inspection;
 using Microsoft.EntityFrameworkCore;
 
@@ -24,9 +25,45 @@ public sealed partial class LaunchService
     {
         var launch = await db.AppLaunches.AsNoTracking()
             .FirstOrDefaultAsync(l => l.Id == launchId && l.Status == LaunchStatus.AwaitingConfirmation, ct);
-        if (launch is null) return null;
+        return launch is null ? null : await BuildProposalAsync(launch, LaunchJson.ReadStored(launch.InspectionJson).Current, ct);
+    }
 
-        var inspection = LaunchJson.ReadInspection(launch.InspectionJson);
+    public async Task<ServiceOutcome<LaunchProposal>> ChooseRootAsync(Guid launchId, string candidate, CancellationToken ct)
+    {
+        var launch = await db.AppLaunches.AsNoTracking().FirstOrDefaultAsync(l => l.Id == launchId, ct);
+        if (launch is null) return ServiceOutcome<LaunchProposal>.Refused(NotFound);
+        if (launch.Status != LaunchStatus.AwaitingConfirmation)
+            return ServiceOutcome<LaunchProposal>.Refused(NoLongerConfirmable);
+
+        var stored = LaunchJson.ReadStored(launch.InspectionJson);
+        var wanted = AppRootDirectory.Normalise(candidate);
+        if (!stored.Candidates.ContainsKey(wanted))
+        {
+            var folders = stored.Root.RootCandidates;
+            return ServiceOutcome<LaunchProposal>.Refused(new ServiceRefusal(
+                $"'{wanted}' is not one of the folders found here: {string.Join(", ", folders)}.",
+                $"«{wanted}» جزو پوشه‌هایی که اینجا پیدا شد نیست: {string.Join("، ", folders)}.",
+                nameof(LaunchChoices.RootDirectory)));
+        }
+
+        var chosen = stored with { Chosen = wanted };
+        var written = LaunchJson.Write(chosen);
+
+        // Asked again on the row: a choice arriving just behind a confirm must not rewrite what it read.
+        var recorded = false;
+        await UpdateAsync(launchId, l =>
+        {
+            if (l.Status != LaunchStatus.AwaitingConfirmation) return;
+            l.InspectionJson = written;
+            recorded = true;
+        }, ct);
+        if (!recorded) return ServiceOutcome<LaunchProposal>.Refused(NoLongerConfirmable);
+
+        return ServiceOutcome<LaunchProposal>.Success(await BuildProposalAsync(launch, chosen.Current, ct));
+    }
+
+    private async Task<LaunchProposal> BuildProposalAsync(AppLaunch launch, SourceInspection inspection, CancellationToken ct)
+    {
         var name = launch.SourceKind == LaunchSourceKind.Git
             ? LaunchSource.NameFromCloneUrl(launch.CloneUrl ?? "")
             : LaunchSource.NameFromArchive(launch.ArchivePath ?? "");
@@ -75,7 +112,7 @@ public sealed partial class LaunchService
                 inspection.Services.FirstOrDefault(s => AttachEnvRoles.TypeFor(s.Kind) == entry.Type)))
             .ToList();
 
-        return new LaunchProposal(launchId, inspection, defaults, name, fields, options);
+        return new LaunchProposal(launch.Id, inspection, defaults, name, fields, options);
     }
 
     /// <summary>
@@ -288,7 +325,8 @@ public sealed partial class LaunchService
         AppLaunch launch, LaunchChoices choices, SettledServer server, CancellationToken ct)
     {
         var refusals = new List<ServiceRefusal>();
-        var inspection = LaunchJson.ReadInspection(launch.InspectionJson);
+        var stored = LaunchJson.ReadStored(launch.InspectionJson);
+        var inspection = stored.Current;
 
         foreach (var variable in choices.EnvVars.Where(v => !EnvConfigFileEditor.IsValidKey(v.Key ?? "")))
             refusals.Add(new ServiceRefusal(
@@ -301,11 +339,24 @@ public sealed partial class LaunchService
         if (string.IsNullOrWhiteSpace(choices.InstanceSizeKey) && await db.InstanceSizes.AsNoTracking().AnyAsync(s => s.IsEnabled, ct))
             refusals.Add(new ServiceRefusal("Choose a size.", "یک اندازه انتخاب کنید.", nameof(LaunchChoices.InstanceSizeKey)));
 
-        if (inspection.RootCandidates.Count > 0 && string.IsNullOrWhiteSpace(choices.RootDirectory))
-            refusals.Add(new ServiceRefusal(
-                $"This holds several apps. Choose which folder to launch: {string.Join(", ", inspection.RootCandidates)}.",
-                $"این کد چند اپ دارد. انتخاب کنید کدام پوشه راه بیفتد: {string.Join("، ", inspection.RootCandidates)}.",
-                nameof(LaunchChoices.RootDirectory)));
+        // A folder named only in this form was never chosen, and what is about to be created was worked
+        // out from a different one: the wrong database, the wrong variables and the wrong port, with
+        // nothing to say so. Any other folder has to come through ChooseRootAsync, which reads its answers.
+        if (stored.Root.RootCandidates.Count > 0)
+        {
+            var folders = stored.Root.RootCandidates;
+            if (stored.Chosen is null)
+                refusals.Add(new ServiceRefusal(
+                    $"This holds several apps. Choose which folder to launch: {string.Join(", ", folders)}.",
+                    $"این کد چند اپ دارد. انتخاب کنید کدام پوشه راه بیفتد: {string.Join("، ", folders)}.",
+                    nameof(LaunchChoices.RootDirectory)));
+            else if (!string.IsNullOrWhiteSpace(choices.RootDirectory)
+                     && AppRootDirectory.Normalise(choices.RootDirectory) != AppRootDirectory.Normalise(inspection.RootDirectory))
+                refusals.Add(new ServiceRefusal(
+                    $"This was worked out for the folder {stored.Chosen}. To launch another one, choose it from the list: {string.Join(", ", folders)}.",
+                    $"این پیشنهاد برای پوشهٔ {stored.Chosen} آماده شده است. برای راه انداختن پوشهٔ دیگر، آن را از فهرست انتخاب کنید: {string.Join("، ", folders)}.",
+                    nameof(LaunchChoices.RootDirectory)));
+        }
 
         // The app form's rule, said before anything exists: a Compose app reads its source from a
         // repository row, and an upload has none, so otherwise this arrives as a build that cannot find

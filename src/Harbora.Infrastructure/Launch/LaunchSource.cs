@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Harbora.Application.Abstractions;
+using Harbora.Domain.Launch;
 using Harbora.Shared.Inspection;
 
 namespace Harbora.Infrastructure.Launch;
@@ -107,6 +108,29 @@ public static partial class LaunchSource
 }
 
 /// <summary>
+/// What <see cref="AppLaunch.InspectionJson"/> holds. A repository with several apps in it needs each of
+/// them read while the tree exists, because the tree is deleted straight after and the person chooses
+/// later: a folder only read at that point could not be read at all, and the launch would go ahead with
+/// no database, no variables and the wrong port.
+/// </summary>
+/// <param name="Root">What the tree as a whole was found to be. Its <c>RootCandidates</c> are the keys of <paramref name="Candidates"/>.</param>
+/// <param name="Candidates">Each folder a person can choose, with its <c>RootDirectory</c> relative to the tree rather than to that folder.</param>
+/// <param name="Chosen">The folder chosen so far, a key of <paramref name="Candidates"/>.</param>
+public sealed record StoredInspection(
+    SourceInspection Root,
+    IReadOnlyDictionary<string, SourceInspection> Candidates,
+    string? Chosen = null)
+{
+    /// <summary>
+    /// The chosen folder's inspection, or the root's while nothing is chosen. The folders stay listed on
+    /// it so the person can change their mind, right up to the confirm.
+    /// </summary>
+    public SourceInspection Current => Chosen is { } chosen && Candidates.TryGetValue(chosen, out var candidate)
+        ? candidate with { RootCandidates = Root.RootCandidates }
+        : Root;
+}
+
+/// <summary>
 /// How a launch's JSON columns are written: enums as names, so a stored row still reads the same after
 /// an enum grows. Reads are tolerant, because a row that cannot be parsed must not take a page down.
 /// </summary>
@@ -120,8 +144,16 @@ public static class LaunchJson
 
     public static string Write<T>(T value) => JsonSerializer.Serialize(value, Options);
 
-    public static SourceInspection ReadInspection(string? json) =>
-        Read<SourceInspection>(json) ?? SourceInspection.Nothing;
+    public static StoredInspection ReadStored(string? json)
+    {
+        var stored = Read<StoredInspection>(json);
+        return stored?.Root is null
+            ? new StoredInspection(SourceInspection.Nothing, new Dictionary<string, SourceInspection>())
+            : stored with { Candidates = stored.Candidates ?? new Dictionary<string, SourceInspection>() };
+    }
+
+    /// <summary>What the launch is being judged from right now. See <see cref="StoredInspection.Current"/>.</summary>
+    public static SourceInspection ReadInspection(string? json) => ReadStored(json).Current;
 
     public static LaunchChoices? ReadChoices(string? json) => Read<LaunchChoices>(json);
 
