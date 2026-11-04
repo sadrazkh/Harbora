@@ -220,7 +220,7 @@ public sealed class AppProvisioningService(
         string slug;
         if (string.IsNullOrWhiteSpace(request.Slug))
         {
-            slug = await UniqueSlugAsync(Slugify(request.Name), ct);
+            slug = await UniqueSlugAsync(db, Slugify(request.Name), ct);
         }
         else
         {
@@ -518,9 +518,17 @@ public sealed class AppProvisioningService(
         return string.IsNullOrWhiteSpace(pool) ? null : pool;
     }
 
+    /// <summary>
+    /// Only what a Docker image tag, a container name and a DNS label can all hold. A folder or a zip
+    /// called فروشگاه used to come through whole and make an image tag Docker refuses, after the database
+    /// had been created and charged, and a retry repeated it. The person's own name stays the app's name;
+    /// this is only its address and its containers. With nothing left it is <c>app</c>, which the
+    /// uniqueness rule then suffixes. Only a new app comes through here: a stored slug never changes.
+    /// </summary>
     public static string Slugify(string value)
     {
-        var chars = (value ?? "").Trim().ToLowerInvariant().Select(c => char.IsLetterOrDigit(c) ? c : '-').ToArray();
+        var chars = (value ?? "").Trim().ToLowerInvariant()
+            .Select(c => char.IsAsciiLetterLower(c) || char.IsAsciiDigit(c) ? c : '-').ToArray();
         var slug = new string(chars).Trim('-');
         while (slug.Contains("--")) slug = slug.Replace("--", "-");
         if (slug.Length > 50) slug = slug[..50].Trim('-');
@@ -531,9 +539,10 @@ public sealed class AppProvisioningService(
     /// Platform-wide, not per-workspace: app slugs are unique across the whole platform, so the
     /// auto-derived candidate has to be checked against every workspace or two apps named "api" in
     /// different workspaces would both auto-derive to the same slug and the second insert would fail on
-    /// the unique index instead of quietly picking "api-2".
+    /// the unique index instead of quietly picking "api-2". Public and static so that a launch can say what
+    /// an app would get before there is one, through this rule and not a copy of it.
     /// </summary>
-    private async Task<string> UniqueSlugAsync(string baseSlug, CancellationToken ct)
+    public static async Task<string> UniqueSlugAsync(HarboraDbContext db, string baseSlug, CancellationToken ct)
     {
         var slug = baseSlug;
         for (var n = 2; await db.Apps.IgnoreQueryFilters().AnyAsync(a => a.Slug == slug, ct); n++)

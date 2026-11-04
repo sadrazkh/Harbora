@@ -130,6 +130,64 @@ public sealed class LaunchWithRealInspectorTests
         proposal.Defaults.Services.Should().ContainSingle().Which.Type.Should().Be(ManagedServiceType.PostgreSql);
     }
 
+    /// <summary>What Docker itself will take as a container name and a tag's repository, which a test here can only state.</summary>
+    private const string WhatDockerAccepts = "^[a-z0-9][a-z0-9_.-]*$";
+
+    [Fact]
+    public async Task A_zip_with_a_persian_name_gets_an_address_docker_can_build_and_keeps_its_name()
+    {
+        using var h = new LaunchHarness();
+        var id = await UploadAsync(h, "فروشگاه-0123456789abcdef0123456789abcdef.zip", new()
+        {
+            ["package.json"] = NodeWithPostgres,
+            ["server.js"] = ""
+        });
+
+        var proposal = await h.Request().ProposeAsync(id, default);
+        proposal!.AppName.Should().Be("فروشگاه");
+        proposal.SuggestedSlug.Should().Be("app");
+
+        (await h.Request().ConfirmAsync(id, proposal.Defaults, null, default)).Ok.Should().BeTrue();
+
+        var app = h.Store().Apps.IgnoreQueryFilters().Single();
+        app.Name.Should().Be("فروشگاه", "it is still what the person called it");
+        app.Slug.Should().Be("app");
+        var database = h.Store().ManagedServices.IgnoreQueryFilters().Single();
+        database.Name.Should().StartWith("فروشگاه");
+        database.ContainerName.Should().MatchRegex(WhatDockerAccepts);
+        database.VolumeName.Should().MatchRegex(WhatDockerAccepts);
+        database.DatabaseName.Should().MatchRegex("^[a-z0-9_]+$");
+    }
+
+    [Fact]
+    public async Task Launching_the_same_repository_twice_previews_the_address_it_would_really_get()
+    {
+        using var h = new LaunchHarness();
+        var first = await UploadAsync(h, "my-shop-0123456789abcdef0123456789abcdef.zip", new() { ["package.json"] = NodeWithPostgres });
+        (await h.Request().ProposeAsync(first, default))!.SuggestedSlug.Should().Be("my-shop");
+        await h.ConfirmAsync(first);
+        h.Store().Apps.IgnoreQueryFilters().Single().Slug.Should().Be("my-shop");
+
+        var second = await UploadAsync(h, "my-shop-fedcba9876543210fedcba9876543210.zip", new() { ["package.json"] = NodeWithPostgres });
+        var proposal = await h.Request().ProposeAsync(second, default);
+
+        proposal!.SuggestedSlug.Should().Be("my-shop-2");
+
+        await h.ConfirmAsync(second);
+        h.Store().Apps.IgnoreQueryFilters().Select(a => a.Slug).Should().Contain(proposal.SuggestedSlug!,
+            "a preview is only worth showing if it is what happens");
+    }
+
+    [Fact]
+    public async Task Looking_at_the_screen_reserves_nothing()
+    {
+        using var h = new LaunchHarness();
+        var id = await UploadAsync(h, "my-shop-0123456789abcdef0123456789abcdef.zip", new() { ["package.json"] = NodeWithPostgres });
+
+        (await h.Request().ProposeAsync(id, default))!.SuggestedSlug.Should().Be("my-shop");
+        (await h.Request().ProposeAsync(id, default))!.SuggestedSlug.Should().Be("my-shop");
+    }
+
     [Fact]
     public async Task A_python_bot_is_a_worker_and_asks_only_for_its_token()
     {

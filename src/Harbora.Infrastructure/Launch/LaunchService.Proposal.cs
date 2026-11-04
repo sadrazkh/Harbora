@@ -112,7 +112,11 @@ public sealed partial class LaunchService
                 inspection.Services.FirstOrDefault(s => AttachEnvRoles.TypeFor(s.Kind) == entry.Type)))
             .ToList();
 
-        return new LaunchProposal(launch.Id, inspection, defaults, name, fields, options);
+        // Across every workspace, and asked now rather than worked out on the page, or launching one
+        // repository twice previews the address of the app that is already there.
+        var slug = await AppProvisioningService.UniqueSlugAsync(db, AppProvisioningService.Slugify(name), ct);
+
+        return new LaunchProposal(launch.Id, inspection, defaults, name, fields, options, slug);
     }
 
     /// <summary>
