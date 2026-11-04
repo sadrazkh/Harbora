@@ -80,6 +80,67 @@ pipeline with no surprise network calls, which an extra request here would break
 
 ## 4. Deploy
 
+### Start here: `harbora launch`
+
+You wrote an app and want it running. This reads the code, says what it found and what it will cost,
+asks only what nobody else can answer, and then creates the app and its databases, connects them,
+deploys, and checks that it really works:
+
+```bash
+cd my-app
+harbora launch
+```
+
+It is the same flow as the panel's `/launch` page, through the same service, with no AI anywhere in it.
+Nothing is created and nothing is charged until you say yes.
+
+| Flag | Effect |
+|---|---|
+| `[PATH]` | The folder to upload. Default: the current one. The same excludes as `harbora deploy`: a real `.env` never leaves your machine |
+| `--git <URL>` | Read this repository instead of uploading a folder |
+| `--ref <BRANCH>` | With `--git`: a branch. Blank means its default branch |
+| `--git-token <TOKEN>` | With `--git`: for a private repository. Also read from `HARBORA_GIT_TOKEN` |
+| `--folder <FOLDER>` | Which app, when a repository holds several |
+| `--name <NAME>` | The app's name |
+| `--set KEY=VALUE` | Answer a question up front. Repeatable. A value is never printed |
+| `--no-service <TYPE>` | Do not create a service it proposed, such as `postgres`. Repeatable |
+| `-y`, `--yes` | Accept the proposal without asking |
+| `--no-follow` | Return as soon as it is confirmed, for CI that will look later |
+| `--server`, `--token`, `--account` | As `harbora deploy` |
+
+With no terminal and no `--yes` it stops and creates nothing, rather than wait for an answer nobody can
+give. A question nobody answered is a warning that names it, and the launch goes on: the variable is
+simply not set, and the app's page is where to set it later.
+
+Press Ctrl-C while it is following and it stops watching. The launch carries on, and it says where to
+look. To read the build log itself, `harbora logs <deploymentId>`: it prints the id once there is one.
+
+On success from a folder it writes `harbora.yml`, so `harbora deploy` works from then on. It never
+overwrites one that is already there.
+
+| Exit code | Meaning |
+|---|---|
+| `0` | It is running and every check that could run passed. Also `--no-follow` once it is confirmed. A check that could not run is printed as not checked, never as a pass |
+| `1` | It failed, or never started: the step and the message are printed, with what exists so far |
+| `2` | It is running, but a check failed. The failed checks come first, with what to do about each |
+
+Behind it is an API any client can use, under `/api/v1/launch`, with the same bearer token. Enums go by
+name in both directions, and a number is refused. A refusal is a `400` with
+`{ "errors": [{ "field", "message", "messageFa" }] }`. Another workspace's launch is a `404` on every
+route. `apps.create` is needed for everything marked below.
+
+| Route | | |
+|---|---|---|
+| `POST /launch` | `apps.create` | `{ cloneUrl, gitRef, gitToken }` → `{ id }` |
+| `POST /launch/archive?name=my-app` | `apps.create` | Raw gzipped tar in the body, up to 512 MB → `{ id }` |
+| `GET /launch/{id}` | | Where it has got to, with its steps and checks |
+| `GET /launch/{id}/proposal` | | What was found and what would be created. `409` with `{ error, status }` once it is past asking |
+| `POST /launch/{id}/root` | `apps.create` | `{ candidate }`: which folder of several. Answers its proposal |
+| `POST /launch/{id}/quote` | | The proposal's `defaults`, as changed → what confirming would cost |
+| `POST /launch/{id}/confirm` | `apps.create` | The same choices → the launch. A `200` can still be `Failed` part-way: read `status` |
+| `POST /launch/{id}/retry` | `apps.create` | Runs the failed step again |
+| `POST /launch/{id}/abandon` | `apps.create` | Gives up before anything was created |
+
 ### Preflight: `harbora doctor`
 
 `harbora deploy` runs this automatically, before uploading anything — so most people never type it

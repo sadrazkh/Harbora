@@ -122,6 +122,46 @@ public sealed class LaunchPanelFixture : IDisposable
         return client;
     }
 
+    /// <summary>A user in <paramref name="workspaceId"/> and the plaintext of a CLI token for them, issued the way the panel issues one.</summary>
+    public string GivenToken(Guid workspaceId, string email, SystemRole role = SystemRole.Owner)
+    {
+        using var scope = Panel.Services.CreateScope();
+        var user = new User
+        {
+            Email = email, DisplayName = email, PasswordHash = "not-signing-in", Role = role, IsActive = true,
+            EmailVerifiedAt = DateTimeOffset.UtcNow
+        };
+        var issued = scope.ServiceProvider.GetRequiredService<ITokenService>().Issue(user.Id, "test", TokenType.Cli, null);
+        Seed(db =>
+        {
+            db.Users.Add(user);
+            db.WorkspaceMembers.Add(new WorkspaceMember
+            {
+                WorkspaceId = workspaceId, UserId = user.Id,
+                Role = role switch
+                {
+                    SystemRole.Owner or SystemRole.Admin => WorkspaceRole.Admin,
+                    SystemRole.Viewer => WorkspaceRole.Viewer,
+                    _ => WorkspaceRole.Member
+                }
+            });
+            db.ApiTokens.Add(new ApiToken { UserId = user.Id, Name = "test", Prefix = issued.Prefix, TokenHash = issued.Hash, Type = TokenType.Cli });
+        });
+        return issued.PlaintextToken;
+    }
+
+    /// <summary>The CLI's shape of request: a bearer token and nothing else.</summary>
+    public HttpClient BearerClient(string token)
+    {
+        var client = Panel.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false, BaseAddress = new Uri("https://localhost"), HandleCookies = false
+        });
+        client.DefaultRequestHeaders.Add(HarboraWebFactory.RemoteIpHeader, $"203.0.113.{Interlocked.Increment(ref _nextAddress)}");
+        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        return client;
+    }
+
     public void Dispose()
     {
         Panel.Dispose();
@@ -160,6 +200,12 @@ public sealed class FakeLaunchService
         public required LaunchView View { get; set; }
         public LaunchProposal? Proposal { get; set; }
         public LaunchQuote? Quote { get; init; }
+
+        /// <summary>What the next reads find, one each: the tick, scripted.</summary>
+        public Queue<LaunchView> Next { get; } = new();
+
+        /// <summary>What joins <see cref="Next"/> the moment it is confirmed.</summary>
+        public List<LaunchView> AfterConfirm { get; } = [];
     }
 
     private readonly Dictionary<Guid, Entry> _launches = [];
@@ -172,6 +218,9 @@ public sealed class FakeLaunchService
     public List<(Guid Id, LaunchChoices Choices)> Confirmed { get; } = [];
     public List<Guid> Retried { get; } = [];
     public List<Guid> Abandoned { get; } = [];
+
+    /// <summary>How many times a launch has been looked at, by anything.</summary>
+    public int Reads { get; private set; }
 
     /// <summary>What <c>StartAsync</c> refuses with next, or null to succeed.</summary>
     public ServiceRefusal? StartRefusal { get; set; }
@@ -193,6 +242,7 @@ public sealed class FakeLaunchService
         {
             _launches.Clear();
             Started.Clear(); ChosenRoots.Clear(); Quoted.Clear(); Validated.Clear(); Confirmed.Clear(); Retried.Clear(); Abandoned.Clear();
+            Reads = 0;
             StartRefusal = null; StartThrows = false; NextStartId = Guid.CreateVersion7();
             ValidateRefusals = []; ConfirmRefusals = []; RetryRefusals = []; AbandonAllowed = true;
             StatusAfterRefusedConfirm = null;
@@ -204,9 +254,27 @@ public sealed class FakeLaunchService
         lock (_gate) _launches[view.Id] = new Entry { WorkspaceId = workspaceId, View = view, Proposal = proposal, Quote = quote };
     }
 
+    /// <summary>Scripts what this launch turns into, one state per read.</summary>
+    public void Then(Guid id, params LaunchView[] views)
+    {
+        lock (_gate) foreach (var view in views) _launches[id].Next.Enqueue(view);
+    }
+
+    /// <summary>Scripts what this launch turns into once it has been confirmed, one state per read.</summary>
+    public void ThenAfterConfirm(Guid id, params LaunchView[] views)
+    {
+        lock (_gate) _launches[id].AfterConfirm.AddRange(views);
+    }
+
     public LaunchView? Get(Guid id, Guid? workspaceId)
     {
-        lock (_gate) return _launches.TryGetValue(id, out var entry) && entry.WorkspaceId == workspaceId ? entry.View : null;
+        lock (_gate)
+        {
+            Reads++;
+            if (!_launches.TryGetValue(id, out var entry) || entry.WorkspaceId != workspaceId) return null;
+            if (entry.Next.TryDequeue(out var next)) entry.View = next;
+            return entry.View;
+        }
     }
 
     public Task<ServiceOutcome<Guid>> StartAsync(LaunchStartRequest request)
@@ -271,6 +339,7 @@ public sealed class FakeLaunchService
                 return ServiceOutcome<LaunchView>.Refused(ConfirmRefusals);
             }
             _launches[id].View = _launches[id].View with { Status = LaunchStatus.Creating };
+            foreach (var view in _launches[id].AfterConfirm) _launches[id].Next.Enqueue(view);
             return ServiceOutcome<LaunchView>.Success(_launches[id].View);
         }
     }

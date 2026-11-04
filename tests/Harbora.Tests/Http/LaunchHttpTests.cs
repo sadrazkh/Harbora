@@ -309,17 +309,20 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
         started.ArchivePath!.Should().StartWith(Path.Combine(_fixture.WorkDir, "_uploads"));
         (await File.ReadAllBytesAsync(started.ArchivePath!)).Should().Equal(bytes);
 
-        // The path is all the launch has to name the app from, so the person's name has to survive in it.
-        LaunchSource.LabelForArchive(started.ArchivePath!).Should().Be("my-shop.zip");
+        // The path is all the launch has to name the app from, so the person's name has to survive in it,
+        // and one flat file leaves nothing behind once the pipeline has consumed it.
+        Path.GetFileName(started.ArchivePath).Should().MatchRegex(@"^my-shop-[0-9a-f]{32}\.zip$");
+        LaunchSource.NameFromArchive(started.ArchivePath!).Should().Be("my-shop");
+        Path.GetDirectoryName(started.ArchivePath).Should().Be(Path.Combine(_fixture.WorkDir, "_uploads"));
     }
 
     [Theory]
-    [InlineData("..\\..\\evil.zip", "evil.zip")]
-    [InlineData("../../evil.tar.gz", "evil.tar.gz")]
-    [InlineData("what is this?.tgz", "what-is-this.tgz")]
-    [InlineData(".zip", "source.zip")]
-    [InlineData("no-extension", "no-extension.zip")]
-    public async Task What_a_browser_says_a_file_is_called_cannot_write_outside_the_upload_directory(string claimed, string stored)
+    [InlineData("..\\..\\evil.zip", "evil", ".zip")]
+    [InlineData("../../evil.tar.gz", "evil", ".tar.gz")]
+    [InlineData("what is this?.tgz", "what-is-this", ".tgz")]
+    [InlineData(".zip", "source", ".zip")]
+    [InlineData("no-extension", "no-extension", ".zip")]
+    public async Task What_a_browser_says_a_file_is_called_cannot_write_outside_the_upload_directory(string claimed, string stem, string extension)
     {
         var client = await Owner();
         var token = await client.AntiforgeryTokenFrom("/launch");
@@ -327,7 +330,7 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
         await client.PostAsync("/launch", Upload(token, Zip(), claimed));
 
         var started = Launches.Started.Should().ContainSingle().Subject;
-        LaunchSource.LabelForArchive(started.ArchivePath!).Should().Be(stored);
+        Path.GetFileName(started.ArchivePath).Should().MatchRegex($"^{Regex.Escape(stem)}-[0-9a-f]{{32}}{Regex.Escape(extension)}$");
         Path.GetFullPath(started.ArchivePath!).Should().StartWith(Path.GetFullPath(Path.Combine(_fixture.WorkDir, "_uploads")));
     }
 
@@ -1534,7 +1537,17 @@ public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
     }
 
     [Fact]
-    public async Task The_sidebar_does_not_offer_it_to_somebody_who_may_not()
+    public async Task The_new_resource_menu_offers_it_first_to_somebody_who_may()
+    {
+        var html = await PageAsync(await Owner(), "/settings");
+
+        var launch = html.IndexOf("<a href=\"/launch\"><span class=\"menu-icon", StringComparison.Ordinal);
+        launch.Should().BeGreaterThan(-1);
+        launch.Should().BeLessThan(html.IndexOf("<a href=\"/apps/create\"><span class=\"menu-icon", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task The_sidebar_and_the_new_resource_menu_do_not_offer_it_to_somebody_who_may_not()
     {
         var html = await PageAsync(await Viewer(), "/settings");
 

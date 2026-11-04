@@ -1,8 +1,21 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 
 namespace Harbora.Cli;
+
+/// <summary>
+/// The panel answered, and the answer was no. Separate from a transport failure, which is the same
+/// base type, because the two mean different things to somebody reading the outcome: this one the
+/// panel has written a reason for, and the other one might work if it is simply tried again.
+/// </summary>
+public sealed class ApiRefusedException(HttpStatusCode status, string body, string message)
+    : HttpRequestException(message, null, status)
+{
+    /// <summary>The response body, unparsed: its shape belongs to the endpoint that wrote it.</summary>
+    public string Body { get; } = body;
+}
 
 /// <summary>Thin typed wrapper over the Harbora HTTP API used by every command.</summary>
 public sealed class ApiClient
@@ -48,7 +61,7 @@ public sealed class ApiClient
     /// Streams a file as the raw request body. Used to push a packed project without loading it into
     /// memory — a source tree can be tens of megabytes.
     /// </summary>
-    public async Task<JsonElement> PostFileAsync(string path, string filePath)
+    public async Task<JsonElement> PostFileAsync(string path, string filePath, CancellationToken ct = default)
     {
         await using var file = File.OpenRead(filePath);
         using var content = new StreamContent(file);
@@ -65,7 +78,7 @@ public sealed class ApiClient
         HttpResponseMessage res;
         try
         {
-            res = await _http.SendAsync(request, HttpCompletionOption.ResponseContentRead);
+            res = await _http.SendAsync(request, HttpCompletionOption.ResponseContentRead, ct);
         }
         catch (HttpRequestException ex)
         {
@@ -84,7 +97,7 @@ public sealed class ApiClient
     {
         var text = await res.Content.ReadAsStringAsync();
         if (!res.IsSuccessStatusCode)
-            throw new HttpRequestException($"{(int)res.StatusCode} {res.ReasonPhrase}: {text}");
+            throw new ApiRefusedException(res.StatusCode, text, $"{(int)res.StatusCode} {res.ReasonPhrase}: {text}");
         return string.IsNullOrWhiteSpace(text)
             ? default
             : JsonSerializer.Deserialize<JsonElement>(text);
