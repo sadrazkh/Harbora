@@ -77,7 +77,8 @@ public enum EnvAliasRole
 
 /// <param name="File">The file it was read from, relative to the chosen root: <see cref="SourceInspection.RootDirectory"/> when there is one, otherwise the inspected root.</param>
 /// <param name="Reason">What was found there — <c>"pg" in dependencies</c> — shown beside the proposal so a guess can be checked.</param>
-public sealed record ServiceEvidence(string File, string Reason);
+/// <param name="ReasonFa">The same in Persian. Null falls back to <paramref name="Reason"/>, which a stored inspection from before this field has.</param>
+public sealed record ServiceEvidence(string File, string Reason, string? ReasonFa = null);
 
 /// <param name="Certain">
 /// False when the only evidence is weak (a name in an example file, say). The confirm screen leaves
