@@ -548,7 +548,7 @@ public class GeneratedDockerfileTests : IDisposable
     [Theory]
     [InlineData("Shop.csproj", "<Project />", "RUN dotnet publish")]
     [InlineData("go.mod", "module x", "COPY go.* ./")]
-    [InlineData("composer.json", "{}", "composer install")]
+    [InlineData("composer.json", "{}", "RUN curl -fsS https://getcomposer.org/installer")]
     public async Task On_each_other_image_a_marked_variable_is_declared_and_passed(string marker, string content, string next)
     {
         using var h = GitApp((marker, content));
