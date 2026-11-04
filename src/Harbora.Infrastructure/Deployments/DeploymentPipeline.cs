@@ -50,6 +50,9 @@ public sealed class DeploymentPipeline(
     // AppOperationsService): a fixture that has never heard of log retention should not have to learn
     // about it just to keep constructing this.
     ILogIngestionEngine? logIngestion,
+    // Only to say truthfully why a wait for a database is not getting anywhere; see
+    // WaitForServicesBesideItAsync.
+    IOptions<Jobs.JobQueueOptions> jobQueue,
     ILogger<DeploymentPipeline> logger)
 {
     private readonly HarboraRuntimeOptions _opt = options.Value;
@@ -393,6 +396,11 @@ public sealed class DeploymentPipeline(
                 await FlushLog();
                 return;
             }
+
+            // Here rather than at the container itself, because the first thing that needs the database
+            // can be the release task below, or a Compose stack, and a migration run against a database
+            // that is still starting fails the deployment for nothing.
+            await WaitForServicesBesideItAsync(app, Log, ct);
 
             // Zero-downtime cutover (ADR-007): every replica gets a versioned name and starts
             // ALONGSIDE whatever is currently serving. We only retire the old container(s) AFTER
@@ -1922,6 +1930,87 @@ public sealed class DeploymentPipeline(
             return await FailedAsync(docker, lateCrash, current, ct);
 
         return await FailedAsync(docker, HealthFailure.NoHealthyResponse, current, ct, url);
+    }
+
+    /// <summary>
+    /// Holds this deployment back while a database in the app's environment is still being set up. The
+    /// queue is first-in-first-out, which only ever promised that a provision STARTS before the
+    /// deployment queued after it. Once the queue became concurrent that stopped meaning it had
+    /// finished, and an app started beside a database that was not there yet dies on its first query.
+    ///
+    /// <para>
+    /// Nothing provisioning is no wait and no line, which is every ordinary deployment. And this never
+    /// fails anything: a database that ends Failed, or the bound running out, is a line in the log and
+    /// the deployment carrying on, because the app might not need that database, and refusing here would
+    /// be a new way for a deployment to fail that it did not have before.
+    /// </para>
+    /// </summary>
+    private async Task WaitForServicesBesideItAsync(App app, Func<LogStream, string, Task> log, CancellationToken ct)
+    {
+        // Sessionless, so pinned by hand. AsNoTracking because this is watching a row another job is
+        // writing: a tracked read would keep handing back what this context first saw.
+        IQueryable<Domain.Services.ManagedService> Beside() => db.ManagedServices.IgnoreQueryFilters().AsNoTracking()
+            .Where(s => s.WorkspaceId == app.WorkspaceId && s.EnvironmentId == app.EnvironmentId);
+
+        var awaited = await Beside()
+            .Where(s => s.Status == ServiceStatus.Provisioning)
+            .Select(s => new { s.Id, s.Name })
+            .ToListAsync(ct);
+        if (awaited.Count == 0) return;
+
+        var ids = awaited.Select(s => s.Id).ToList();
+        var minutes = _opt.ServiceWait.TotalMinutes.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
+
+        await log(LogStream.System,
+            $"Waiting for {Names(awaited.Select(s => s.Name))} to finish being set up before starting this app, " +
+            $"for up to {minutes} minutes.{await NoFreeWorkerNoteAsync(ids, ct)}");
+
+        var giveUpAt = clock.UtcNow + _opt.ServiceWait;
+        do
+        {
+            await Task.Delay(_opt.ServiceWaitPollInterval, ct);
+        }
+        while (clock.UtcNow < giveUpAt
+               && await Beside().AnyAsync(s => ids.Contains(s.Id) && s.Status == ServiceStatus.Provisioning, ct));
+
+        var settled = await Beside().Where(s => ids.Contains(s.Id)).Select(s => new { s.Id, s.Name, s.Status }).ToListAsync(ct);
+
+        var said = new List<string>();
+        if (settled.Where(s => s.Status == ServiceStatus.Running).Select(s => s.Name).ToList() is { Count: > 0 } ready)
+            said.Add($"{Names(ready)} ready.");
+        if (settled.Where(s => s.Status is ServiceStatus.Failed or ServiceStatus.Stopped).ToList() is { Count: > 0 } ended)
+            said.Add($"⚠ {string.Join(", ", ended.Select(s => $"'{s.Name}' ended {s.Status}"))}; starting this app anyway, because it might not need it.");
+        if (settled.Where(s => s.Status == ServiceStatus.Provisioning).Select(s => s.Id).ToList() is { Count: > 0 } unfinished)
+            said.Add($"⚠ {Names(settled.Where(s => unfinished.Contains(s.Id)).Select(s => s.Name))} still being set up after {minutes} minutes; " +
+                     $"starting this app anyway.{await NoFreeWorkerNoteAsync(unfinished, ct)}");
+        if (awaited.Where(s => settled.All(found => found.Id != s.Id)).Select(s => s.Name).ToList() is { Count: > 0 } gone)
+            said.Add($"{Names(gone)} no longer there.");
+
+        await log(LogStream.System, string.Join(" ", said));
+
+        static string Names(IEnumerable<string> names) => string.Join(", ", names.Select(n => $"'{n}'"));
+    }
+
+    /// <summary>
+    /// What to add when a provision is queued and has nothing to run it. Worth saying because this
+    /// deployment is one of the jobs in the way, and with <c>Jobs:MaxConcurrency</c> at 1 it is the only
+    /// one: otherwise ten minutes of waiting reads as a database taking ten minutes. Counted from the job
+    /// table, which is the only place a slot can be seen from outside the worker, and asked only when
+    /// something is already being waited for.
+    /// </summary>
+    private async Task<string> NoFreeWorkerNoteAsync(IReadOnlyCollection<Guid> serviceIds, CancellationToken ct)
+    {
+        var jobs = db.Jobs.IgnoreQueryFilters().AsNoTracking();
+
+        var queued = await jobs.AnyAsync(j => j.Kind == Domain.Jobs.JobKind.ServiceProvision
+                                              && serviceIds.Contains(j.TargetId)
+                                              && j.Status == Domain.Jobs.JobStatus.Pending, ct);
+        if (!queued) return "";
+
+        var running = await jobs.CountAsync(j => j.Status == Domain.Jobs.JobStatus.Running, ct);
+        return running >= jobQueue.Value.EffectiveMaxConcurrency
+            ? " Its setup job is still queued and no worker is free, because this deployment and others hold them all, so it may not start until one of them finishes."
+            : "";
     }
 
     /// <summary>

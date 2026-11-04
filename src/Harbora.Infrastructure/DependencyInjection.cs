@@ -575,6 +575,8 @@ public static class DependencyInjection
         // Round eight: "does this app really work", the question a green deployment does not answer.
         // Scoped, because it shares the request's or the launch tick's database context.
         services.AddScoped<Verification.IAppVerifier, Verification.AppVerifier>();
+        services.AddHttpClient(Verification.AppVerifier.DirectClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
 
         // N5 (2026-08-16 notification-system spec, "noise control"): per-user preferences, the digest
         // job and the weekly report. The service reads/writes NotificationPreference directly; the

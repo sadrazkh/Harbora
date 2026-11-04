@@ -294,8 +294,9 @@ public sealed class TemplateDeploymentService(
         await creationBilling.SaveAsync(request.WorkspaceId, createdResources, ct);
         await quotaReservation.CommitAsync(ct);
 
-        // The durable queue is FIFO. Dependencies are therefore provisioned before the application
-        // that consumes them is built and health-checked.
+        // The durable queue is FIFO, so dependencies start being provisioned before the application
+        // that consumes them is built. That is all it promises now the queue is concurrent: the
+        // pipeline is what waits for them to finish (WaitForServicesBesideItAsync).
         foreach (var service in createdServices) await managedServices.QueueProvisionAsync(service.Id, ct);
 
         Guid? deploymentId = null;
