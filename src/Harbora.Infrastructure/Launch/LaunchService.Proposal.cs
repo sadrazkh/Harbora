@@ -71,19 +71,25 @@ public sealed partial class LaunchService
         var place = await PlacementAsync(launch.WorkspaceId, ct);
 
         // Only what is certain is ticked: creating a database costs money, and a guess is not consent.
-        var services = inspection.Services.Where(s => s.Certain)
+        var ticked = inspection.Services.Where(s => s.Certain)
             .Select(s => AttachEnvRoles.TypeFor(s.Kind))
             .Distinct()
-            .Select(type => new LaunchServiceChoice(type, Aliases: AliasesFor(inspection, type)))
+            .ToList();
+        var services = ticked
+            .Select(type => new LaunchServiceChoice(type, Aliases: AliasesFor(inspection, type, ticked)))
             .ToList();
         var aliased = services.SelectMany(s => s.Aliases ?? []).Select(a => a.Name).ToHashSet(StringComparer.Ordinal);
 
+        // Every name, including the ones an attachment sets: somebody who unticks Postgres because their
+        // database is elsewhere has to have somewhere to put its address. The screen sorts by disposition.
         var fields = inspection.EnvVars
-            .Where(v => v.Disposition != EnvVarDisposition.ProvidedByAttach)
             .Select(v => new LaunchEnvField(
                 v.Name, v.Disposition,
                 v.Disposition == EnvVarDisposition.KeepExample ? v.ExampleValue : null,
-                IsSecretByDefault(v), v.SourceFile))
+                IsSecretByDefault(v), v.SourceFile,
+                v.Disposition is EnvVarDisposition.ProvidedByAttach or EnvVarDisposition.AliasOfAttach && v.Service is { } kind
+                    ? AttachEnvRoles.TypeFor(kind)
+                    : null))
             .ToList();
 
         var defaults = new LaunchChoices
@@ -97,8 +103,10 @@ public sealed partial class LaunchService
             EnvironmentId = place.Environment?.Id,
             InstanceSizeKey = await DefaultSizeKeyAsync(launch.WorkspaceId, ct),
             Services = services,
-            // An alias of a database that is ticked has nothing to ask: the attachment answers it.
-            EnvVars = fields.Where(f => !aliased.Contains(f.Key))
+            // An alias of a database that is ticked has nothing to ask: the attachment answers it. An
+            // attach name is a question only once its engine is unticked, and then only with a value in
+            // it, which is the person's to give: a blank one here would be named as "not set".
+            EnvVars = fields.Where(f => f.Disposition != EnvVarDisposition.ProvidedByAttach && !aliased.Contains(f.Key))
                 .Select(f => new LaunchEnvChoice(f.Key, f.SuggestedValue, f.IsSecret))
                 .ToList()
         };
@@ -123,30 +131,73 @@ public sealed partial class LaunchService
     /// A variable only a person can answer is usually a third party's credential, so the safer wrong
     /// guess is to mask it; a name that plainly is one is masked and anything else is left readable.
     /// A generated one is always secret, and the example file's own value never makes anything secret.
+    /// The address of somebody's own database has its password in it, whatever it is called.
     /// </summary>
     private static bool IsSecretByDefault(DetectedEnvVar variable) => variable.Disposition switch
     {
         EnvVarDisposition.GeneratedSecret => true,
-        EnvVarDisposition.NeedsAnswer or EnvVarDisposition.AliasOfAttach =>
-            SecretNameParts.Any(part => variable.Name.Contains(part, StringComparison.OrdinalIgnoreCase)),
+        EnvVarDisposition.NeedsAnswer or EnvVarDisposition.AliasOfAttach or EnvVarDisposition.ProvidedByAttach =>
+            HoldsAConnectionAddress(variable)
+            || SecretNameParts.Any(part => variable.Name.Contains(part, StringComparison.OrdinalIgnoreCase)),
         _ => false
     };
 
     private static readonly string[] SecretNameParts = ["KEY", "TOKEN", "SECRET", "PASSWORD", "PASS", "CREDENTIAL"];
 
+    private static bool HoldsAConnectionAddress(DetectedEnvVar variable) =>
+        variable.Role == EnvAliasRole.Url
+        || (variable.Disposition == EnvVarDisposition.ProvidedByAttach
+            && (variable.Name.EndsWith("_URL", StringComparison.Ordinal)
+                || variable.Name.EndsWith("_URI", StringComparison.Ordinal)
+                || variable.Name.EndsWith("_DSN", StringComparison.Ordinal)
+                || variable.Name.StartsWith("ConnectionStrings__", StringComparison.Ordinal)));
+
     /// <summary>
     /// Every spelling in the example env file of something this engine's attachment provides, turned
     /// into the attach variable it reads from. A role this engine has no value for stays an ordinary
     /// question on the screen rather than an alias of nothing.
+    ///
+    /// <para>
+    /// A name like <c>DB_HOST</c> belongs to whichever database the app has, so when exactly one is
+    /// ticked it is that one's, whatever the inspector could or could not guess: a plain PDO app has no
+    /// library to detect, and the note on its screen tells the person to tick one. With two ticked it
+    /// stays a question, because nothing says which.
+    /// </para>
     /// </summary>
-    private static IReadOnlyList<AttachEnvAlias> AliasesFor(SourceInspection inspection, ManagedServiceType type) =>
-        inspection.EnvVars
-            .Where(v => v.Disposition == EnvVarDisposition.AliasOfAttach
-                        && v.Service is { } service && AttachEnvRoles.TypeFor(service) == type
-                        && v.Role is not null)
+    private static IReadOnlyList<AttachEnvAlias> AliasesFor(
+        SourceInspection inspection, ManagedServiceType type, IReadOnlyCollection<ManagedServiceType> ticked)
+    {
+        var theOneDatabase = ticked.Where(IsDatabase).Distinct().Count() == 1 && IsDatabase(type);
+
+        return inspection.EnvVars
+            .Where(v => v.Role is not null && (
+                (v.Disposition == EnvVarDisposition.AliasOfAttach
+                 && v.Service is { } service && AttachEnvRoles.TypeFor(service) == type)
+                || (theOneDatabase && AttachEnvNames.IsGenericDatabaseName(v.Name))))
             .Select(v => AttachEnvRoles.SourceKeyFor(type, v.Role!.Value) is { } source ? new AttachEnvAlias(v.Name, source) : null)
             .OfType<AttachEnvAlias>()
             .ToList();
+    }
+
+    /// <summary>The engines a generic <c>DB_</c> name can mean; a cache or a broker beside one does not make it unclear.</summary>
+    private static bool IsDatabase(ManagedServiceType type) => type is ManagedServiceType.PostgreSql
+        or ManagedServiceType.MySql or ManagedServiceType.MariaDb or ManagedServiceType.MongoDb;
+
+    /// <summary>
+    /// What a service is really attached with. One ticked by hand arrives with none, and gets what the
+    /// example file says it is read under. One from the screen's defaults keeps its own, and those were
+    /// worked out with everything certain ticked: unticking one of two databases leaves the other as the
+    /// only one a <c>DB_HOST</c> can mean. What a person types for such a name is the app's own variable,
+    /// which outranks anything an attachment sets, so this never overrides an answer.
+    /// </summary>
+    private static IReadOnlyList<AttachEnvAlias> SettledAliases(
+        LaunchServiceChoice service, SourceInspection inspection, IReadOnlyCollection<ManagedServiceType> ticked)
+    {
+        var worked = AliasesFor(inspection, service.Type, ticked);
+        return service.Aliases is not { } given
+            ? worked
+            : given.Concat(worked.Where(a => AttachEnvNames.IsGenericDatabaseName(a.Name))).DistinctBy(a => a.Name).ToList();
+    }
 
     /// <summary>
     /// The size the chooser would open on. <c>SizePickerService</c> is what really answers this for a

@@ -66,8 +66,10 @@ internal static class EnvVarClassifier
                 if (TheOneDatabase(services) is { } database)
                     return Var(EnvVarDisposition.AliasOfAttach, database, role);
 
+                // Which engine is the person's to say. Which part of a connection this is is already
+                // known, so ticking one is enough to answer it.
                 unclear = true;
-                return Var(EnvVarDisposition.NeedsAnswer);
+                return Var(EnvVarDisposition.NeedsAnswer, role: role);
             }
 
             // DATABASE_URL with no scheme to go on is the same question as DB_HOST. With one that is

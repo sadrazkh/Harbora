@@ -64,7 +64,9 @@ public sealed partial class LaunchService
                 checks = (await verifier.GetLatestAsync(app.Id, ct))?.Checks ?? [];
         }
 
-        var unset = app is not null && choices is not null ? await UnsetVariablesAsync(app.Id, choices, ct) : [];
+        var unset = app is not null && choices is not null
+            ? await UnsetVariablesAsync(app.Id, choices, LaunchJson.ReadInspection(launch.InspectionJson), ct)
+            : [];
 
         var now = clock.UtcNow;
         return new LaunchView(
@@ -87,16 +89,26 @@ public sealed partial class LaunchService
     /// <summary>
     /// What this launch was told about and the app does not have: an answer left blank, or one a retry
     /// could not recall. Said on the timeline, because an app with a missing key often starts anyway.
-    /// An alias is not one of these: its attachment answers it.
+    /// An alias is not one of these, and nor is a name a ticked engine's attachment sets: those are
+    /// answered. Whereas a name the example file expects from an attachment, with that engine unticked
+    /// and no value given, is answered by nothing, and is said even though it was never asked.
     /// </summary>
-    private async Task<IReadOnlyList<string>> UnsetVariablesAsync(Guid appId, LaunchChoices choices, CancellationToken ct)
+    private async Task<IReadOnlyList<string>> UnsetVariablesAsync(
+        Guid appId, LaunchChoices choices, SourceInspection inspection, CancellationToken ct)
     {
         var set = await db.EnvironmentVariables.IgnoreQueryFilters().AsNoTracking()
             .Where(v => v.AppId == appId).Select(v => v.Key).ToListAsync(ct);
         var aliased = choices.Services.SelectMany(s => s.Aliases ?? []).Select(a => a.Name).ToHashSet(StringComparer.Ordinal);
 
+        var ticked = choices.Services.Select(s => s.Type).ToHashSet();
+        var attached = AttachEnvNames.All
+            .Where(names => ticked.Contains(AttachEnvRoles.TypeFor(names.Key)))
+            .SelectMany(names => names.Value)
+            .ToHashSet(StringComparer.Ordinal);
+
         return choices.EnvVars.Select(v => v.Key)
-            .Where(key => !set.Contains(key) && !aliased.Contains(key))
+            .Concat(inspection.EnvVars.Where(v => v.Disposition == EnvVarDisposition.ProvidedByAttach).Select(v => v.Name))
+            .Where(key => !set.Contains(key) && !aliased.Contains(key) && !attached.Contains(key))
             .Distinct()
             .ToList();
     }

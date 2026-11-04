@@ -1476,8 +1476,12 @@ public sealed class LaunchServiceTests
         service.Aliases.Should().Equal(new AttachEnvAlias("DB_HOST", "PGHOST"));
 
         proposal.EnvFields.Select(f => f.Key).Should().BeEquivalentTo(
-            ["DB_HOST", "JWT_SECRET", "LOG_LEVEL", "STRIPE_SECRET_KEY"], "DATABASE_URL has nothing to ask");
+            ["DATABASE_URL", "DB_HOST", "JWT_SECRET", "LOG_LEVEL", "STRIPE_SECRET_KEY"]);
         var fields = proposal.EnvFields.ToDictionary(f => f.Key);
+        fields["DATABASE_URL"].Disposition.Should().Be(EnvVarDisposition.ProvidedByAttach);
+        fields["DATABASE_URL"].Service.Should().Be(ManagedServiceType.PostgreSql);
+        fields["DB_HOST"].Service.Should().Be(ManagedServiceType.PostgreSql);
+        fields["JWT_SECRET"].Service.Should().BeNull();
         fields["LOG_LEVEL"].SuggestedValue.Should().Be("info");
         fields["LOG_LEVEL"].IsSecret.Should().BeFalse();
         fields["JWT_SECRET"].SuggestedValue.Should().BeNull();
@@ -1486,6 +1490,7 @@ public sealed class LaunchServiceTests
         fields["STRIPE_SECRET_KEY"].SourceFile.Should().Be(ExampleFile);
 
         defaults.EnvVars.Select(v => v.Key).Should().NotContain("DB_HOST", "an alias of a ticked database has nothing to ask");
+        defaults.EnvVars.Select(v => v.Key).Should().NotContain("DATABASE_URL", "nor has a name its attachment sets");
 
         proposal.ServiceOptions.Select(o => o.Type).Should().BeEquivalentTo(ServiceCatalog.All.Keys);
         proposal.ServiceOptions.Single(o => o.Type == ManagedServiceType.Redis).Detected!.Certain.Should().BeFalse();

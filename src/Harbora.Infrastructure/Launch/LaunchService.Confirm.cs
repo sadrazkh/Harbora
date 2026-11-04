@@ -47,16 +47,17 @@ public sealed partial class LaunchService
         var refusals = await CheckChoicesAsync(launch, choices, server, ct);
         if (refusals.Count > 0) return ServiceOutcome<LaunchView>.Refused(refusals);
 
-        // A database ticked by hand arrives with no aliases of its own; what the example file says it
-        // is read under is settled here, so the retry and the timeline both read one answer.
+        // What the example file says each database is read under is settled here, so the retry and the
+        // timeline both read one answer.
         var inspection = LaunchJson.ReadInspection(launch.InspectionJson);
+        var ticked = choices.Services.Select(s => s.Type).ToList();
         var settled = choices with
         {
             ServerId = server.ServerId,
             // A form that does not post the folder still means the one that was chosen.
             RootDirectory = string.IsNullOrWhiteSpace(choices.RootDirectory) ? inspection.RootDirectory : choices.RootDirectory,
             Services = choices.Services
-                .Select(s => s with { Aliases = s.Aliases ?? AliasesFor(inspection, s.Type) })
+                .Select(s => s with { Aliases = SettledAliases(s, inspection, ticked) })
                 .ToList()
         };
 

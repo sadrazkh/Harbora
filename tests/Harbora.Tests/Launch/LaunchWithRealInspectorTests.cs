@@ -3,9 +3,11 @@ using FluentAssertions;
 using Harbora.Domain.Common;
 using Harbora.Domain.Launch;
 using Harbora.Domain.Services;
+using Harbora.Infrastructure.Apps;
 using Harbora.Infrastructure.Launch;
 using Harbora.Infrastructure.Services;
 using Harbora.Shared.Inspection;
+using Harbora.Tests.Fakes;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
 
@@ -77,7 +79,6 @@ public sealed class LaunchWithRealInspectorTests
         proposal.EnvFields.Single(f => f.Key == "JWT_SECRET").Disposition.Should().Be(EnvVarDisposition.GeneratedSecret);
         proposal.EnvFields.Single(f => f.Key == "JWT_SECRET").SuggestedValue.Should().BeNull();
         proposal.EnvFields.Single(f => f.Key == "LOG_LEVEL").SuggestedValue.Should().Be("info");
-        proposal.EnvFields.Should().NotContain(f => f.Key == "DATABASE_URL", "the attachment sets that one");
         proposal.EnvFields.Should().NotContain(f => f.Key == "SOMETHING_ONLY_ON_MY_LAPTOP", ".env never leaves the archive");
     }
 
@@ -239,6 +240,288 @@ public sealed class LaunchWithRealInspectorTests
         service.Type.Should().Be(type);
         service.Aliases!.Select(a => a.Name).Should().BeEquivalentTo(names);
         proposal.EnvFields.Where(f => f.Disposition == EnvVarDisposition.NeedsAnswer).Should().BeEmpty();
+    }
+
+    // ---- a name that could be any database, and somebody with their own -----------------------------
+
+    /// <summary>What a person really has: a PDO call with nothing in any manifest to say which engine.</summary>
+    private static Dictionary<string, string> PlainPdoApp() => new()
+    {
+        ["index.php"] = "<?php new PDO('mysql:host=' . getenv('DB_HOST'));",
+        [".env.example"] = "DB_HOST=\nDB_PORT=\nDB_NAME=\nDB_USER=\nDB_PASSWORD=\n"
+    };
+
+    private static IReadOnlyList<AttachEnvAlias> AliasesOn(LaunchHarness h, ManagedServiceType type)
+    {
+        var store = h.Store();
+        var service = store.ManagedServices.IgnoreQueryFilters().Single(s => s.Type == type);
+        return ManagedServiceAttachEnv.ReadAliases(
+            store.AppManagedServices.IgnoreQueryFilters().Single(a => a.ManagedServiceId == service.Id).EnvAliasesJson);
+    }
+
+    /// <summary>What a deployment of this app would really hand its container, through the one function that decides.</summary>
+    private static Dictionary<string, string> WhatTheAppGets(LaunchHarness h)
+    {
+        var app = h.Store().Apps.IgnoreQueryFilters()
+            .Include(a => a.EnvironmentVariables)
+            .Include(a => a.ManagedServices).ThenInclude(m => m.ManagedService!).ThenInclude(s => s.Replicas)
+            .Include(a => a.ManagedServices).ThenInclude(m => m.Database)
+            .Single();
+
+        var protector = new PassthroughProtector();
+        return EffectiveEnvironmentBuilder.Compute(app, protector, "")
+            .ToDictionary(e => e.Key, e => e.IsSecret ? protector.Unprotect(e.Value) : e.Value, StringComparer.Ordinal);
+    }
+
+    private static async Task<string?> NotSetLineAsync(LaunchHarness h, Guid id) =>
+        (await h.Request().GetAsync(id, default))!.Steps.Single(s => s.Key == LaunchStepKeys.App).Detail;
+
+    [Fact]
+    public async Task A_plain_pdo_app_is_asked_its_names_until_an_engine_is_ticked_and_then_they_are_that_engines()
+    {
+        using var h = new LaunchHarness();
+        var id = await UploadAsync(h, "pdo-0123456789abcdef0123456789abcdef.zip", PlainPdoApp());
+
+        var proposal = await h.Request().ProposeAsync(id, default);
+
+        proposal!.Defaults.Services.Should().BeEmpty("nothing says which engine, and a guess is not consent");
+        proposal.Inspection.Notes.Should().Contain(n => n.Code == "database-unclear");
+        proposal.EnvFields.Should().OnlyContain(f => f.Disposition == EnvVarDisposition.NeedsAnswer && f.Service == null);
+        proposal.Defaults.EnvVars.Select(v => v.Key).Should().Contain("DB_HOST");
+
+        // What the note on that screen tells the person to do, the way the form posts it.
+        var ticked = proposal.Defaults with { Services = [new LaunchServiceChoice(ManagedServiceType.MySql)] };
+        (await h.Request().ConfirmAsync(id, ticked, null, default)).Ok.Should().BeTrue();
+
+        AliasesOn(h, ManagedServiceType.MySql).Should().BeEquivalentTo(
+        [
+            new AttachEnvAlias("DB_HOST", "MYSQL_HOST"),
+            new AttachEnvAlias("DB_PORT", "MYSQL_PORT"),
+            new AttachEnvAlias("DB_NAME", "MYSQL_DATABASE"),
+            new AttachEnvAlias("DB_USER", "MYSQL_USER"),
+            new AttachEnvAlias("DB_PASSWORD", "MYSQL_PASSWORD")
+        ]);
+
+        WhatTheAppGets(h)["DB_HOST"].Should().Be(WhatTheAppGets(h)["MYSQL_HOST"], "an empty DB_HOST is the failure this is for");
+        (await NotSetLineAsync(h, id)).Should().BeNull("every one of them is answered");
+    }
+
+    [Fact]
+    public async Task What_the_person_typed_for_such_a_name_still_wins()
+    {
+        using var h = new LaunchHarness();
+        var id = await UploadAsync(h, "pdo-0123456789abcdef0123456789abcdef.zip", PlainPdoApp());
+        var defaults = await h.DefaultsAsync(id);
+
+        (await h.Request().ConfirmAsync(id, defaults with
+        {
+            Services = [new LaunchServiceChoice(ManagedServiceType.PostgreSql)],
+            EnvVars = [new LaunchEnvChoice("DB_HOST", "db.example.com")]
+        }, null, default)).Ok.Should().BeTrue();
+
+        var gets = WhatTheAppGets(h);
+        gets["DB_HOST"].Should().Be("db.example.com");
+        gets["DB_PORT"].Should().Be(gets["PGPORT"], "only the one that was typed");
+    }
+
+    [Fact]
+    public async Task With_two_engines_ticked_nothing_says_which_so_the_names_stay_questions()
+    {
+        using var h = new LaunchHarness();
+        var id = await UploadAsync(h, "pdo-0123456789abcdef0123456789abcdef.zip", PlainPdoApp());
+        var defaults = await h.DefaultsAsync(id);
+
+        (await h.Request().ConfirmAsync(id, defaults with
+        {
+            Services = [new LaunchServiceChoice(ManagedServiceType.MySql), new LaunchServiceChoice(ManagedServiceType.PostgreSql)]
+        }, null, default)).Ok.Should().BeTrue();
+
+        AliasesOn(h, ManagedServiceType.MySql).Should().BeEmpty();
+        AliasesOn(h, ManagedServiceType.PostgreSql).Should().BeEmpty();
+        (await NotSetLineAsync(h, id)).Should().Contain("DB_HOST");
+    }
+
+    [Fact]
+    public async Task A_cache_ticked_beside_one_database_does_not_make_it_unclear()
+    {
+        using var h = new LaunchHarness();
+        var id = await UploadAsync(h, "pdo-0123456789abcdef0123456789abcdef.zip", PlainPdoApp());
+        var defaults = await h.DefaultsAsync(id);
+
+        (await h.Request().ConfirmAsync(id, defaults with
+        {
+            Services = [new LaunchServiceChoice(ManagedServiceType.Redis), new LaunchServiceChoice(ManagedServiceType.MariaDb)]
+        }, null, default)).Ok.Should().BeTrue();
+
+        AliasesOn(h, ManagedServiceType.MariaDb).Should().Contain(new AttachEnvAlias("DB_NAME", "DB_DATABASE"));
+        AliasesOn(h, ManagedServiceType.Redis).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Unticking_one_of_two_certain_databases_leaves_the_names_to_the_other_as_the_form_posts_it()
+    {
+        using var h = new LaunchHarness();
+        var id = await UploadAsync(h, "both-0123456789abcdef0123456789abcdef.zip", new()
+        {
+            ["package.json"] = """{"scripts":{"start":"node s.js"},"dependencies":{"pg":"8","mysql2":"3"}}""",
+            ["s.js"] = "",
+            [".env.example"] = "DB_HOST=\n"
+        });
+        var defaults = await h.DefaultsAsync(id);
+        defaults.Services.Should().HaveCount(2);
+        defaults.Services.Should().OnlyContain(s => s.Aliases!.Count == 0, "with both ticked nothing says which");
+
+        // The form sends the default's own choice for whatever stayed ticked, aliases and all.
+        var kept = defaults.Services.Single(s => s.Type == ManagedServiceType.PostgreSql);
+        (await h.Request().ConfirmAsync(id, defaults with { Services = [kept] }, null, default)).Ok.Should().BeTrue();
+
+        AliasesOn(h, ManagedServiceType.PostgreSql).Should().ContainSingle().Which.Should().Be(new AttachEnvAlias("DB_HOST", "PGHOST"));
+    }
+
+    [Fact]
+    public async Task A_guess_unticked_for_another_engine_hands_its_generic_names_over_and_keeps_its_own()
+    {
+        using var h = new LaunchHarness();
+        var id = await UploadAsync(h, "app-0123456789abcdef0123456789abcdef.zip", new()
+        {
+            ["package.json"] = """{"scripts":{"start":"node s.js"}}""",
+            ["s.js"] = "",
+            // A name that is Postgres's alone makes a weak guess, and DB_HOST then follows that guess.
+            [".env.example"] = "POSTGRES_HOST=\nDB_HOST=\n"
+        });
+        var proposal = await h.Request().ProposeAsync(id, default);
+        proposal!.Defaults.Services.Should().BeEmpty();
+        proposal.EnvFields.Single(f => f.Key == "DB_HOST").Service.Should().Be(ManagedServiceType.PostgreSql);
+
+        (await h.Request().ConfirmAsync(id, proposal.Defaults with
+        {
+            Services = [new LaunchServiceChoice(ManagedServiceType.MySql)]
+        }, null, default)).Ok.Should().BeTrue();
+
+        var aliases = AliasesOn(h, ManagedServiceType.MySql);
+        aliases.Should().ContainSingle().Which.Should().Be(new AttachEnvAlias("DB_HOST", "MYSQL_HOST"));
+    }
+
+    [Fact]
+    public async Task Every_name_an_attachment_would_set_is_on_the_screen_with_its_engine_but_is_not_a_question()
+    {
+        using var h = new LaunchHarness();
+        var id = await UploadAsync(h, "my-shop-0123456789abcdef0123456789abcdef.zip", new()
+        {
+            ["package.json"] = NodeWithPostgres,
+            [".env.example"] = "DATABASE_URL=\nPGHOST=\nDB_HOST=\n"
+        });
+
+        var proposal = await h.Request().ProposeAsync(id, default);
+
+        var address = proposal!.EnvFields.Single(f => f.Key == "DATABASE_URL");
+        address.Disposition.Should().Be(EnvVarDisposition.ProvidedByAttach);
+        address.Service.Should().Be(ManagedServiceType.PostgreSql);
+        address.IsSecret.Should().BeTrue("the address of somebody's own database has its password in it");
+        address.SuggestedValue.Should().BeNull();
+
+        var host = proposal.EnvFields.Single(f => f.Key == "PGHOST");
+        host.Service.Should().Be(ManagedServiceType.PostgreSql);
+        host.IsSecret.Should().BeFalse();
+
+        var alias = proposal.EnvFields.Single(f => f.Key == "DB_HOST");
+        alias.Disposition.Should().Be(EnvVarDisposition.AliasOfAttach);
+        alias.Service.Should().Be(ManagedServiceType.PostgreSql);
+
+        proposal.Defaults.EnvVars.Select(v => v.Key).Should().NotContain(["DATABASE_URL", "PGHOST", "DB_HOST"],
+            "a null value for one of these would say it is not set, for an app that has it attached");
+
+        await h.ConfirmAsync(id);
+        (await NotSetLineAsync(h, id)).Should().BeNull();
+        h.Store().EnvironmentVariables.IgnoreQueryFilters().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Somebody_with_their_own_database_unticks_it_and_gives_its_address()
+    {
+        using var h = new LaunchHarness();
+        var id = await UploadAsync(h, "my-shop-0123456789abcdef0123456789abcdef.zip", new()
+        {
+            ["package.json"] = NodeWithPostgres,
+            [".env.example"] = "DATABASE_URL=\n"
+        });
+        var defaults = await h.DefaultsAsync(id);
+
+        (await h.Request().ConfirmAsync(id, defaults with
+        {
+            Services = [],
+            EnvVars = [new LaunchEnvChoice("DATABASE_URL", "postgres://me:hunter2@ep-1.neon.tech/shop", IsSecret: true)]
+        }, null, default)).Ok.Should().BeTrue();
+
+        h.Store().ManagedServices.IgnoreQueryFilters().Should().BeEmpty();
+        WhatTheAppGets(h)["DATABASE_URL"].Should().Be("postgres://me:hunter2@ep-1.neon.tech/shop");
+        h.Store().EnvironmentVariables.IgnoreQueryFilters().Single().IsSecret.Should().BeTrue();
+        (await NotSetLineAsync(h, id)).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task A_value_given_for_such_a_name_outranks_the_attachment_when_the_engine_is_ticked_as_well()
+    {
+        using var h = new LaunchHarness();
+        var id = await UploadAsync(h, "my-shop-0123456789abcdef0123456789abcdef.zip", new()
+        {
+            ["package.json"] = NodeWithPostgres,
+            [".env.example"] = "DATABASE_URL=\n"
+        });
+        var defaults = await h.DefaultsAsync(id);
+
+        (await h.Request().ConfirmAsync(id, defaults with
+        {
+            EnvVars = [new LaunchEnvChoice("DATABASE_URL", "postgres://mine/shop", IsSecret: true)]
+        }, null, default)).Ok.Should().BeTrue();
+
+        h.Store().ManagedServices.IgnoreQueryFilters().Should().ContainSingle();
+        var gets = WhatTheAppGets(h);
+        gets["DATABASE_URL"].Should().Be("postgres://mine/shop");
+        gets["PGHOST"].Should().NotBeNullOrEmpty("only that one name is the person's");
+    }
+
+    [Fact]
+    public async Task A_blank_for_an_attach_name_of_a_ticked_engine_sets_nothing_and_is_not_called_unset()
+    {
+        using var h = new LaunchHarness();
+        var id = await UploadAsync(h, "my-shop-0123456789abcdef0123456789abcdef.zip", new()
+        {
+            ["package.json"] = NodeWithPostgres,
+            [".env.example"] = "DATABASE_URL=\n"
+        });
+        var defaults = await h.DefaultsAsync(id);
+
+        (await h.Request().ConfirmAsync(id, defaults with
+        {
+            EnvVars = [new LaunchEnvChoice("DATABASE_URL", null, IsSecret: true)]
+        }, null, default)).Ok.Should().BeTrue();
+
+        h.Store().EnvironmentVariables.IgnoreQueryFilters().Should().BeEmpty();
+        (await NotSetLineAsync(h, id)).Should().BeNull("its attachment sets it");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task With_the_engine_unticked_and_no_value_given_the_name_is_answered_by_nothing_and_is_said(bool postedBlank)
+    {
+        using var h = new LaunchHarness();
+        var id = await UploadAsync(h, "my-shop-0123456789abcdef0123456789abcdef.zip", new()
+        {
+            ["package.json"] = NodeWithPostgres,
+            [".env.example"] = "DATABASE_URL=\n"
+        });
+        var defaults = await h.DefaultsAsync(id);
+
+        (await h.Request().ConfirmAsync(id, defaults with
+        {
+            Services = [],
+            EnvVars = postedBlank ? [new LaunchEnvChoice("DATABASE_URL", null)] : []
+        }, null, default)).Ok.Should().BeTrue();
+
+        h.Store().EnvironmentVariables.IgnoreQueryFilters().Should().BeEmpty();
+        (await NotSetLineAsync(h, id)).Should().Contain("DATABASE_URL");
     }
 
     private const string ViteShaped =
