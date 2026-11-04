@@ -162,7 +162,7 @@ public sealed partial class LaunchService
         }
 
         const string appTitle = "Creating the app", appTitleFa = "ساختن اپ";
-        var appLink = appId is { } id ? $"/apps/{id}" : null;
+        var appLink = appId is { } id ? $"/apps/details/{id}" : null;
         string? unsetDetail = null, unsetDetailFa = null;
         if (unset.Count > 0)
         {
@@ -183,7 +183,7 @@ public sealed partial class LaunchService
             appStep = new(LaunchStepKeys.App, appTitle, appTitleFa, neverReached);
 
         const string deployTitle = "Deploying", deployTitleFa = "استقرار";
-        var deployLink = launch.DeploymentId is { } deploymentId ? $"/deployments/{deploymentId}" : null;
+        var deployLink = launch.DeploymentId is { } deploymentId ? $"/deployments/details/{deploymentId}" : null;
         LaunchStepView deployStep;
         if (launch.FailedStep == LaunchStepKeys.Deploy)
         {

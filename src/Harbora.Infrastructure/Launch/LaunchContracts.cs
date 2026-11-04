@@ -30,7 +30,8 @@ public sealed record LaunchStartRequest
     /// <summary>A record prints every property by default, and this one carries an access token.</summary>
     private bool PrintMembers(StringBuilder builder)
     {
-        builder.Append($"WorkspaceId = {WorkspaceId}, Source = {Source}, CloneUrl = {CloneUrl}, GitRef = {GitRef}");
+        // The URL is only stripped of credentials by StartAsync, so it is not safe to print before then.
+        builder.Append($"WorkspaceId = {WorkspaceId}, Source = {Source}, GitRef = {GitRef}");
         return true;
     }
 }
@@ -47,7 +48,15 @@ public sealed record LaunchServiceChoice(
 
 /// <summary>One variable to set on the app.</summary>
 /// <param name="Value">Null generates a random secret for a <c>GeneratedSecret</c> name; otherwise it is the person's answer.</param>
-public sealed record LaunchEnvChoice(string Key, string? Value, bool IsSecret = false);
+public sealed record LaunchEnvChoice(string Key, string? Value, bool IsSecret = false)
+{
+    /// <summary>A record prints every property by default, and this value can be somebody's key.</summary>
+    private bool PrintMembers(StringBuilder builder)
+    {
+        builder.Append($"Key = {Key}, IsSecret = {IsSecret}");
+        return true;
+    }
+}
 
 /// <summary>
 /// What the person agreed to on the confirm screen. Serialised onto the launch for a retry, with every

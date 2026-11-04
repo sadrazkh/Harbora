@@ -258,7 +258,7 @@ public sealed class LaunchServiceTests
         view.FailureMessage.Should().Contain("npm ci exited with 1");
         var step = view.Steps.Single(s => s.Key == LaunchStepKeys.Deploy);
         step.State.Should().Be(LaunchStepState.Failed);
-        step.LinkPath.Should().Be($"/deployments/{deploymentId}");
+        step.LinkPath.Should().Be($"/deployments/details/{deploymentId}");
         view.CanRetry.Should().BeTrue();
 
         h.Advance(TimeSpan.FromMinutes(1));
@@ -359,7 +359,7 @@ public sealed class LaunchServiceTests
         step.State.Should().Be(LaunchStepState.Running);
         step.Detail.Should().Contain("approve");
         step.DetailFa.Should().Contain("تأیید");
-        step.LinkPath.Should().Be($"/deployments/{deploymentId}");
+        step.LinkPath.Should().Be($"/deployments/details/{deploymentId}");
     }
 
     // ---- part-way, twice, and after a restart ---------------------------------------------------
