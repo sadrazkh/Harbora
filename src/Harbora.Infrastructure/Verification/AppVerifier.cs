@@ -42,7 +42,7 @@ public sealed class AppVerifier(
     ISystemClock clock,
     ILogger<AppVerifier> logger) : IAppVerifier
 {
-    private const string RunningKey = "running";
+    internal const string RunningKey = "running";
     private const string RestartsKey = "restarts";
     private const string UrlKey = "url";
     private const string LogsKey = "logs";
@@ -161,15 +161,16 @@ public sealed class AppVerifier(
         catch (Exception ex)
         {
             // Past every per-check guard, so this is the panel's own database rather than anything
-            // about the app. It still comes back as an answer: the launch tick moves on one report at
-            // a time, and a throw here would look like the launch failing.
+            // about the app. So it is a report that has not finished rather than one that has: nothing
+            // was found out, and a finished one would have the launch announce a verdict on a blip.
+            // The launch stays where it is and asks again, and its own time limit ends the asking.
             logger.LogError(ex, "The checks for app {AppId} could not run.", appId);
-            return new AppVerificationReport(appId, previous?.DeploymentId, previous?.StartedAt ?? started, clock.UtcNow,
+            return new AppVerificationReport(appId, previous?.DeploymentId, previous?.StartedAt ?? started, null,
             [
-                new AppCheck(RunningKey, AppCheckStatus.Skipped,
+                new AppCheck(RunningKey, AppCheckStatus.Pending,
                     "The checks could not run", "بررسی‌ها اجرا نشدند",
                     "The panel itself had a problem, so this says nothing about the app. Try again in a moment.",
-                    "خود پنل مشکلی داشت، پس این نتیجه چیزی دربارهٔ اپ نمی‌گوید. کمی بعد دوباره امتحان کنید.")
+                    "خود پنل مشکلی داشت، پس این نتیجه چیزی دربارهٔ اپ نمی‌گوید. کمی بعد دوباره امتحان کن.")
             ]);
         }
     }

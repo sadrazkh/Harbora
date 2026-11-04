@@ -158,9 +158,132 @@ public sealed class LaunchServiceTests
         h.Verifier.Asked[0].GiveUpAt.Should().Be(h.Row(id).VerifyStartedAt!.Value + TimeSpan.FromMinutes(5));
 
         h.Advance(TimeSpan.FromSeconds(30));
-        h.Verifier.Next = app => LaunchHarness.ScriptedVerifier.Report(app, new AppCheck("url", AppCheckStatus.Passed, "Address", "آدرس"));
+        h.Verifier.Next = app => LaunchHarness.ScriptedVerifier.Report(app,
+            new AppCheck("running", AppCheckStatus.Passed, "Running", "در حال اجرا"),
+            new AppCheck("url", AppCheckStatus.Passed, "Address", "آدرس"));
         await h.TickAsync();
         h.Verifier.Asked[1].Previous.Should().NotBeNull("a passed check is not repeated within one run");
+        h.Row(id).Status.Should().Be(LaunchStatus.Succeeded);
+    }
+
+    [Fact]
+    public async Task A_run_that_could_not_ask_whether_it_is_running_is_never_green_and_says_it_could_not_check()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(Bare());
+        await h.ConfirmAsync(id);
+        h.Verifier.Next = app => LaunchHarness.ScriptedVerifier.Report(app,
+            new AppCheck("running", AppCheckStatus.Skipped, "Could not tell", "نشد فهمید"),
+            new AppCheck("restarts", AppCheckStatus.Skipped, "Could not tell", "نشد فهمید"),
+            new AppCheck("logs", AppCheckStatus.Skipped, "Could not read", "نشد خواند"));
+
+        await h.TickAsync();
+        h.DeploymentIs(h.Row(id).DeploymentId!.Value, DeploymentStatus.Succeeded);
+        h.Advance(TimeSpan.FromSeconds(30));
+        await h.TickAsync();
+
+        var view = await h.Request().GetAsync(id, default);
+        view!.Status.Should().Be(LaunchStatus.SucceededWithProblems);
+        var verify = view.Steps.Single(s => s.Key == LaunchStepKeys.Verify);
+        verify.State.Should().Be(LaunchStepState.Failed);
+        verify.Detail.Should().Contain("could not check");
+        verify.Detail.Should().NotContain("found a problem");
+        verify.DetailFa.Should().Contain("نتوانست");
+    }
+
+    [Fact]
+    public async Task A_log_complaining_beside_an_address_that_works_is_not_green()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(Bare());
+        await h.ConfirmAsync(id);
+        h.Verifier.Next = app => LaunchHarness.ScriptedVerifier.Report(app,
+            new AppCheck("running", AppCheckStatus.Passed, "Running", "در حال اجرا"),
+            new AppCheck("url", AppCheckStatus.Passed, "Address", "آدرس"),
+            new AppCheck("logs", AppCheckStatus.Warning, "Log", "لاگ", "ECONNREFUSED 127.0.0.1:5432", "ECONNREFUSED 127.0.0.1:5432"));
+
+        await h.TickAsync();
+        h.DeploymentIs(h.Row(id).DeploymentId!.Value, DeploymentStatus.Succeeded);
+        h.Advance(TimeSpan.FromSeconds(30));
+        await h.TickAsync();
+
+        h.Row(id).Status.Should().Be(LaunchStatus.SucceededWithProblems);
+        (await h.Request().GetAsync(id, default))!.Steps.Single(s => s.Key == LaunchStepKeys.Verify).Detail
+            .Should().Contain("found a problem");
+    }
+
+    [Fact]
+    public async Task A_worker_is_judged_by_its_running_check_and_a_scheduled_job_is_not()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(Bare() with { Kind = DetectedAppKind.Worker, StartCommand = "node bot.js" });
+        await h.ConfirmAsync(id);
+        h.Verifier.Next = app => LaunchHarness.ScriptedVerifier.Report(app, new AppCheck("running", AppCheckStatus.Skipped, "Not running", "روشن نیست"));
+
+        await h.TickAsync();
+        h.DeploymentIs(h.Row(id).DeploymentId!.Value, DeploymentStatus.Succeeded);
+        h.Advance(TimeSpan.FromSeconds(30));
+        await h.TickAsync();
+        h.Row(id).Status.Should().Be(LaunchStatus.SucceededWithProblems, "a worker that could not be seen running");
+
+        // The same report about an app whose kind says nothing was ever meant to keep running.
+        using (var db = h.Store())
+        {
+            db.Apps.IgnoreQueryFilters().Single().Kind = ServiceKind.Cron;
+            db.SaveChanges();
+        }
+        h.ChangeRow(id, l => { l.Status = LaunchStatus.Verifying; l.VerifyStartedAt = h.Clock.UtcNow; });
+        h.Advance(TimeSpan.FromSeconds(30));
+        await h.TickAsync();
+        h.Row(id).Status.Should().Be(LaunchStatus.Succeeded);
+    }
+
+    [Fact]
+    public async Task A_fault_in_the_panels_own_run_is_asked_again_and_only_the_time_limit_ends_it_at_verify()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(Bare());
+        await h.ConfirmAsync(id);
+        h.Verifier.Next = app => LaunchHarness.ScriptedVerifier.Report(app,
+            new AppCheck("running", AppCheckStatus.Pending, "The checks could not run", "بررسی‌ها اجرا نشدند")) with { CompletedAt = null };
+
+        await h.TickAsync();
+        h.DeploymentIs(h.Row(id).DeploymentId!.Value, DeploymentStatus.Succeeded);
+        h.Advance(TimeSpan.FromSeconds(30));
+        await h.TickAsync();
+        h.Row(id).Status.Should().Be(LaunchStatus.Verifying, "nothing was found out, so nothing is announced");
+
+        var runs = h.Verifier.Runs;
+        h.Advance(TimeSpan.FromSeconds(30));
+        await h.TickAsync();
+        h.Verifier.Runs.Should().BeGreaterThan(runs);
+        h.Row(id).Status.Should().Be(LaunchStatus.Verifying);
+
+        h.Advance(TimeSpan.FromMinutes(16));
+        await h.TickAsync();
+        var row = h.Row(id);
+        row.Status.Should().Be(LaunchStatus.Failed);
+        row.FailedStep.Should().Be(LaunchStepKeys.Verify);
+    }
+
+    [Fact]
+    public async Task A_blip_in_the_panels_own_run_that_clears_ends_on_what_the_next_run_found()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(Bare());
+        await h.ConfirmAsync(id);
+        h.Verifier.Next = app => LaunchHarness.ScriptedVerifier.Report(app,
+            new AppCheck("running", AppCheckStatus.Pending, "The checks could not run", "بررسی‌ها اجرا نشدند")) with { CompletedAt = null };
+
+        await h.TickAsync();
+        h.DeploymentIs(h.Row(id).DeploymentId!.Value, DeploymentStatus.Succeeded);
+        h.Advance(TimeSpan.FromSeconds(30));
+        await h.TickAsync();
+
+        h.Verifier.Next = null;
+        h.Advance(TimeSpan.FromSeconds(30));
+        await h.TickAsync();
+
         h.Row(id).Status.Should().Be(LaunchStatus.Succeeded);
     }
 

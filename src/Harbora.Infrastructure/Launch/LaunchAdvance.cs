@@ -1,6 +1,8 @@
 using Harbora.Data;
 using Harbora.Domain.Common;
 using Harbora.Domain.Launch;
+using Harbora.Infrastructure.Deployments;
+using Harbora.Infrastructure.Verification;
 using Microsoft.EntityFrameworkCore;
 
 namespace Harbora.Infrastructure.Launch;
@@ -197,6 +199,30 @@ public static class LaunchAdvance
         return launch.Now - launch.LastTouchedAt < ChecksEvery
             ? LaunchMove.Stay
             : new LaunchMove(LaunchMoveKind.RunChecks);
+    }
+
+    /// <summary>
+    /// What a finished run of the checks comes to. Green is a claim that the app works, so it has to be
+    /// earned: nothing failed, nothing is complaining, and the one check that proves it runs said so. A
+    /// hung daemon leaves <c>running</c>, <c>restarts</c> and <c>logs</c> all Skipped with not one Failed
+    /// among them, and an address answering 200 beside a log full of <c>ECONNREFUSED</c> is only a
+    /// Warning; each of those is somebody being told their app is up by a run that did not find that out.
+    ///
+    /// <para>
+    /// A kind that runs and exits has no <c>running</c> to ask: that check is Skipped by design every
+    /// time, so requiring it would make every cron job a problem. For one of those a deployment that
+    /// succeeded and databases that answer are all there is to know.
+    /// </para>
+    /// </summary>
+    public static LaunchStatus VerdictOn(IReadOnlyList<AppCheck> checks, ServiceKind kind)
+    {
+        if (checks.Any(c => c.Status is AppCheckStatus.Failed or AppCheckStatus.Warning))
+            return LaunchStatus.SucceededWithProblems;
+
+        var proven = !ServicePlan.IsLongRunning(kind)
+            || checks.Any(c => c.Key == AppVerifier.RunningKey && c.Status == AppCheckStatus.Passed);
+
+        return proven ? LaunchStatus.Succeeded : LaunchStatus.SucceededWithProblems;
     }
 
     private static LaunchMove AppGone() => Fail(LaunchStepKeys.App,

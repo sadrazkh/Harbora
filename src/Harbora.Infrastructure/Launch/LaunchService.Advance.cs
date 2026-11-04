@@ -267,7 +267,11 @@ public sealed partial class LaunchService
         var report = await verifier.RunAsync(appId, previous, startedAt + LaunchAdvance.ChecksPatience, ct);
         if (!report.IsComplete) return false;
 
-        await SetStatusAsync(launchId, report.HasFailures ? LaunchStatus.SucceededWithProblems : LaunchStatus.Succeeded, ct);
+        var kind = await db.Apps.IgnoreQueryFilters().AsNoTracking()
+            .Where(a => a.Id == appId).Select(a => (ServiceKind?)a.Kind).FirstOrDefaultAsync(ct);
+
+        // An app gone by now has a Failed check of its own saying so, whatever kind it was.
+        await SetStatusAsync(launchId, LaunchAdvance.VerdictOn(report.Checks, kind ?? ServiceKind.Web), ct);
         return true;
     }
 }

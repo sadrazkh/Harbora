@@ -78,7 +78,7 @@ public sealed partial class LaunchService
             launch.DeploymentId,
             launch.FailureMessage,
             launch.FailureMessageFa,
-            StepsOf(launch, choices, services, app?.Id, deployment, unset),
+            StepsOf(launch, choices, services, app?.Id, deployment, unset, checks),
             checks,
             LaunchAdvance.CanRetry(launch, now),
             LaunchAdvance.IsTerminal(launch.Status));
@@ -111,7 +111,7 @@ public sealed partial class LaunchService
 
     private static IReadOnlyList<LaunchStepView> StepsOf(
         AppLaunch launch, LaunchChoices? choices, IReadOnlyList<LaunchServiceState> services, Guid? appId,
-        LaunchDeploymentState? deployment, IReadOnlyList<string> unset)
+        LaunchDeploymentState? deployment, IReadOnlyList<string> unset, IReadOnlyList<AppCheck> checks)
     {
         // Whatever a launch that ended early never reached. A failed one may still get there on a
         // retry, so those steps are only waiting.
@@ -213,9 +213,13 @@ public sealed partial class LaunchService
             _ when launch.FailedStep == LaunchStepKeys.Verify => Failed(LaunchStepKeys.Verify, verifyTitle, verifyTitleFa),
             LaunchStatus.Verifying => new LaunchStepView(LaunchStepKeys.Verify, verifyTitle, verifyTitleFa, LaunchStepState.Running),
             LaunchStatus.Succeeded => new LaunchStepView(LaunchStepKeys.Verify, verifyTitle, verifyTitleFa, LaunchStepState.Done),
-            // It finished, and what it found is not good: never the green treatment.
-            LaunchStatus.SucceededWithProblems => new LaunchStepView(LaunchStepKeys.Verify, verifyTitle, verifyTitleFa, LaunchStepState.Failed,
-                "The app is running, but a check found a problem.", "اپ بالاست، ولی یکی از بررسی‌ها مشکلی پیدا کرد."),
+            // It finished, and what it found is not good: never the green treatment. Neither sentence
+            // says it is running, because this is also where a run that could not find out ends up.
+            LaunchStatus.SucceededWithProblems => checks.Any(c => c.Status is AppCheckStatus.Failed or AppCheckStatus.Warning)
+                ? new LaunchStepView(LaunchStepKeys.Verify, verifyTitle, verifyTitleFa, LaunchStepState.Failed,
+                    "The app is deployed, but a check found a problem.", "اپ مستقر شد، ولی یکی از بررسی‌ها مشکلی پیدا کرد.")
+                : new LaunchStepView(LaunchStepKeys.Verify, verifyTitle, verifyTitleFa, LaunchStepState.Failed,
+                    "The app is deployed, but Harbora could not check that it is running.", "اپ مستقر شد، ولی هاربورا نتوانست بررسی کند که در حال اجراست."),
             _ => new LaunchStepView(LaunchStepKeys.Verify, verifyTitle, verifyTitleFa, neverReached)
         };
 

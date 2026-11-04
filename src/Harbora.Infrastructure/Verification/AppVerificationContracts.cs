@@ -43,6 +43,8 @@ public sealed record AppVerificationReport(
     IReadOnlyList<AppCheck> Checks)
 {
     public bool IsComplete => Checks.All(c => c.Status != AppCheckStatus.Pending);
+
+    /// <summary>Only what failed. Not whether the app works, which takes more than that: see <c>LaunchAdvance.VerdictOn</c>.</summary>
     public bool HasFailures => Checks.Any(c => c.Status == AppCheckStatus.Failed);
 }
 
