@@ -15,7 +15,7 @@ internal static class PythonManifests
     private static readonly Regex Egg = new(@"[#&]egg=([A-Za-z0-9][A-Za-z0-9._-]*)", RegexOptions.CultureInvariant);
     private static readonly Regex NamedUrl = new(@"^[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[^\]]*\])?\s*@", RegexOptions.CultureInvariant);
     private static readonly Regex Include = new(@"^(?:-r|--requirement)[\s=]*(\S+)", RegexOptions.CultureInvariant);
-    private static readonly Regex Section = new(@"^\[+\s*([^\]]+?)\s*\]+", RegexOptions.CultureInvariant);
+    private static readonly Regex Section = new(@"^\[+([^\]]+)\]", RegexOptions.CultureInvariant);
     private static readonly Regex TableKey = new(@"^""?([A-Za-z0-9][A-Za-z0-9._-]*)""?\s*=", RegexOptions.CultureInvariant);
     private static readonly Regex DependencyArray = new(@"^dependencies\s*=\s*\[", RegexOptions.CultureInvariant);
 
@@ -92,7 +92,7 @@ internal static class PythonManifests
 
             if (Section.Match(line) is { Success: true } header)
             {
-                section = header.Groups[1].Value;
+                section = header.Groups[1].Value.Trim();
                 continue;
             }
 
@@ -165,7 +165,7 @@ internal static class PythonManifests
             var line = raw.Trim();
             if (line.Length == 0 || line[0] == '#') continue;
 
-            if (Section.Match(line) is { Success: true } header) section = header.Groups[1].Value;
+            if (Section.Match(line) is { Success: true } header) section = header.Groups[1].Value.Trim();
             else if (section == "packages" && TableKey.Match(line) is { Success: true } key) Add(facts, key.Groups[1].Value, file);
         }
     }

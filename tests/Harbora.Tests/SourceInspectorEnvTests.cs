@@ -103,9 +103,18 @@ public class SourceInspectorEnvTests : InspectorTreeTests
     }
 
     [Fact]
-    public void An_unclosed_quote_does_not_lose_the_value()
+    public void The_value_of_a_quoted_run_over_several_lines_is_kept_whole()
     {
-        Var(InspectExample("FOO=\"never closed"), "FOO").ExampleValue.Should().Contain("never closed");
+        Var(InspectExample("CERT_FILE='one\ntwo\nthree' # why\n"), "CERT_FILE").ExampleValue.Should().Be("one\ntwo\nthree");
+    }
+
+    [Fact]
+    public void An_unclosed_quote_loses_neither_its_value_nor_the_names_below_it()
+    {
+        var result = InspectExample("FOO=\"never closed\nBAR=1\nBAZ=2\n");
+
+        Var(result, "FOO").ExampleValue.Should().Be("never closed");
+        result.EnvVars.Select(v => v.Name).Should().Equal("FOO", "BAR", "BAZ");
     }
 
     [Fact]
@@ -260,6 +269,12 @@ public class SourceInspectorEnvTests : InspectorTreeTests
     [InlineData("MEILISEARCH_URL", DetectedServiceKind.Meilisearch, EnvAliasRole.Url)]
     [InlineData("MEILISEARCH_HOST", DetectedServiceKind.Meilisearch, EnvAliasRole.Url)]
     [InlineData("MEILI_HTTP_ADDR", DetectedServiceKind.Meilisearch, EnvAliasRole.Url)]
+    [InlineData("MEILISEARCH_API_KEY", DetectedServiceKind.Meilisearch, EnvAliasRole.Password)]
+    [InlineData("MEILI_API_KEY", DetectedServiceKind.Meilisearch, EnvAliasRole.Password)]
+    [InlineData("POSTGRES_PORT", DetectedServiceKind.Postgres, EnvAliasRole.Port)]
+    [InlineData("MYSQL_URL", DetectedServiceKind.MySql, EnvAliasRole.Url)]
+    [InlineData("MARIADB_HOST", DetectedServiceKind.MariaDb, EnvAliasRole.Host)]
+    [InlineData("MONGO_DB", DetectedServiceKind.MongoDb, EnvAliasRole.Database)]
     public void A_specific_spelling_is_an_alias(string name, DetectedServiceKind kind, EnvAliasRole role)
     {
         var variable = Var(InspectExample($"{name}=changeme", LibraryFor(kind)), name);

@@ -14,7 +14,7 @@ internal static class ServiceDetector
     private static readonly Regex ComposeFile = new(
         @"^(?:docker-)?compose(?:\.[^/]+)?\.ya?ml$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
-    private static readonly Regex ComposeImage = new(@"^\s*(?:-\s*)?image\s*:\s*(.+?)\s*$", RegexOptions.CultureInvariant);
+    private static readonly Regex ComposeImage = new(@"^\s*(?:-\s*)?image\s*:(.*)$", RegexOptions.CultureInvariant);
 
     private static readonly Dictionary<string, DetectedServiceKind> ComposeImages = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -76,7 +76,7 @@ internal static class ServiceDetector
             {
                 if (ComposeImage.Match(line.TrimEnd('\r')) is not { Success: true } match) continue;
 
-                var image = ImageOf(match.Groups[1].Value);
+                var image = ImageOf(match.Groups[1].Value.Trim());
                 if (ComposeImages.TryGetValue(RepositoryOf(image), out var kind))
                     found.Add(kind, file, $"image: {image}", certain: true);
             }
@@ -181,6 +181,10 @@ internal static class ServiceDetector
 
     private sealed class Findings
     {
+        // A handful of reasons is what a person reads beside a checkbox. A 1 MiB compose file naming
+        // postgres fifty thousand times should not make a row, or a page, that long.
+        private const int MaxEvidencePerKind = 8;
+
         private readonly Dictionary<DetectedServiceKind, (List<ServiceEvidence> Evidence, bool Certain)> _kinds = [];
 
         public bool Has(DetectedServiceKind kind) => _kinds.ContainsKey(kind);
@@ -190,7 +194,7 @@ internal static class ServiceDetector
             if (!_kinds.TryGetValue(kind, out var entry)) entry = ([], false);
 
             var evidence = new ServiceEvidence(file, reason);
-            if (!entry.Evidence.Contains(evidence)) entry.Evidence.Add(evidence);
+            if (entry.Evidence.Count < MaxEvidencePerKind && !entry.Evidence.Contains(evidence)) entry.Evidence.Add(evidence);
 
             _kinds[kind] = (entry.Evidence, entry.Certain || certain);
         }

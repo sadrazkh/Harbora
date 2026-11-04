@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Harbora.Shared.Inspection;
@@ -62,25 +63,47 @@ internal static class ExampleEnvFiles
                 continue;
             }
 
-            // A quoted value can run over several lines, as a private key does. Those lines have to be
-            // swallowed here, or a line of base64 ending in = reads as a variable of its own.
             var quote = value[0];
             var close = ClosingQuote(value, 1, quote);
-            while (close < 0 && i + 1 < lines.Length)
+            if (close >= 0)
             {
-                value += "\n" + lines[++i];
-                close = ClosingQuote(value, value.Length - lines[i].Length, quote);
+                yield return (match.Groups[1].Value, value[1..close]);
+                continue;
             }
 
-            yield return (match.Groups[1].Value, close < 0 ? value[1..] : value[1..close]);
+            // A quoted value can run over several lines, as a private key does, and those lines have
+            // to be swallowed or a line of base64 ending in = reads as a variable of its own. If the
+            // quote is never closed anywhere it is a typo, and the names below it still count.
+            var last = LineClosing(lines, i + 1, quote);
+            if (last < 0)
+            {
+                yield return (match.Groups[1].Value, value[1..]);
+                continue;
+            }
+
+            var whole = new StringBuilder(value, 1, value.Length - 1, value.Length);
+            for (var next = i + 1; next < last; next++) whole.Append('\n').Append(lines[next]);
+            whole.Append('\n').Append(lines[last], 0, ClosingQuote(lines[last], 0, quote));
+            i = last;
+
+            yield return (match.Groups[1].Value, whole.ToString());
         }
+    }
+
+    private static int LineClosing(string[] lines, int from, char quote)
+    {
+        for (var i = from; i < lines.Length; i++)
+        {
+            if (ClosingQuote(lines[i], 0, quote) >= 0) return i;
+        }
+        return -1;
     }
 
     private static int ClosingQuote(string value, int from, char quote)
     {
         for (var i = from; i < value.Length; i++)
         {
-            if (value[i] == quote && (quote == '\'' || value[i - 1] != '\\')) return i;
+            if (value[i] == quote && (quote == '\'' || i == 0 || value[i - 1] != '\\')) return i;
         }
         return -1;
     }

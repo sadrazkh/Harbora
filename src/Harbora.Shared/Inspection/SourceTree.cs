@@ -73,6 +73,9 @@ internal sealed class SourceTree
             var info = new FileInfo(Full(relative));
             if (!info.Exists || info.Length > MaxFileBytes) return null;
 
+            // Not opened at all: opening a named pipe, which reports a length of 0, waits for ever.
+            if (info.Length == 0) return "";
+
             // Byte-order marks are honoured because PowerShell writes UTF-16 by default, and a NUL
             // only counts after decoding so that such a file is not mistaken for a binary one.
             using var reader = new StreamReader(info.FullName, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);

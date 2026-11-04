@@ -9,6 +9,9 @@ internal static class RootLocator
 {
     private const int MaxDescent = 8;
 
+    // Each one examined costs a listing, and no person is choosing from a longer list than this.
+    private const int MaxFoldersExamined = 100;
+
     /// <summary>
     /// A folder of tests or docs often has a project file of its own, and telling someone with a
     /// <c>src/</c> and a <c>tests/</c> that they have two apps is a question with one answer. Dropped
@@ -32,7 +35,8 @@ internal static class RootLocator
 
         if (StackDetector.HoldsSomething(here)) return new LocatedRoot(path.Length == 0 ? null : path, []);
 
-        var apps = here.AppFolders().Where(f => StackDetector.LooksLikeAnApp(here.Scope(f))).ToList();
+        var apps = here.AppFolders().Take(MaxFoldersExamined)
+            .Where(f => StackDetector.LooksLikeAnApp(here.Scope(f))).ToList();
         var likely = apps.Where(f => !RarelyTheApp.Contains(f)).ToList();
         if (likely.Count > 0) apps = likely;
 

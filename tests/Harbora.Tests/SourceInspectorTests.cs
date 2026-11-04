@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using FluentAssertions;
 using Harbora.Shared.Inspection;
 using Xunit;
@@ -967,6 +969,69 @@ public class SourceInspectorTests : InspectorTreeTests
         {
             return false;
         }
+    }
+
+    // --- Time, on files built to take a long time --------------------------------------------
+
+    public static TheoryData<string, string> SlowInputs()
+    {
+        // Each has the shape that makes a careless pattern or a string built up in a loop quadratic,
+        // which at a mebibyte is the difference between milliseconds and the job timing out.
+        var spaces = new string(' ', 900_000);
+        var shortLines = string.Concat(Enumerable.Repeat("a\n", 450_000));
+        return new TheoryData<string, string>
+        {
+            { "Procfile", $"worker: x{spaces}y" },
+            { "docker-compose.yml", $"  image: x{spaces}y" },
+            { "pyproject.toml", $"[a{spaces}" },
+            { "Pipfile", $"[a{spaces}" },
+            { "requirements.txt", $"a{spaces}" },
+            { ".env.example", $"FOO=\"unclosed\n{shortLines}" },
+            { ".env.example", $"FOO=\"closed at the very end\n{shortLines}\"" },
+            { "docker-compose.dev.yml", string.Concat(Enumerable.Range(0, 40_000).Select(i => $"image: postgres:{i}\n")) }
+        };
+    }
+
+    [Theory]
+    [MemberData(nameof(SlowInputs))]
+    public void A_file_built_to_be_slow_is_not(string file, string content)
+    {
+        Write("package.json", "{}");
+        Write(file, content);
+
+        var watch = Stopwatch.StartNew();
+        Inspect();
+
+        watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(10), "a quadratic read of this file would take minutes");
+    }
+
+    [Fact]
+    public void Evidence_stays_short_enough_to_read()
+    {
+        Write("package.json", "{}");
+        Write("docker-compose.dev.yml", string.Concat(Enumerable.Range(0, 100).Select(i => $"image: postgres:{i}\n")));
+
+        Service(Inspect(), DetectedServiceKind.Postgres).Evidence.Should().HaveCount(8);
+    }
+
+    // --- The result itself -------------------------------------------------------------------
+
+    [Fact]
+    public void The_result_survives_the_trip_through_the_row_it_is_stored_on()
+    {
+        Write("package.json", PackageJson("pg"));
+        Write(".env.example", "DB_HOST=x\nJWT_SECRET=y\nSTRIPE_KEY=\nLOG_LEVEL=info\n");
+        Write("worker.js");
+
+        var options = new JsonSerializerOptions { Converters = { new JsonStringEnumConverter() } };
+        var result = Inspect();
+
+        var back = JsonSerializer.Deserialize<SourceInspection>(JsonSerializer.Serialize(result, options), options)!;
+
+        back.Stack.Should().Be(result.Stack);
+        back.Port.Should().Be(result.Port);
+        back.Services.Should().ContainSingle().Which.Evidence.Should().Equal(result.Services[0].Evidence);
+        back.EnvVars.Should().Equal(result.EnvVars);
     }
 
     // --- The notes themselves ----------------------------------------------------------------

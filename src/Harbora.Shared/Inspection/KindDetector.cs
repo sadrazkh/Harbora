@@ -5,7 +5,7 @@ namespace Harbora.Shared.Inspection;
 /// <summary>Web or worker, which decides whether the app gets an address and an HTTP probe.</summary>
 internal static class KindDetector
 {
-    private static readonly Regex ProcfileLine = new(@"^([A-Za-z0-9_-]+)\s*:\s*(.+?)\s*$", RegexOptions.CultureInvariant);
+    private static readonly Regex ProcfileLine = new(@"^([A-Za-z0-9_-]+)\s*:(.*)$", RegexOptions.CultureInvariant);
 
     private static readonly HashSet<string> PythonWorkers = new(StringComparer.Ordinal)
     {
@@ -67,7 +67,7 @@ internal static class KindDetector
             if (ProcfileLine.Match(line) is not { Success: true } match) continue;
 
             if (match.Groups[1].Value == "web") return (DetectedAppKind.Web, null);
-            if (match.Groups[1].Value == "worker") worker ??= match.Groups[2].Value;
+            if (match.Groups[1].Value == "worker" && match.Groups[2].Value.Trim() is { Length: > 0 } command) worker ??= command;
         }
 
         return worker is null ? null : (DetectedAppKind.Worker, worker);
