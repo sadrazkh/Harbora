@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using FluentAssertions;
+using Harbora.Infrastructure.Learning;
 using Harbora.Shared.Inspection;
 using Xunit;
 
@@ -36,6 +37,18 @@ public sealed class LaunchChapterTests : IDisposable
 
     private static void ChapterNames(string code) =>
         Chapter().Should().Contain($"`{code}`", $"docs/tutorial/15-launch.md is meant to name {code}");
+
+    [Fact]
+    public async Task The_chapter_renders_its_tables_rather_than_printing_their_pipes()
+    {
+        var html = await new LearningLibrary(TestPaths.DocsRoot).ReadAsync("15-launch");
+
+        // Pipe syntax Markdig does not recognise comes out as a paragraph of pipes: what is read, the
+        // checks and the refusals are the three this page has.
+        html.Should().NotBeNull();
+        Regex.Matches(html!, "<table").Count.Should().Be(3);
+        html.Should().NotContain("|---");
+    }
 
     // ---- what it reads ----
 
@@ -220,6 +233,7 @@ public sealed class LaunchChapterTests : IDisposable
     [InlineData("اپ چطور این‌ها را می‌خواند؟", "src/Harbora.Web/Views/Apps/Details.cshtml")]
     [InlineData("استقرار خودکار (Git)", "src/Harbora.Web/Views/Apps/Details.cshtml")]
     [InlineData("نسخه‌ی تازه", "src/Harbora.Web/Views/Apps/Details.cshtml")]
+    [InlineData("دستور راه‌اندازی", "src/Harbora.Web/Views/Apps/Details.cshtml")]
     [InlineData("فرم کامل", "src/Harbora.Web/Views/Apps/Index.cshtml")]
     public void Each_label_the_chapter_quotes_is_on_the_screen_it_describes(string label, string drawnBy)
     {
