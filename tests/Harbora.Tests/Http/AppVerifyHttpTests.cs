@@ -224,4 +224,67 @@ public class AppVerifyHttpTests(HarboraHttpFixture fixture)
         response.RedirectPath().Should().NotBe($"/apps/details/{app.Id}");
         StoredFor(app.Id).Should().BeNull();
     }
+
+    /// <summary>
+    /// The panel's own registered client over a real socket, because what is being proved lives in how
+    /// that client is configured and a stub handler cannot follow anything. An absolute redirect is the
+    /// case that matters: an app builds it from the Host it was sent, so following it would leave through
+    /// the proxy again and read the proxy's 404 as the app's.
+    /// </summary>
+    [Fact]
+    public async Task Asking_the_app_directly_does_not_follow_a_redirect_back_out_and_sends_what_the_route_would()
+    {
+        using var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var received = AnswerOnceAsync(listener,
+            "HTTP/1.1 302 Found\r\nLocation: https://shop.example.invalid/login\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+
+        var h = new Verification.VerifierHarness();
+        h.Db.Servers.Add(new Harbora.Domain.Servers.Server
+        {
+            Id = h.ServerId, Name = "node-2", Hostname = "127.0.0.1", IsLocal = false
+        });
+        var verified = h.GivenDeployedApp();
+        h.GivenDomain(verified, "shop.example.invalid");
+        h.Db.Routes.Add(new Harbora.Domain.Networking.Route
+        {
+            WorkspaceId = verified.WorkspaceId, AppId = verified.Id, Host = "shop.example.invalid",
+            TargetService = "127.0.0.1", TargetPort = port
+        });
+        await h.Db.SaveChangesAsync();
+        h.Probe.Answer = new UptimeProbeResult(ProbeOutcome.Down, 404, 5, "answered 404, expected 200.");
+
+        var report = await h.Verifier(http: Panel.Resolve<IHttpClientFactory>()).RunAsync(
+            verified.Id, null, Verification.VerifierHarness.Now.AddMinutes(5), default);
+
+        var url = report.Checks.Single(c => c.Key == "url");
+        url.Status.Should().Be(Harbora.Infrastructure.Verification.AppCheckStatus.Failed,
+            "the app answered, so that 404 was not its own");
+        url.Detail.Should().Contain("302");
+
+        var request = await received.WaitAsync(TimeSpan.FromSeconds(30));
+        request.Should().StartWith("GET / HTTP/1.1");
+        request.Should().Contain("Host: shop.example.invalid");
+        request.Should().Contain("X-Forwarded-Host: shop.example.invalid");
+        request.Should().Contain("X-Forwarded-Proto: https");
+    }
+
+    private static async Task<string> AnswerOnceAsync(System.Net.Sockets.TcpListener listener, string response)
+    {
+        using var client = await listener.AcceptTcpClientAsync();
+        await using var stream = client.GetStream();
+
+        var buffer = new byte[4096];
+        var received = new System.Text.StringBuilder();
+        while (!received.ToString().Contains("\r\n\r\n", StringComparison.Ordinal))
+        {
+            var read = await stream.ReadAsync(buffer);
+            if (read == 0) break;
+            received.Append(System.Text.Encoding.ASCII.GetString(buffer, 0, read));
+        }
+
+        await stream.WriteAsync(System.Text.Encoding.ASCII.GetBytes(response));
+        return received.ToString();
+    }
 }

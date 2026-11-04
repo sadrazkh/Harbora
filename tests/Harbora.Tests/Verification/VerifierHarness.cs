@@ -112,6 +112,10 @@ internal sealed class VerifierHarness
     public FakeServerEngineFactory Engines { get; }
     public ScriptedServices Services { get; } = new();
     public ScriptedProbe Probe { get; } = new();
+
+    /// <summary>The app, asked directly. Only reached when the public address has answered 404.</summary>
+    public StubHttpClientFactory Http { get; } = new();
+
     public FixedClock Clock { get; } = new(Now);
     public PassthroughProtector Protector { get; } = new();
 
@@ -136,8 +140,9 @@ internal sealed class VerifierHarness
         new(new DbContextOptionsBuilder<HarboraDbContext>().UseInMemoryDatabase(_store).Options, scope);
 
     public AppVerifier Verifier(
-        TimeSpan? connectionTestTimeout = null, TimeSpan? servicesBudget = null, TimeSpan? engineTimeout = null) =>
-        new(Db, Engines, Services, Probe, Protector, new SecretRedactor(), Clock, NullLogger<AppVerifier>.Instance)
+        TimeSpan? connectionTestTimeout = null, TimeSpan? servicesBudget = null, TimeSpan? engineTimeout = null,
+        IHttpClientFactory? http = null) =>
+        new(Db, Engines, Services, Probe, http ?? Http, Protector, new SecretRedactor(), Clock, NullLogger<AppVerifier>.Instance)
         {
             ConnectionTestTimeout = connectionTestTimeout ?? TimeSpan.FromMinutes(2),
             ServicesBudget = servicesBudget ?? TimeSpan.FromMinutes(5),

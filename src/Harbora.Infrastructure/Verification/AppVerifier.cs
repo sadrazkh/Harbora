@@ -7,6 +7,7 @@ using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
 using Harbora.Domain.Deployments;
 using Harbora.Domain.Launch;
+using Harbora.Domain.Networking;
 using Harbora.Domain.Services;
 using Harbora.Infrastructure.Deployments;
 using Harbora.Infrastructure.Networking;
@@ -37,11 +38,19 @@ public sealed class AppVerifier(
     IServerEngineFactory engines,
     IManagedServiceEngine services,
     IUptimeProbe uptime,
+    IHttpClientFactory http,
     ISecretProtector protector,
     ISecretRedactor redactor,
     ISystemClock clock,
     ILogger<AppVerifier> logger) : IAppVerifier
 {
+    /// <summary>
+    /// The client that asks an app directly. It does not follow redirects: an app builds an absolute
+    /// redirect from the Host it was sent, so following one leads back out through the proxy, whose 404
+    /// would then read as the app's.
+    /// </summary>
+    public const string DirectClientName = "app-direct";
+
     private const string RunningKey = "running";
     private const string RestartsKey = "restarts";
     private const string UrlKey = "url";
@@ -56,6 +65,8 @@ public sealed class AppVerifier(
     /// is what the root rule below reads, so a 404 there is judged here rather than by the probe.
     /// </summary>
     private const int OrdinaryAnswer = 200;
+
+    private const int NotFound = 404;
 
     private const string RunsAndExits =
         "It runs and exits by design, so there is no container to find between runs.";
@@ -530,9 +541,9 @@ public sealed class AppVerifier(
         const string noAddress = "No address to check", noAddressFa = "آدرسی برای بررسی نیست";
         const string notAsked = "Could not check its address", notAskedFa = "نشد آدرسش را بررسی کرد";
 
-        // A little past the probe's own bound, which it enforces itself: this is only for a probe that
-        // has somehow not kept that promise.
-        return await AskAsync(new Asking(UrlKey, notAsked, notAskedFa), AddressTimeout + TimeSpan.FromSeconds(5), ct, async token =>
+        // A little past the two requests this can make, each of which enforces its own bound: this is
+        // only for one that has somehow not kept that promise.
+        return await AskAsync(new Asking(UrlKey, notAsked, notAskedFa), 2 * AddressTimeout + TimeSpan.FromSeconds(5), ct, async token =>
         {
             var app = run.App;
 
@@ -575,6 +586,7 @@ public sealed class AppVerifier(
 
             if (answer.HttpStatus is { } status)
             {
+                if (status == NotFound) return await AddressAnswered404Async(run, domain, url, token);
                 if (HealthProbeRule.Accepts(healthPath: null, status)) return AddressPassed(url, status);
 
                 return new AppCheck(UrlKey, AppCheckStatus.Failed,
@@ -606,17 +618,113 @@ public sealed class AppVerifier(
 
     private static AppCheck AddressPassed(Uri url, int status)
     {
-        // The same rule the deploy's health gate applies to the root: a 404 there says something is
+        // The same rule the deploy's health gate applies to the root: a refusal there says something is
         // serving, and only that, so the sentence says only that.
-        var noRootPage = status >= 400;
+        var refused = status >= 400;
         return new AppCheck(UrlKey, AppCheckStatus.Passed,
             "Its address works from outside", "آدرسش از بیرون کار می‌کند",
-            noRootPage
-                ? $"{url} answered {status}: there is no page at the root, but something is serving there."
+            refused
+                ? $"{url} answered {status}: something is serving there, but it gives no public page at the root."
                 : $"{url} answered {status}.",
-            noRootPage
-                ? $"{url} با کد {status} جواب داد: صفحه‌ای در ریشه نیست، ولی چیزی آنجا جواب می‌دهد."
+            refused
+                ? $"{url} با کد {status} جواب داد: چیزی آنجا جواب می‌دهد، ولی در ریشه صفحهٔ عمومی نشان نمی‌دهد."
                 : $"{url} با کد {status} جواب داد.");
+    }
+
+    /// <summary>
+    /// A 404 does not say who gave it. It is what an API with no root route answers, and it is also what
+    /// the proxy answers for a host it has no route to, and their bodies cannot separate them: Go's
+    /// default mux, which Traefik is built on, says the same <c>404 page not found</c> as any Go app. So
+    /// the only way to tell is to ask the app itself. If it says something else, that 404 was not its own.
+    /// </summary>
+    private async Task<AppCheck> AddressAnswered404Async(Run run, DomainName domain, Uri url, CancellationToken token)
+    {
+        var upstream = await AppUpstreamAsync(run, domain.Host, token);
+        var direct = upstream is { } target ? await AskAppDirectlyAsync(target, domain, token) : null;
+
+        if (direct == NotFound)
+            return new AppCheck(UrlKey, AppCheckStatus.Passed,
+                "Its address works from outside", "آدرسش از بیرون کار می‌کند",
+                $"{url} answered {NotFound}, and so does the app when asked directly: the address reaches it, and it has no page at the root.",
+                $"{url} با کد {NotFound} جواب داد و خود اپ هم وقتی مستقیم پرسیده می‌شود همین را می‌گوید: آدرس به اپ می‌رسد و اپ در ریشه صفحه‌ای ندارد.");
+
+        if (direct is { } status)
+            return new AppCheck(UrlKey, AppCheckStatus.Failed,
+                "Its address does not reach the app", "آدرسش به اپ نمی‌رسد",
+                $"{url} answered {NotFound}, but the app itself answers {status} when asked directly at {upstream!.Value.Host}:{upstream.Value.Port}. So that {NotFound} comes from the proxy, which has no working route to this app.",
+                $"{url} با کد {NotFound} جواب داد، ولی خود اپ وقتی مستقیم از {upstream!.Value.Host}:{upstream.Value.Port} پرسیده می‌شود با کد {status} جواب می‌دهد. پس این {NotFound} از پروکسی می‌آید که راه درستی به این اپ ندارد.",
+                "Deploy it again, which writes its route again. If that does not help, look at this address on the Routes page.",
+                "دوباره مستقرش کنید تا مسیرش دوباره نوشته شود. اگر نشد، این آدرس را در صفحهٔ مسیرها بررسی کنید.",
+                run.DeploymentsPath);
+
+        return new AppCheck(UrlKey, AppCheckStatus.Warning,
+            "Could not tell whether its address reaches the app", "نشد فهمید آدرسش به اپ می‌رسد یا نه",
+            $"{url} answered {NotFound}. That is either the app's own answer or the proxy having no route to it, and the app could not be asked directly to tell which.",
+            $"{url} با کد {NotFound} جواب داد. این یا جواب خود اپ است یا یعنی پروکسی راهی به آن ندارد، و نشد مستقیم از اپ پرسید تا معلوم شود کدام است.",
+            "Open the address and see whether that page is the app's own. If it is not, deploy it again, which writes its route again.",
+            "آدرس را باز کنید و ببینید آن صفحه مال خود اپ است یا نه. اگر نیست، دوباره مستقرش کنید تا مسیرش دوباره نوشته شود.",
+            run.DeploymentsPath);
+    }
+
+    /// <summary>
+    /// Where the deploy's health gate asked this app. On the panel's own server that is the serving
+    /// container by name, worked out from the deployment rather than read from the route, because the
+    /// route is the thing under suspicion: one pointing at the wrong service would otherwise be asked
+    /// about itself. A Compose stack's web service and a remote node's published port survive only on
+    /// the route, so those are read from it. Null when nothing says.
+    /// </summary>
+    private async Task<(string Host, int Port)?> AppUpstreamAsync(Run run, string host, CancellationToken token)
+    {
+        var app = run.App;
+
+        // The same reading IServerEngineFactory gives a server whose row has gone: this machine.
+        var isLocal = await db.Servers.IgnoreQueryFilters().AsNoTracking()
+            .Where(s => s.Id == app.ServerId)
+            .Select(s => (bool?)s.IsLocal)
+            .FirstOrDefaultAsync(token) ?? true;
+
+        if (isLocal && app.SourceType != AppSourceType.DockerCompose && run.Deployment is { } deployment)
+            return (DeploymentPlanning.ContainerName(app.WorkspaceId, app.Slug, deployment.Number), app.ContainerPort);
+
+        var routes = await db.Routes.IgnoreQueryFilters().AsNoTracking()
+            .Where(r => r.AppId == app.Id && !r.MaintenanceRedirected && r.TargetService != "")
+            .ToListAsync(token);
+
+        var route = routes.FirstOrDefault(r => r.Host == host) ?? routes.FirstOrDefault();
+        return route is null ? null : (route.TargetService, route.TargetPort);
+    }
+
+    /// <summary>
+    /// Asks the app what it says to the request the route would have sent it, or null when it cannot be
+    /// asked: the name does not resolve from here, nothing is listening, a remote node is out of reach.
+    ///
+    /// <para>
+    /// With the domain and scheme the proxy would have passed on, or this compares two different
+    /// questions. An app with an allowed-hosts list refuses a request addressed to its container name,
+    /// and one that forces HTTPS redirects a request that does not say it arrived that way, and either
+    /// would read here as "the app answers, so the route is broken".
+    /// </para>
+    /// </summary>
+    private async Task<int?> AskAppDirectlyAsync((string Host, int Port) upstream, DomainName domain, CancellationToken token)
+    {
+        try
+        {
+            var client = http.CreateClient(DirectClientName);
+            client.Timeout = AddressTimeout;
+
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"http://{upstream.Host}:{upstream.Port}/");
+            request.Headers.Host = domain.Host;
+            request.Headers.TryAddWithoutValidation("X-Forwarded-Host", domain.Host);
+            request.Headers.TryAddWithoutValidation("X-Forwarded-Proto", domain.SslEnabled ? "https" : "http");
+
+            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
+            return (int)response.StatusCode;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !token.IsCancellationRequested)
+        {
+            logger.LogInformation(ex, "Could not ask {Host}:{Port} directly.", upstream.Host, upstream.Port);
+            return null;
+        }
     }
 
     // ---- is its log complaining ----

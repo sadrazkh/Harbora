@@ -763,8 +763,8 @@ public class AppVerifierTests
 
     [Theory]
     [InlineData(401)]
-    [InlineData(404)]
-    public async Task A_status_below_500_at_the_root_passes_because_something_is_serving(int status)
+    [InlineData(403)]
+    public async Task A_refusal_at_the_root_passes_because_something_is_serving_and_the_app_is_not_asked(int status)
     {
         var h = new VerifierHarness();
         var app = h.GivenDeployedApp();
@@ -774,7 +774,172 @@ public class AppVerifierTests
         var url = Check(await RunAsync(h, app), "url");
 
         url.Status.Should().Be(AppCheckStatus.Passed);
-        url.Detail.Should().Contain("no page at the root", "it must not read as a healthy home page");
+        url.Detail.Should().Contain("no public page at the root", "it must not read as a healthy home page");
+        h.Http.Attempts.Should().Be(0, "only a 404 leaves open who gave it");
+    }
+
+    // ---- url: whose 404 is it ----
+
+    private static void PublicAddressAnswers404(VerifierHarness h) =>
+        h.Probe.Answer = new UptimeProbeResult(ProbeOutcome.Down, 404, 5, "answered 404, expected 200.");
+
+    [Fact]
+    public async Task A_404_the_app_also_gives_is_its_own_and_passes()
+    {
+        var h = new VerifierHarness();
+        var app = h.GivenDeployedApp(configure: a => a.ContainerPort = 8080);
+        h.GivenDomain(app);
+        PublicAddressAnswers404(h);
+        h.Http.Status = System.Net.HttpStatusCode.NotFound;
+
+        var url = Check(await RunAsync(h, app), "url");
+
+        url.Status.Should().Be(AppCheckStatus.Passed);
+        url.Detail.Should().Contain("so does the app when asked directly");
+        h.Http.RequestedUrls.Should().Equal($"http://{ContainerOf(app)}:8080/");
+    }
+
+    [Theory]
+    [InlineData(System.Net.HttpStatusCode.OK)]
+    [InlineData(System.Net.HttpStatusCode.Found)]
+    [InlineData(System.Net.HttpStatusCode.Unauthorized)]
+    [InlineData(System.Net.HttpStatusCode.InternalServerError)]
+    public async Task A_404_the_app_does_not_give_came_from_the_proxy_and_fails(System.Net.HttpStatusCode direct)
+    {
+        var h = new VerifierHarness();
+        var app = h.GivenDeployedApp(configure: a => a.ContainerPort = 8080);
+        h.GivenDomain(app);
+        PublicAddressAnswers404(h);
+        h.Http.Status = direct;
+
+        var url = Check(await RunAsync(h, app), "url");
+
+        url.Status.Should().Be(AppCheckStatus.Failed);
+        url.Title.Should().Contain("does not reach the app");
+        url.Detail.Should().Contain(((int)direct).ToString()).And.Contain($"{ContainerOf(app)}:8080");
+        url.Fix.Should().Contain("Deploy it again");
+        url.LinkPath.Should().Be($"/apps/{app.Id}/deployments");
+    }
+
+    [Fact]
+    public async Task The_app_is_asked_the_question_the_route_would_have_asked_it()
+    {
+        var h = new VerifierHarness();
+        var app = h.GivenDeployedApp();
+        h.GivenDomain(app, "shop.example.com");
+        PublicAddressAnswers404(h);
+        h.Http.Status = System.Net.HttpStatusCode.NotFound;
+
+        await RunAsync(h, app);
+
+        h.Http.RequestedHosts.Should().Equal(["shop.example.com"],
+            "an app with an allowed-hosts list refuses a request addressed to its container name, " +
+            "which would read as the route being broken");
+    }
+
+    [Fact]
+    public async Task An_app_that_cannot_be_asked_is_a_warning_and_never_a_pass()
+    {
+        var h = new VerifierHarness();
+        var app = h.GivenDeployedApp();
+        h.GivenDomain(app);
+        PublicAddressAnswers404(h);
+        h.Http.Failure = new HttpRequestException("Name or service not known");
+
+        var report = await RunAsync(h, app);
+        var url = Check(report, "url");
+
+        url.Status.Should().Be(AppCheckStatus.Warning);
+        url.Title.Should().Contain("Could not tell");
+        url.Detail.Should().Contain("could not be asked directly");
+        report.IsComplete.Should().BeTrue("there is nothing left to wait for");
+    }
+
+    [Fact]
+    public async Task An_app_that_does_not_answer_in_time_is_the_same_warning()
+    {
+        var h = new VerifierHarness();
+        var app = h.GivenDeployedApp();
+        h.GivenDomain(app);
+        PublicAddressAnswers404(h);
+        h.Http.Failure = new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout.");
+
+        Check(await RunAsync(h, app), "url").Status.Should().Be(AppCheckStatus.Warning);
+    }
+
+    [Fact]
+    public async Task A_remote_nodes_app_is_asked_where_its_route_points()
+    {
+        var h = new VerifierHarness();
+        h.Db.Servers.Add(new Harbora.Domain.Servers.Server { Id = h.ServerId, Name = "node-2", Hostname = "node2.internal", IsLocal = false });
+        var app = h.GivenDeployedApp();
+        h.GivenDomain(app, "shop.example.com");
+        h.Db.Routes.Add(new Harbora.Domain.Networking.Route
+        {
+            WorkspaceId = app.WorkspaceId, AppId = app.Id, Host = "shop.example.com",
+            TargetService = "node2.internal", TargetPort = 20417
+        });
+        await h.Db.SaveChangesAsync();
+        PublicAddressAnswers404(h);
+
+        var url = Check(await RunAsync(h, app), "url");
+
+        url.Status.Should().Be(AppCheckStatus.Failed);
+        h.Http.RequestedUrls.Should().Equal("http://node2.internal:20417/");
+    }
+
+    [Fact]
+    public async Task A_remote_app_with_no_route_to_read_cannot_be_asked_and_says_so()
+    {
+        var h = new VerifierHarness();
+        h.Db.Servers.Add(new Harbora.Domain.Servers.Server { Id = h.ServerId, Name = "node-2", Hostname = "node2.internal", IsLocal = false });
+        var app = h.GivenDeployedApp();
+        h.GivenDomain(app);
+        PublicAddressAnswers404(h);
+
+        Check(await RunAsync(h, app), "url").Status.Should().Be(AppCheckStatus.Warning);
+        h.Http.Attempts.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task A_compose_stacks_web_service_is_asked_where_its_route_points()
+    {
+        var h = new VerifierHarness();
+        var app = h.GivenApp(configure: a => a.SourceType = AppSourceType.DockerCompose);
+        h.GivenActiveDeployment(app);
+        h.GivenDomain(app, "shop.example.com");
+        var web = DeploymentPlanning.ComposeContainerName(app.WorkspaceId, app.Slug, "web", 7);
+        h.GivenContainer(web, app, composeService: "web");
+        h.Db.Routes.Add(new Harbora.Domain.Networking.Route
+        {
+            WorkspaceId = app.WorkspaceId, AppId = app.Id, Host = "shop.example.com",
+            TargetService = web, TargetPort = 3000
+        });
+        await h.Db.SaveChangesAsync();
+        PublicAddressAnswers404(h);
+        h.Http.Status = System.Net.HttpStatusCode.NotFound;
+
+        Check(await RunAsync(h, app), "url").Status.Should().Be(AppCheckStatus.Passed);
+        h.Http.RequestedUrls.Should().Equal($"http://{web}:3000/");
+    }
+
+    [Fact]
+    public async Task A_route_pointing_at_the_wrong_service_is_not_asked_about_itself()
+    {
+        var h = new VerifierHarness();
+        var app = h.GivenDeployedApp(configure: a => a.ContainerPort = 8080);
+        h.GivenDomain(app, "shop.example.com");
+        h.Db.Routes.Add(new Harbora.Domain.Networking.Route
+        {
+            WorkspaceId = app.WorkspaceId, AppId = app.Id, Host = "shop.example.com",
+            TargetService = "some-other-service", TargetPort = 80
+        });
+        await h.Db.SaveChangesAsync();
+        PublicAddressAnswers404(h);
+
+        await RunAsync(h, app);
+
+        h.Http.RequestedUrls.Should().Equal($"http://{ContainerOf(app)}:8080/");
     }
 
     [Theory]
@@ -1148,7 +1313,7 @@ public class AppVerifierTests
         await RunAsync(h, app);
 
         AppVerifier VerifierOver(IWorkspaceScope scope) =>
-            new(h.Open(scope), h.Engines, h.Services, h.Probe, h.Protector,
+            new(h.Open(scope), h.Engines, h.Services, h.Probe, h.Http, h.Protector,
                 new Harbora.Infrastructure.Security.SecretRedactor(), h.Clock,
                 Microsoft.Extensions.Logging.Abstractions.NullLogger<AppVerifier>.Instance);
 
