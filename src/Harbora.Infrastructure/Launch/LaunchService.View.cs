@@ -34,7 +34,7 @@ public sealed partial class LaunchService
         var app = launch.AppId is { } appId
             ? await db.Apps.IgnoreQueryFilters().AsNoTracking()
                 .Where(a => a.Id == appId && a.WorkspaceId == launch.WorkspaceId)
-                .Select(a => new { a.Id, a.Name })
+                .Select(a => new { a.Id, a.Name, a.Status })
                 .FirstOrDefaultAsync(ct)
             : null;
 
@@ -64,7 +64,17 @@ public sealed partial class LaunchService
                 checks = (await verifier.GetLatestAsync(app.Id, ct))?.Checks ?? [];
         }
 
-        var unset = app is not null && choices is not null ? await UnsetVariablesAsync(app.Id, choices, ct) : [];
+        var unset = app is not null && choices is not null
+            ? await UnsetVariablesAsync(app.Id, choices, LaunchJson.ReadInspection(launch.InspectionJson), ct)
+            : [];
+
+        // From the rows and never from a message: this is what somebody is paying for while they read
+        // the page, and a sentence written when the launch failed goes on saying so after a delete.
+        var created = services
+            .Select(s => new LaunchCreatedThing("database", s.Name, $"/databases/{s.Id}", s.Status == ServiceStatus.Running))
+            .ToList();
+        if (app is not null)
+            created.Add(new LaunchCreatedThing("app", app.Name, $"/apps/details/{app.Id}", app.Status == AppStatus.Running));
 
         var now = clock.UtcNow;
         return new LaunchView(
@@ -78,25 +88,37 @@ public sealed partial class LaunchService
             launch.DeploymentId,
             launch.FailureMessage,
             launch.FailureMessageFa,
-            StepsOf(launch, choices, services, app?.Id, deployment, unset),
+            StepsOf(launch, choices, services, app?.Id, deployment, unset, checks),
             checks,
             LaunchAdvance.CanRetry(launch, now),
-            LaunchAdvance.IsTerminal(launch.Status));
+            LaunchAdvance.IsTerminal(launch.Status),
+            AppGone: launch.AppId is not null && app is null,
+            Created: created);
     }
 
     /// <summary>
     /// What this launch was told about and the app does not have: an answer left blank, or one a retry
     /// could not recall. Said on the timeline, because an app with a missing key often starts anyway.
-    /// An alias is not one of these: its attachment answers it.
+    /// An alias is not one of these, and nor is a name a ticked engine's attachment sets: those are
+    /// answered. Whereas a name the example file expects from an attachment, with that engine unticked
+    /// and no value given, is answered by nothing, and is said even though it was never asked.
     /// </summary>
-    private async Task<IReadOnlyList<string>> UnsetVariablesAsync(Guid appId, LaunchChoices choices, CancellationToken ct)
+    private async Task<IReadOnlyList<string>> UnsetVariablesAsync(
+        Guid appId, LaunchChoices choices, SourceInspection inspection, CancellationToken ct)
     {
         var set = await db.EnvironmentVariables.IgnoreQueryFilters().AsNoTracking()
             .Where(v => v.AppId == appId).Select(v => v.Key).ToListAsync(ct);
         var aliased = choices.Services.SelectMany(s => s.Aliases ?? []).Select(a => a.Name).ToHashSet(StringComparer.Ordinal);
 
+        var ticked = choices.Services.Select(s => s.Type).ToHashSet();
+        var attached = AttachEnvNames.All
+            .Where(names => ticked.Contains(AttachEnvRoles.TypeFor(names.Key)))
+            .SelectMany(names => names.Value)
+            .ToHashSet(StringComparer.Ordinal);
+
         return choices.EnvVars.Select(v => v.Key)
-            .Where(key => !set.Contains(key) && !aliased.Contains(key))
+            .Concat(inspection.EnvVars.Where(v => v.Disposition == EnvVarDisposition.ProvidedByAttach).Select(v => v.Name))
+            .Where(key => !set.Contains(key) && !aliased.Contains(key) && !attached.Contains(key))
             .Distinct()
             .ToList();
     }
@@ -111,7 +133,7 @@ public sealed partial class LaunchService
 
     private static IReadOnlyList<LaunchStepView> StepsOf(
         AppLaunch launch, LaunchChoices? choices, IReadOnlyList<LaunchServiceState> services, Guid? appId,
-        LaunchDeploymentState? deployment, IReadOnlyList<string> unset)
+        LaunchDeploymentState? deployment, IReadOnlyList<string> unset, IReadOnlyList<AppCheck> checks)
     {
         // Whatever a launch that ended early never reached. A failed one may still get there on a
         // retry, so those steps are only waiting.
@@ -156,6 +178,21 @@ public sealed partial class LaunchService
             servicesStep = new(LaunchStepKeys.Services, servicesTitle, servicesTitleFa, LaunchStepState.Running,
                 waiting.Length == 0 ? null : $"Starting {waiting}.", waiting.Length == 0 ? null : $"در حال راه‌اندازی {waiting}.", serviceLink);
         }
+        else if (services.FirstOrDefault(s => s.Status == ServiceStatus.Failed) is { } broken)
+        {
+            // A launch that stopped at the app, with its database failing behind it, did not get its
+            // database. How far the launch got is one thing and what the rows say is another.
+            servicesStep = new(LaunchStepKeys.Services, servicesTitle, servicesTitleFa, LaunchStepState.Failed,
+                $"The database {broken.Name} could not be started: {broken.ErrorMessage ?? "It gave no reason."}",
+                $"دیتابیس «{broken.Name}» بالا نیامد: {broken.ErrorMessage ?? "دلیلی گزارش نکرد."}",
+                serviceLink);
+        }
+        else if (services.Any(s => s.Status == ServiceStatus.Provisioning))
+        {
+            var starting = string.Join(", ", services.Where(s => s.Status == ServiceStatus.Provisioning).Select(s => s.Name));
+            servicesStep = new(LaunchStepKeys.Services, servicesTitle, servicesTitleFa, LaunchStepState.Running,
+                $"Starting {starting}.", $"در حال راه‌اندازی {starting}.", serviceLink);
+        }
         else
         {
             servicesStep = new(LaunchStepKeys.Services, servicesTitle, servicesTitleFa, LaunchStepState.Done);
@@ -168,7 +205,7 @@ public sealed partial class LaunchService
         {
             var named = string.Join(", ", unset);
             unsetDetail = $"Not set: {named}. Set them on the app's page if it needs them.";
-            unsetDetailFa = $"تنظیم نشده: {named}. اگر اپ لازمشان دارد، در صفحهٔ اپ تنظیمشان کنید.";
+            unsetDetailFa = $"تنظیم نشده: {named}. اگر اپ لازمشان دارد، در صفحهٔ اپ تنظیمشان کن.";
         }
 
         LaunchStepView appStep;
@@ -213,9 +250,13 @@ public sealed partial class LaunchService
             _ when launch.FailedStep == LaunchStepKeys.Verify => Failed(LaunchStepKeys.Verify, verifyTitle, verifyTitleFa),
             LaunchStatus.Verifying => new LaunchStepView(LaunchStepKeys.Verify, verifyTitle, verifyTitleFa, LaunchStepState.Running),
             LaunchStatus.Succeeded => new LaunchStepView(LaunchStepKeys.Verify, verifyTitle, verifyTitleFa, LaunchStepState.Done),
-            // It finished, and what it found is not good: never the green treatment.
-            LaunchStatus.SucceededWithProblems => new LaunchStepView(LaunchStepKeys.Verify, verifyTitle, verifyTitleFa, LaunchStepState.Failed,
-                "The app is running, but a check found a problem.", "اپ بالاست، ولی یکی از بررسی‌ها مشکلی پیدا کرد."),
+            // It finished, and what it found is not good: never the green treatment. Neither sentence
+            // says it is running, because this is also where a run that could not find out ends up.
+            LaunchStatus.SucceededWithProblems => checks.Any(c => c.Status is AppCheckStatus.Failed or AppCheckStatus.Warning)
+                ? new LaunchStepView(LaunchStepKeys.Verify, verifyTitle, verifyTitleFa, LaunchStepState.Failed,
+                    "The app is deployed, but a check found a problem.", "اپ مستقر شد، ولی یکی از بررسی‌ها مشکلی پیدا کرد.")
+                : new LaunchStepView(LaunchStepKeys.Verify, verifyTitle, verifyTitleFa, LaunchStepState.Failed,
+                    "The app is deployed, but Harbora could not check that it is running.", "اپ مستقر شد، ولی هاربورا نتوانست بررسی کند که در حال اجراست."),
             _ => new LaunchStepView(LaunchStepKeys.Verify, verifyTitle, verifyTitleFa, neverReached)
         };
 

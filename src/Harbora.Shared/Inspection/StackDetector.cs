@@ -67,13 +67,31 @@ internal static class StackDetector
 
     /// <summary>Something directly in this folder says the app is here. Project files further down do not count: see <see cref="LooksLikeAnApp"/>.</summary>
     public static bool HoldsSomething(SourceTree folder) =>
+        folder.HasFile("package.json") || HasAny(folder, StaticMarkers) || HoldsSomethingToRun(folder);
+
+    /// <summary>What says an app is here even though a <c>package.json</c> or an <c>index.html</c> might be there for some other reason.</summary>
+    private static bool HoldsSomethingToRun(SourceTree folder) =>
         HasAny(folder, DockerfileNames) || HasAny(folder, ComposeNames) || HasAny(folder, PhpMarkers) ||
-        HasAny(folder, PythonManifests) || HasAny(folder, StaticMarkers) || HasAny(folder, DotNetRootMarkers) ||
-        folder.HasFile("package.json") || folder.HasFile("go.mod") ||
+        HasAny(folder, PythonManifests) || HasAny(folder, DotNetRootMarkers) ||
+        folder.HasFile("go.mod") ||
         folder.FileNames().Any(n =>
             n.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) ||
             n.EndsWith(".sln", StringComparison.OrdinalIgnoreCase) ||
             n.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// A <c>package.json</c> that can start nothing, and nothing else in this folder that can: the root
+    /// of a JavaScript monorepo, holding its build tooling while the apps live further down. Not a Laravel
+    /// with a <c>resources/</c> tree, whose <c>composer.json</c> says otherwise, and not a Vite project
+    /// with its <c>index.html</c> beside it, or a Procfile saying how this folder runs.
+    /// </summary>
+    public static bool IsOnlyTooling(SourceTree folder) =>
+        folder.HasFile("package.json") && !NodeStartRule.CanStart(folder) &&
+        !HasAny(folder, StaticMarkers) && !folder.HasFile("Procfile") && !HoldsSomethingToRun(folder);
+
+    /// <summary>A folder that could be run by itself, which a folder holding only an <c>index.html</c> usually cannot: that is a <c>public/</c>.</summary>
+    public static bool CouldRunByItself(SourceTree folder) =>
+        folder.HasFile("package.json") || HoldsSomethingToRun(folder) || folder.Csprojs().Count > 0;
 
     /// <summary>
     /// Whether a candidate folder would count as an app. A nested project does, because the pipeline

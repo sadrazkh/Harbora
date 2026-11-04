@@ -7,6 +7,45 @@ namespace Harbora.Tests;
 /// <summary>Which managed services a source tree appears to need, and the evidence shown beside each.</summary>
 public class SourceInspectorServiceTests : InspectorTreeTests
 {
+    /// <summary>What most of these pin, leaving the Persian of each to the tests below that are about it.</summary>
+    private static ServiceEvidence InEnglish(ServiceEvidence evidence) => evidence with { ReasonFa = null };
+
+    [Fact]
+    public void Every_reason_comes_in_persian_too_for_a_screen_that_is_persian_first()
+    {
+        Write("package.json", PackageJson("pg"));
+        Write("prisma/schema.prisma", "datasource db {\n  provider = \"mysql\"\n}\n");
+        Write("docker-compose.dev.yml", "services:\n  cache:\n    image: redis:7\n");
+        Write(".env.example",
+            "DATABASE_URL=mongodb://localhost/x\nDB_CONNECTION=mariadb\nRABBITMQ_HOST=\nMEILI_HOST=\n");
+
+        var evidence = Inspect().Services.SelectMany(s => s.Evidence).ToList();
+
+        evidence.Select(e => e.Reason).Should().Contain(r => r.Contains("dependencies"))
+            .And.Contain(r => r.Contains("provider"))
+            .And.Contain(r => r.StartsWith("image:"))
+            .And.Contain(r => r.Contains("://"))
+            .And.Contain(r => r.StartsWith("DB_CONNECTION"))
+            .And.Contain(r => r.Contains("example file"));
+
+        evidence.Select(e => e.ReasonFa).Should().Contain("«pg» در dependencies");
+        evidence.Select(e => e.ReasonFa).Should().Contain("ایمیج redis:7 را بالا می‌آورد");
+
+        evidence.Should().OnlyContain(e => e.ReasonFa != null && e.ReasonFa.Any(c => c >= '\u0600' && c <= '\u06FF'),
+            "a reason in English is what a person on the Persian screen used to read");
+    }
+
+    [Fact]
+    public void A_persian_reason_names_a_value_no_more_than_the_english_one_does()
+    {
+        Write(".env.example", "DATABASE_URL=postgres://me:hunter2@db.example.com/shop\n");
+
+        var evidence = Service(Inspect(), DetectedServiceKind.Postgres).Evidence.Should().ContainSingle().Subject;
+
+        evidence.Reason.Should().NotContain("hunter2");
+        evidence.ReasonFa.Should().NotContain("hunter2").And.Contain("DATABASE_URL");
+    }
+
     // --- The table, row by row ---------------------------------------------------------------
 
     [Theory]
@@ -33,7 +72,7 @@ public class SourceInspectorServiceTests : InspectorTreeTests
         var service = Service(Inspect(), kind);
 
         service.Certain.Should().BeTrue();
-        service.Evidence.Should().Equal(new ServiceEvidence("package.json", $"\"{library}\" in dependencies"));
+        service.Evidence.Select(InEnglish).Should().Equal(new ServiceEvidence("package.json", $"\"{library}\" in dependencies"));
     }
 
     [Theory]
@@ -65,7 +104,7 @@ public class SourceInspectorServiceTests : InspectorTreeTests
         var service = Service(Inspect(), kind);
 
         service.Certain.Should().BeTrue();
-        service.Evidence.Should().Equal(new ServiceEvidence("requirements.txt", $"\"{library}\" in requirements.txt"));
+        service.Evidence.Select(InEnglish).Should().Equal(new ServiceEvidence("requirements.txt", $"\"{library}\" in requirements.txt"));
     }
 
     [Theory]
@@ -88,7 +127,7 @@ public class SourceInspectorServiceTests : InspectorTreeTests
         var service = Service(Inspect(), kind);
 
         service.Certain.Should().BeTrue();
-        service.Evidence.Should().Equal(new ServiceEvidence("App.csproj", $"\"{package}\" in PackageReference"));
+        service.Evidence.Select(InEnglish).Should().Equal(new ServiceEvidence("App.csproj", $"\"{package}\" in PackageReference"));
     }
 
     [Theory]
@@ -110,7 +149,7 @@ public class SourceInspectorServiceTests : InspectorTreeTests
         var service = Service(Inspect(), kind);
 
         service.Certain.Should().BeTrue();
-        service.Evidence.Should().Equal(new ServiceEvidence("go.mod", $"\"{module}\" in go.mod"));
+        service.Evidence.Select(InEnglish).Should().Equal(new ServiceEvidence("go.mod", $"\"{module}\" in go.mod"));
     }
 
     [Theory]
@@ -128,7 +167,7 @@ public class SourceInspectorServiceTests : InspectorTreeTests
         var service = Service(Inspect(), kind);
 
         service.Certain.Should().BeTrue();
-        service.Evidence.Should().Equal(new ServiceEvidence("composer.json", $"\"{package}\" in require"));
+        service.Evidence.Select(InEnglish).Should().Equal(new ServiceEvidence("composer.json", $"\"{package}\" in require"));
     }
 
     // --- Reading each language's file carefully ----------------------------------------------
@@ -141,7 +180,7 @@ public class SourceInspectorServiceTests : InspectorTreeTests
         var service = Service(Inspect(), DetectedServiceKind.Postgres);
 
         service.Certain.Should().BeFalse("creating a database costs money, and a test helper is not consent");
-        service.Evidence.Should().Equal(new ServiceEvidence("package.json", "\"pg\" in devDependencies"));
+        service.Evidence.Select(InEnglish).Should().Equal(new ServiceEvidence("package.json", "\"pg\" in devDependencies"));
     }
 
     [Fact]
@@ -210,7 +249,7 @@ public class SourceInspectorServiceTests : InspectorTreeTests
         Write("requirements/base.txt", "psycopg2\n-r ../requirements.txt\n");
         Write("main.py");
 
-        Service(Inspect(), DetectedServiceKind.Postgres).Evidence.Should()
+        Service(Inspect(), DetectedServiceKind.Postgres).Evidence.Select(InEnglish).Should()
             .Equal(new ServiceEvidence("requirements/base.txt", "\"psycopg2\" in base.txt"));
     }
 
@@ -324,7 +363,7 @@ public class SourceInspectorServiceTests : InspectorTreeTests
 
         var service = Service(Inspect(), DetectedServiceKind.Postgres);
 
-        service.Evidence.Should().Equal(new ServiceEvidence("Shop.Data/Shop.Data.csproj", "\"Npgsql.EntityFrameworkCore.PostgreSQL\" in PackageReference"));
+        service.Evidence.Select(InEnglish).Should().Equal(new ServiceEvidence("Shop.Data/Shop.Data.csproj", "\"Npgsql.EntityFrameworkCore.PostgreSQL\" in PackageReference"));
     }
 
     [Fact]
@@ -416,7 +455,7 @@ public class SourceInspectorServiceTests : InspectorTreeTests
         var service = Service(Inspect(), kind);
 
         service.Certain.Should().BeTrue();
-        service.Evidence.Should().Equal(new ServiceEvidence("prisma/schema.prisma", $"datasource provider = \"{provider}\""));
+        service.Evidence.Select(InEnglish).Should().Equal(new ServiceEvidence("prisma/schema.prisma", $"datasource provider = \"{provider}\""));
     }
 
     [Fact]
@@ -448,7 +487,7 @@ public class SourceInspectorServiceTests : InspectorTreeTests
         var service = Service(Inspect(), kind);
 
         service.Certain.Should().BeTrue();
-        service.Evidence.Should().Equal(new ServiceEvidence(".env.example", $"DB_CONNECTION={connection}"));
+        service.Evidence.Select(InEnglish).Should().Equal(new ServiceEvidence(".env.example", $"DB_CONNECTION={connection}"));
     }
 
     [Theory]
@@ -594,7 +633,7 @@ public class SourceInspectorServiceTests : InspectorTreeTests
         result.Port.Should().Be(3000);
         var service = Service(result, DetectedServiceKind.Postgres);
         service.Certain.Should().BeTrue();
-        service.Evidence.Should().Equal(new ServiceEvidence("docker-compose.dev.yml", "image: postgres:16"));
+        service.Evidence.Select(InEnglish).Should().Equal(new ServiceEvidence("docker-compose.dev.yml", "image: postgres:16"));
         Codes(result).Should().NotContain("compose-runs-own-services");
     }
 

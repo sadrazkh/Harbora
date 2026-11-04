@@ -9,6 +9,36 @@ namespace Harbora.Tests;
 /// <summary>Reading the example env files and saying what each name means, rule by rule, in the brief's order.</summary>
 public class SourceInspectorEnvTests : InspectorTreeTests
 {
+    [Theory]
+    [InlineData("DB_HOST", EnvAliasRole.Host)]
+    [InlineData("DB_PORT", EnvAliasRole.Port)]
+    [InlineData("DB_USERNAME", EnvAliasRole.User)]
+    [InlineData("DB_PASSWORD", EnvAliasRole.Password)]
+    [InlineData("DB_NAME", EnvAliasRole.Database)]
+    [InlineData("DB_URL", EnvAliasRole.Url)]
+    public void A_generic_database_name_with_no_engine_to_go_on_keeps_its_role_for_when_one_is_ticked(string name, EnvAliasRole role)
+    {
+        Write("index.php", "<?php");
+        Write(".env.example", name + "=\n");
+
+        var variable = Var(Inspect(), name);
+
+        variable.Disposition.Should().Be(EnvVarDisposition.NeedsAnswer);
+        variable.Service.Should().BeNull("nothing says which engine, and only a person can");
+        variable.Role.Should().Be(role);
+    }
+
+    [Theory]
+    [InlineData("DB_HOST", true)]
+    [InlineData("DATABASE_NAME", true)]
+    [InlineData("POSTGRES_HOST", false)]
+    [InlineData("MONGO_URI", false)]
+    [InlineData("DATABASE_URL", false)]
+    public void Only_a_name_that_could_be_any_engine_counts_as_generic(string name, bool generic)
+    {
+        AttachEnvNames.IsGenericDatabaseName(name).Should().Be(generic);
+    }
+
     private SourceInspection InspectExample(string example, params string[] libraries)
     {
         Write("package.json", PackageJson(libraries));

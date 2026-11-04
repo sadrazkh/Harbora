@@ -16,7 +16,11 @@ public enum AppCheckStatus
     /// </summary>
     Skipped = 3,
 
-    /// <summary>Not settled yet (a certificate still being issued). Becomes Failed at the give-up time.</summary>
+    /// <summary>
+    /// Not settled yet (a certificate still being issued), which becomes Failed at the give-up time. Also
+    /// the one check of a run the panel itself could not finish, which is stored nowhere and says nothing
+    /// about the app: whoever is waiting asks again.
+    /// </summary>
     Pending = 4
 }
 
@@ -43,6 +47,8 @@ public sealed record AppVerificationReport(
     IReadOnlyList<AppCheck> Checks)
 {
     public bool IsComplete => Checks.All(c => c.Status != AppCheckStatus.Pending);
+
+    /// <summary>Only what failed. Not whether the app works, which takes more than that: see <c>LaunchAdvance.VerdictOn</c>.</summary>
     public bool HasFailures => Checks.Any(c => c.Status == AppCheckStatus.Failed);
 }
 

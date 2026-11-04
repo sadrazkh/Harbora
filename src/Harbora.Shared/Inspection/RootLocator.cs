@@ -22,6 +22,21 @@ internal static class RootLocator
         "test", "tests", "spec", "specs", "e2e", "doc", "docs", "example", "examples", "sample", "samples", "demo", "demos"
     };
 
+    /// <summary>Beside a tooling root these are that root's own, whatever is in them, rather than apps of their own.</summary>
+    private static readonly HashSet<string> PartOfTheRoot = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "src", "lib", "libs", "shared", "common", "scripts", "tools", "config", "public", "static", "assets"
+    };
+
+    /// <summary>Folders a monorepo keeps its apps one level inside, each with no project file of its own.</summary>
+    private static readonly string[] AppContainers = ["apps", "services"];
+
+    /// <summary>Where the libraries usually are, and the apps too in an older monorepo. Read only when nothing else was found.</summary>
+    private const string PackagesContainer = "packages";
+
+    /// <summary>The folders a build tool's <c>build</c> script can sit above and be the app's own source, rather than apps beside it.</summary>
+    private static readonly string[] OwnSourceFolders = ["src", "app", "pages"];
+
     public static LocatedRoot Locate(SourceTree tree)
     {
         var path = "";
@@ -33,19 +48,65 @@ internal static class RootLocator
             here = here.Scope(only);
         }
 
-        if (StackDetector.HoldsSomething(here)) return new LocatedRoot(path.Length == 0 ? null : path, []);
+        if (StackDetector.HoldsSomething(here))
+        {
+            var thisFolder = new LocatedRoot(path.Length == 0 ? null : path, []);
+            if (!StackDetector.IsOnlyTooling(here) || HasItsOwnSource(here)) return thisFolder;
+
+            var behind = AppsBehindTooling(here);
+
+            // Nothing below it that runs is an ordinary project with no start script. And the pipeline
+            // already builds a lone .NET project from the top, so a tooling root above one has never failed
+            // and there is nothing to move: that is the frontend assets of an ASP.NET app.
+            if (behind.Count == 0 || behind is [var only] && here.Scope(only).Csprojs().Count > 0) return thisFolder;
+
+            return Answer(path, behind);
+        }
 
         var apps = here.AppFolders().Take(MaxFoldersExamined)
             .Where(f => StackDetector.LooksLikeAnApp(here.Scope(f))).ToList();
         var likely = apps.Where(f => !RarelyTheApp.Contains(f)).ToList();
         if (likely.Count > 0) apps = likely;
 
-        return apps.Count switch
-        {
-            0 => new LocatedRoot(null, []),
-            1 => new LocatedRoot(Join(path, apps[0]), []),
-            _ => new LocatedRoot(null, apps.Select(a => Join(path, a)).OrderBy(a => a, StringComparer.Ordinal).ToList())
-        };
+        return Answer(path, apps);
+    }
+
+    private static LocatedRoot Answer(string path, IReadOnlyList<string> apps) => apps.Count switch
+    {
+        0 => new LocatedRoot(null, []),
+        1 => new LocatedRoot(Join(path, apps[0]), []),
+        _ => new LocatedRoot(null, apps.Select(a => Join(path, a)).OrderBy(a => a, StringComparer.Ordinal).ToList())
+    };
+
+    /// <summary>
+    /// A <c>build</c> script beside a folder of plain source is a project that builds itself, like a
+    /// Create React App whose <c>functions/</c> happens to be a package too. A folder that holds an app
+    /// is not its own source, which is how <c>app/package.json</c> stays a candidate.
+    /// </summary>
+    private static bool HasItsOwnSource(SourceTree here) =>
+        NodeStartRule.HasBuildScript(here) &&
+        OwnSourceFolders.Any(f => here.HasDirectory(f) && !StackDetector.LooksLikeAnApp(here.Scope(f)));
+
+    /// <summary>
+    /// What a monorepo's root is standing in front of: <c>client/</c> and <c>server/</c>, or
+    /// <c>apps/web</c> and <c>apps/api</c>. Without this the root's <c>package.json</c> is taken for the
+    /// app and the deploy fails at <c>npm start</c>, without the question ever being asked.
+    /// </summary>
+    private static IReadOnlyList<string> AppsBehindTooling(SourceTree here)
+    {
+        bool Runs(string folder) => here.HasDirectory(folder) && StackDetector.CouldRunByItself(here.Scope(folder));
+
+        IEnumerable<string> Inside(string container) => here.HasDirectory(container)
+            ? here.Scope(container).AppFolders().Take(MaxFoldersExamined).Select(f => Join(container, f)).Where(Runs)
+            : [];
+
+        var apps = here.AppFolders().Take(MaxFoldersExamined)
+            .Where(f => !PartOfTheRoot.Contains(f) && !RarelyTheApp.Contains(f) && !AppContainers.Contains(f) && f != PackagesContainer)
+            .Where(Runs)
+            .Concat(AppContainers.SelectMany(Inside))
+            .ToList();
+
+        return apps.Count > 0 ? apps : Inside(PackagesContainer).ToList();
     }
 
     private static string Join(string path, string folder) => path.Length == 0 ? folder : path + "/" + folder;

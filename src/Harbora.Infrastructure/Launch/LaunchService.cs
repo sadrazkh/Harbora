@@ -51,6 +51,7 @@ public sealed partial class LaunchService(
     ISystemClock clock,
     ProjectAccessService access,
     ISchedulerService scheduler,
+    IQuotaService quota,
     INodeCapacityService capacity,
     ResourceCreationBilling creationBilling,
     IOptions<HarboraRuntimeOptions> runtime,
@@ -115,12 +116,12 @@ public sealed partial class LaunchService(
                 if (archivePath is null)
                     return ServiceOutcome<Guid>.Refused(new ServiceRefusal(
                         "The uploaded file could not be found. Please upload it again.",
-                        "فایل آپلودشده پیدا نشد. لطفاً دوباره آپلود کنید.", nameof(LaunchStartRequest.ArchivePath)));
+                        "فایل آپلودشده پیدا نشد. دوباره آپلود کن.", nameof(LaunchStartRequest.ArchivePath)));
                 break;
 
             default:
                 return ServiceOutcome<Guid>.Refused(new ServiceRefusal(
-                    "Give a repository URL or an archive.", "آدرس مخزن یا یک فایل فشرده بدهید."));
+                    "Give a repository URL or an archive.", "آدرس مخزن یا یک فایل فشرده بده."));
         }
 
         var now = clock.UtcNow;
@@ -321,18 +322,19 @@ public sealed partial class LaunchService(
     {
         var reason = LogText.Clean(Scrub(ex.Message, token)).Trim();
         return ($"Could not read this repository. The URL may be wrong, or the repository may be private: if it is, add an access token and try again. Nothing was created. ({reason})",
-            $"این مخزن خوانده نشد. شاید آدرس اشتباه باشد یا مخزن خصوصی باشد؛ اگر خصوصی است، توکن دسترسی را هم بدهید و دوباره امتحان کنید. چیزی ساخته نشد. ({reason})");
+            $"این مخزن خوانده نشد. شاید آدرس اشتباه باشد یا مخزن خصوصی باشد؛ اگر خصوصی است، توکن دسترسی را هم بده و دوباره امتحان کن. چیزی ساخته نشد. ({reason})");
     }
 
     /// <summary>
-    /// <see cref="SourceArchive"/> words its own refusals for a person. Anything else, a file gone from
-    /// the disk say, would be quoting the panel's own paths at them, so it only gets the sentence.
+    /// <see cref="SourceArchive"/> words its own refusals for a person, in both languages. Anything else, a
+    /// file gone from the disk say, would be quoting the panel's own paths at them, so it only gets the sentence.
     /// </summary>
-    private static (string Message, string MessageFa) ArchiveFailure(Exception ex)
+    internal static (string Message, string MessageFa) ArchiveFailure(Exception ex)
     {
-        var reason = ex is InvalidOperationException ? LogText.Clean(ex.Message).Trim() + " " : "";
+        var reason = ex is SourceArchiveRefusedException ? LogText.Clean(ex.Message).Trim() + " " : "";
+        var reasonFa = ex is SourceArchiveRefusedException refused ? LogText.Clean(refused.MessageFa).Trim() + " " : "";
         return ($"Could not read this file. {reason}Zip the project's folder and upload it again. Nothing was created.",
-            $"این فایل خوانده نشد؛ خالی است یا zip و tar.gz معتبری نیست. پوشهٔ پروژه را zip کنید و دوباره آپلود کنید. چیزی ساخته نشد.");
+            $"این فایل خوانده نشد. {reasonFa}پوشهٔ پروژه را zip کن و دوباره آپلود کن. چیزی ساخته نشد.");
     }
 
     /// <summary>

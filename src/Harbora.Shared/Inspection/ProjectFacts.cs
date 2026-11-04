@@ -20,6 +20,8 @@ internal enum Ecosystem
 internal sealed record Dependency(Ecosystem Ecosystem, string Name, string Key, string File, string Section, bool Runtime)
 {
     public string Reason => $"\"{Name}\" in {Section}";
+
+    public string ReasonFa => $"«{Name}» در {Section}";
 }
 
 /// <summary>What the project files at the judged root say. Nothing further down is read, which is what makes a decoy under <c>node_modules</c> a non-event.</summary>

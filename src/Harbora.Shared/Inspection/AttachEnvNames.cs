@@ -31,5 +31,11 @@ public static class AttachEnvNames
                 ["MEILI_URL", "MEILI_HOST", "MEILI_PORT", "MEILI_MASTER_KEY"])
         };
 
+    /// <summary>
+    /// Whether a name means whichever one database the app has, as <c>DB_HOST</c> does and
+    /// <c>POSTGRES_HOST</c> does not. Public because only the screen knows which engine got ticked.
+    /// </summary>
+    public static bool IsGenericDatabaseName(string name) => EnvAliases.Generic.ContainsKey(name);
+
     private static HashSet<string> Names(string[] names) => new(names, StringComparer.Ordinal);
 }

@@ -16,6 +16,14 @@ namespace Harbora.Infrastructure.Deployments;
 /// </summary>
 public static class SourceArchive
 {
+    /// <summary>What git gives a file with its executable bit set, which is what a clone of the same repository has.</summary>
+    private const UnixFileMode Executable =
+        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+        UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
+        UnixFileMode.OtherRead | UnixFileMode.OtherExecute;
+
+    private static readonly string[] SystemLitter = [".DS_Store", "Thumbs.db", "desktop.ini"];
+
     /// <summary>Uncompressed ceiling. A source tree far above this is a mistake or an attack.</summary>
     public const long MaxUncompressedBytes = 2L * 1024 * 1024 * 1024;
 
@@ -66,9 +74,19 @@ public static class SourceArchive
     /// What a person can do about it, instead of "unable to read beyond the end of the stream" as a
     /// deployment error. An empty folder, a truncated upload and a body in neither format all land here.
     /// </summary>
-    private static InvalidOperationException NotAnArchive(Exception? inner = null) => new(
+    private static SourceArchiveRefusedException NotAnArchive(Exception? inner = null) => new(
         "The uploaded source archive is empty or not a valid .tar.gz or .zip. Check that the " +
-        "folder you pushed actually contains files.", inner);
+        "folder you pushed actually contains files.",
+        "فایل آپلودشده خالی است یا tar.gz یا zip معتبری نیست. ببین پوشه‌ای که فرستادی واقعاً فایلی داشته باشد.",
+        inner);
+
+    private static SourceArchiveRefusedException TooManyEntries() => new(
+        $"Archive has more than {MaxEntries:N0} entries.",
+        $"این فایل بیشتر از {MaxEntries:N0} مورد دارد.");
+
+    internal static SourceArchiveRefusedException TooLarge() => new(
+        $"Archive expands to more than {MaxUncompressedBytes / (1024 * 1024)} MB.",
+        $"این فایل بعد از باز شدن بیشتر از {MaxUncompressedBytes / (1024 * 1024)} مگابایت می‌شود.");
 
     private static async Task<Result> ExtractTarGzAsync(Stream gzippedTar, string root, CancellationToken ct)
     {
@@ -91,8 +109,7 @@ public static class SourceArchive
             }
             if (entry is null) break;
 
-            if (++files > MaxEntries)
-                throw new InvalidOperationException($"Archive has more than {MaxEntries:N0} entries.");
+            if (++files > MaxEntries) throw TooManyEntries();
 
             // Links can point anywhere, including outside the build context. Source trees don't need
             // them, so refusing is cheaper than trying to validate targets.
@@ -112,14 +129,14 @@ public static class SourceArchive
                 continue;   // devices, fifos — never part of a source tree
 
             bytes += entry.Length;
-            if (bytes > MaxUncompressedBytes)
-                throw new InvalidOperationException(
-                    $"Archive expands to more than {MaxUncompressedBytes / (1024 * 1024)} MB.");
+            if (bytes > MaxUncompressedBytes) throw TooLarge();
 
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             await using var file = File.Create(target);
             if (entry.DataStream is not null)
                 await entry.DataStream.CopyToAsync(file, ct);
+
+            if ((entry.Mode & UnixFileMode.UserExecute) != 0) MarkExecutable(target);
         }
 
         return new Result(files, bytes);
@@ -136,8 +153,9 @@ public static class SourceArchive
         {
             using var zip = new ZipArchive(source, ZipArchiveMode.Read, leaveOpen: true);
 
-            if (zip.Entries.Count > MaxEntries)
-                throw new InvalidOperationException($"Archive has more than {MaxEntries:N0} entries.");
+            if (zip.Entries.Count > MaxEntries) throw TooManyEntries();
+
+            var wrapper = SoleTopLevelFolder(zip.Entries);
 
             var files = 0;
             long bytes = 0;
@@ -150,6 +168,14 @@ public static class SourceArchive
                 // Resolved before anything is skipped: "../../.env" is an escape, not a file to ignore.
                 var target = ResolveSafePath(root, entry.FullName);
                 if (target is null || IsLeftOutOfAnUpload(entry.FullName)) continue;
+
+                if (wrapper is not null)
+                {
+                    // Null only for the folder's own entry. Resolved again, because taking a level off
+                    // is exactly what could turn "shop/../x" into something that climbs out.
+                    target = ResolveSafePath(root, Relative(entry.FullName)[(wrapper.Length + 1)..]);
+                    if (target is null) continue;
+                }
 
                 if (IsZipDirectory(entry.FullName))
                 {
@@ -164,11 +190,11 @@ public static class SourceArchive
                 while ((read = await input.ReadAsync(buffer, ct)) > 0)
                 {
                     bytes += read;
-                    if (bytes > MaxUncompressedBytes)
-                        throw new InvalidOperationException(
-                            $"Archive expands to more than {MaxUncompressedBytes / (1024 * 1024)} MB.");
+                    if (bytes > MaxUncompressedBytes) throw TooLarge();
                     await file.WriteAsync(buffer.AsMemory(0, read), ct);
                 }
+
+                if (IsExecutableInZip(entry.ExternalAttributes)) MarkExecutable(target);
 
                 files++;
             }
@@ -184,6 +210,60 @@ public static class SourceArchive
     }
 
     private static bool IsZipDirectory(string entryName) => entryName.EndsWith('/') || entryName.EndsWith('\\');
+
+    /// <summary>
+    /// The folder a zip wraps everything in, when it wraps everything: <c>my-shop-main/</c> from GitHub,
+    /// or a folder somebody compressed. Taken off here so that nothing downstream ever sees it, because
+    /// it is a fact about this one file: stored as the app's root it would fail on the next zip, which
+    /// is called <c>repo-1.3/</c>, and on the next <c>harbora deploy</c>, which has no wrapper at all.
+    /// Files beside it mean it is a real folder and stays. What is left out of an upload does not count
+    /// as beside it, or every zip a Mac makes would keep its wrapper for the sake of <c>__MACOSX</c>.
+    /// </summary>
+    private static string? SoleTopLevelFolder(IEnumerable<ZipArchiveEntry> entries)
+    {
+        string? folder = null;
+        foreach (var entry in entries)
+        {
+            if (IsZipLink(entry) || IsLeftOutOfAnUpload(entry.FullName)) continue;
+
+            var name = Relative(entry.FullName);
+            if (name.Length == 0) continue;
+
+            var slash = name.IndexOf('/');
+            if (slash < 0) return null;
+
+            var top = name[..slash];
+            if (top == ".." || (folder is not null && top != folder)) return null;
+            folder = top;
+        }
+
+        return folder;
+    }
+
+    /// <summary>
+    /// The owner's executable bit in a zip's Unix mode, and only that, which is all git itself keeps: a
+    /// zip of a repository then comes out with the permissions a clone of it has. A file stored 0600 would
+    /// otherwise be a 403 from an Apache running as www-data. A zip made on Windows carries no mode, which
+    /// reads as not executable and leaves the file as it was created.
+    /// </summary>
+    internal static bool IsExecutableInZip(int externalAttributes) =>
+        (((UnixFileMode)((externalAttributes >> 16) & 0x1FF)) & UnixFileMode.UserExecute) != 0;
+
+    /// <summary>A <c>COPY</c> keeps the mode it finds, so <c>ENTRYPOINT ["./entrypoint.sh"]</c> depends on this. Windows has none to set.</summary>
+    private static void MarkExecutable(string path)
+    {
+        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(path, Executable);
+    }
+
+    /// <summary>An entry's name the way the checks below read it: forward slashes, nothing in front.</summary>
+    private static string Relative(string entryName)
+    {
+        var relative = entryName.Replace('\\', '/').TrimStart('/');
+
+        // "./" prefixes are how tar normally records a directory-relative archive.
+        while (relative.StartsWith("./", StringComparison.Ordinal)) relative = relative[2..];
+        return relative;
+    }
 
     /// <summary>
     /// A zip records a Unix mode in the top half of its external attributes, and that is the only place
@@ -206,13 +286,15 @@ public static class SourceArchive
         if (segments.Length == 0) return false;
 
         if (segments.Any(s => s.Equals(".git", StringComparison.OrdinalIgnoreCase)
-                              || s.Equals("node_modules", StringComparison.OrdinalIgnoreCase)))
+                              || s.Equals("node_modules", StringComparison.OrdinalIgnoreCase)
+                              || s.Equals("__MACOSX", StringComparison.OrdinalIgnoreCase)))
             return true;
 
         // A folder that happens to be called ".env" holds no keys of its own; only a file does.
         return !IsZipDirectory(entryName)
             && (segments[^1].Equals(".env", StringComparison.OrdinalIgnoreCase)
-                || segments[^1].Equals(".env.local", StringComparison.OrdinalIgnoreCase));
+                || segments[^1].Equals(".env.local", StringComparison.OrdinalIgnoreCase)
+                || SystemLitter.Contains(segments[^1], StringComparer.OrdinalIgnoreCase));
     }
 
     /// <summary>
@@ -221,14 +303,13 @@ public static class SourceArchive
     /// </summary>
     public static string? ResolveSafePath(string root, string entryName)
     {
-        var relative = entryName.Replace('\\', '/').TrimStart('/');
-
-        // "./" prefixes are how tar normally records a directory-relative archive.
-        while (relative.StartsWith("./", StringComparison.Ordinal)) relative = relative[2..];
+        var relative = Relative(entryName);
         if (relative.Length == 0 || relative is "." or "./") return null;
 
         if (Path.IsPathRooted(entryName) || entryName.StartsWith('/'))
-            throw new InvalidOperationException($"Archive entry '{entryName}' has an absolute path.");
+            throw new SourceArchiveRefusedException(
+                $"Archive entry '{entryName}' has an absolute path.",
+                $"مسیر «{entryName}» در این فایل مطلق است.");
 
         var full = Path.GetFullPath(Path.Combine(root, relative));
 
@@ -237,8 +318,21 @@ public static class SourceArchive
             ? root
             : root + Path.DirectorySeparatorChar;
         if (!full.StartsWith(rootWithSeparator, StringComparison.Ordinal))
-            throw new InvalidOperationException($"Archive entry '{entryName}' escapes the build directory.");
+            throw new SourceArchiveRefusedException(
+                $"Archive entry '{entryName}' escapes the build directory.",
+                $"مسیر «{entryName}» در این فایل از پوشهٔ ساخت بیرون می‌زند.");
 
         return full;
     }
+}
+
+/// <summary>
+/// An archive refused for what it is, worded for whoever sent it, in both languages: a person told a
+/// file is empty when it is too large will send the same file again. Still an
+/// <see cref="InvalidOperationException"/>, which is what every caller has always caught.
+/// </summary>
+public sealed class SourceArchiveRefusedException(string message, string messageFa, Exception? inner = null)
+    : InvalidOperationException(message, inner)
+{
+    public string MessageFa { get; } = messageFa;
 }
