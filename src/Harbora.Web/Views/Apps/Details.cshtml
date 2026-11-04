@@ -282,12 +282,15 @@
                 </div>
                 @* It waits for the answer, which can be a while with databases to ask, and each press
                    starts containers. So the button says it is busy and cannot be pressed twice. *@
-                <form asp-controller="Apps" asp-action="Verify" asp-route-id="@app.Id" method="post"
-                      onsubmit="var b=this.querySelector('[data-verify-now]');b.disabled=true;b.querySelector('span').textContent='@(isFa ? "در حال بررسی…" : "Checking…")';">
-                    <button type="submit" class="btn-secondary py-2 px-3 text-sm" data-verify-now>
-                        <i data-lucide="shield-check" class="h-4 w-4"></i><span>@(isFa ? "بررسی کن" : "Check now")</span>
-                    </button>
-                </form>
+                @if (NavigationCapabilities.For(User)(Harbora.Domain.Authorization.Capabilities.AppsOperate))
+                {
+                    <form asp-controller="Apps" asp-action="Verify" asp-route-id="@app.Id" method="post"
+                          onsubmit="var b=this.querySelector('[data-verify-now]');b.disabled=true;b.querySelector('span').textContent='@(isFa ? "در حال بررسی…" : "Checking…")';">
+                        <button type="submit" class="btn-secondary py-2 px-3 text-sm" data-verify-now>
+                            <i data-lucide="shield-check" class="h-4 w-4"></i><span>@(isFa ? "بررسی کن" : "Check now")</span>
+                        </button>
+                    </form>
+                }
             </div>
             @if (verification is null)
             {
@@ -1695,9 +1698,10 @@
         @* ---- Release task ----
            Shown because it runs on every deploy and can fail one. It is also the fix the checks name for
            an empty database, so it can be set here and not only when the app is created. *@
-        @if (Harbora.Infrastructure.Deployments.ServicePlan.IsLongRunning(app.Kind) || !string.IsNullOrWhiteSpace(app.ReleaseCommand))
+        @if ((Harbora.Infrastructure.Deployments.ServicePlan.IsLongRunning(app.Kind) || !string.IsNullOrWhiteSpace(app.ReleaseCommand))
+             && NavigationCapabilities.For(User)(Harbora.Domain.Authorization.Capabilities.AppsEnv))
         {
-            <section class="rounded-xl border border-line bg-surface p-4">
+            <section class="rounded-xl border border-line bg-surface p-4" data-app-release-task>
                 <div class="mb-3 font-semibold">@(isFa ? "دستور پیش از انتشار" : "Release task")</div>
                 <form asp-controller="Apps" asp-action="SetReleaseCommand" asp-route-id="@app.Id" method="post" class="space-y-2">
                     @Html.AntiForgeryToken()

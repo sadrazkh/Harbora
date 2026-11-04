@@ -243,6 +243,42 @@ public class CliLaunchPlanTests
     }
 
     [Fact]
+    public void A_database_of_their_own_is_kept_as_a_secret_whatever_the_proposal_said_about_that_name()
+    {
+        var answers = new Dictionary<string, string> { ["DATABASE_URL"] = "postgres://me:pw@neon.example/db" };
+
+        var own = LaunchPlan.ChoicesFrom(Proposal, null, answers, new HashSet<string> { "PostgreSql" })["envVars"]!.AsArray()
+            .Single(v => v!["key"]!.GetValue<string>() == "DATABASE_URL")!;
+
+        own["value"]!.GetValue<string>().Should().Be("postgres://me:pw@neon.example/db");
+        own["isSecret"]!.GetValue<bool>().Should().BeTrue("it has their password in it");
+    }
+
+    [Fact]
+    public void A_connection_name_is_not_called_a_mistake_even_with_no_example_file_to_have_named_it()
+    {
+        var bare = Json(LaunchScript.Proposal(Guid.CreateVersion7(), fields: []));
+        var answers = new Dictionary<string, string> { ["DATABASE_URL"] = "x", ["STRIPE_SECRET_KY"] = "y" };
+
+        LaunchPlan.UnaskedKeys(bare, answers).Should().Equal("STRIPE_SECRET_KY");
+    }
+
+    [Fact]
+    public void Each_engines_name_in_the_api_finds_its_row_in_the_table_of_what_attachments_set()
+    {
+        foreach (var kind in Enum.GetValues<Harbora.Shared.Inspection.DetectedServiceKind>())
+        {
+            var type = Harbora.Infrastructure.Services.AttachEnvRoles.TypeFor(kind).ToString();
+
+            foreach (var name in Harbora.Shared.Inspection.AttachEnvNames.All[kind])
+                ConnectionNames.IsSetBy(type, name).Should().BeTrue($"{type} sets {name}");
+        }
+
+        ConnectionNames.IsSetBy("Redis", "DATABASE_URL").Should().BeFalse();
+        ConnectionNames.IsSetBy("MySql", "DATABASE_URL").Should().BeTrue();
+    }
+
+    [Fact]
     public void A_service_turned_down_goes_with_its_aliases_and_is_named_as_leaving_them_unset()
     {
         var dropped = new HashSet<string> { "PostgreSql" };
@@ -250,11 +286,56 @@ public class CliLaunchPlanTests
         LaunchPlan.ChoicesFrom(Proposal, null, NoAnswers, dropped)["services"]!.AsArray().Should().BeEmpty();
 
         var description = LaunchPlan.Describe(Proposal, null, NoAnswers, dropped);
-        description.Unattached.Should().Equal("DB_HOST");
+        description.Unattached.Should().BeEquivalentTo(["DB_HOST", "DATABASE_URL"]);
         description.Creates.Should().ContainSingle().Which.Should().Be("The app shop");
 
         LaunchPlan.Describe(Proposal, null, new Dictionary<string, string> { ["DB_HOST"] = "x" }, dropped)
-            .Unattached.Should().BeEmpty("they answered it themselves");
+            .Unattached.Should().Equal(["DATABASE_URL"], "they answered the other one themselves");
+    }
+
+    [Fact]
+    public void What_a_turned_down_service_leaves_unset_goes_along_with_no_value_so_the_timeline_can_name_it()
+    {
+        var variables = LaunchPlan.ChoicesFrom(Proposal, null, NoAnswers, new HashSet<string> { "PostgreSql" })["envVars"]!.AsArray();
+
+        foreach (var key in new[] { "DB_HOST", "DATABASE_URL" })
+            variables.Single(v => v!["key"]!.GetValue<string>() == key)!["value"].Should().BeNull();
+    }
+
+    [Fact]
+    public void A_service_still_being_created_answers_its_names_and_nothing_is_said_about_them()
+    {
+        LaunchPlan.Describe(Proposal, null, NoAnswers, NothingDropped).Unattached.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void A_service_that_was_only_a_guess_answers_nothing_either()
+    {
+        var id = Guid.CreateVersion7();
+        var fields = new List<LaunchEnvField>
+        {
+            new("REDIS_URL", Harbora.Shared.Inspection.EnvVarDisposition.ProvidedByAttach, null, false, ".env.example", Harbora.Domain.Common.ManagedServiceType.Redis)
+        };
+
+        LaunchPlan.Describe(Json(LaunchScript.Proposal(id, fields: fields)), null, NoAnswers, NothingDropped)
+            .Unattached.Should().Equal("REDIS_URL");
+    }
+
+    [Fact]
+    public void Another_engine_still_being_created_answers_the_name_they_all_set()
+    {
+        var id = Guid.CreateVersion7();
+        var proposal = LaunchScript.Proposal(id);
+        var both = proposal with
+        {
+            Defaults = proposal.Defaults with
+            {
+                Services = [.. proposal.Defaults.Services, new LaunchServiceChoice(Harbora.Domain.Common.ManagedServiceType.MySql)]
+            }
+        };
+
+        LaunchPlan.Describe(Json(both), null, NoAnswers, new HashSet<string> { "PostgreSql" })
+            .Unattached.Should().Equal(["DB_HOST"], "MySQL sets DATABASE_URL too, and an alias is only written for its own engine");
     }
 
     // ---- questions ---------------------------------------------------------------------------------
@@ -323,6 +404,32 @@ public class CliLaunchPlanTests
 
         LaunchPlan.Describe(Json(LaunchScript.Proposal(Guid.CreateVersion7(), unknown)), null, NoAnswers, NothingDropped)
             .Found.Should().Contain("could not tell");
+    }
+
+    /// <summary>
+    /// Over the enum rather than a list, because this project cannot reference it: a stack added to the
+    /// inspector would otherwise print "it could not tell" and then build perfectly well.
+    /// </summary>
+    [Fact]
+    public void Every_stack_the_inspector_can_report_is_one_this_cli_has_a_name_for()
+    {
+        foreach (var stack in Enum.GetValues<Harbora.Shared.Inspection.DetectedStack>())
+        {
+            var inspection = LaunchScript.Inspection() with { Stack = stack };
+            var found = LaunchPlan.Describe(Json(LaunchScript.Proposal(Guid.CreateVersion7(), inspection)), null, NoAnswers, NothingDropped).Found;
+
+            if (stack == Harbora.Shared.Inspection.DetectedStack.Unknown) found.Should().Contain("could not tell");
+            else found.Should().StartWith("This looks like", $"{stack} should have a name here");
+        }
+    }
+
+    [Fact]
+    public void A_frontend_is_described_as_something_built_and_served()
+    {
+        var frontend = LaunchScript.Inspection() with { Stack = Harbora.Shared.Inspection.DetectedStack.Frontend };
+
+        LaunchPlan.Describe(Json(LaunchScript.Proposal(Guid.CreateVersion7(), frontend)), null, NoAnswers, NothingDropped)
+            .Found.Should().Contain("a frontend that is built and then served");
     }
 
     // ---- what it costs ------------------------------------------------------------------------------
@@ -488,6 +595,63 @@ public class CliLaunchPlanTests
         });
 
         LaunchPlan.ChecksWorstFirst(view).Select(c => c.GetProperty("title").GetString()).Should().Equal("d", "c", "a", "b", "e");
+    }
+
+    [Fact]
+    public void Whether_billing_could_help_is_read_from_the_quote_and_absent_means_no()
+    {
+        LaunchPlan.RefusalIsAboutMoney(Json(new { refusalIsAboutMoney = true })).Should().BeTrue();
+        LaunchPlan.RefusalIsAboutMoney(Json(new { refusalIsAboutMoney = false })).Should().BeFalse();
+        LaunchPlan.RefusalIsAboutMoney(Json(new { exempt = false })).Should().BeFalse("an older panel cannot say, so nobody is sent there on a guess");
+    }
+
+    [Fact]
+    public void A_problem_found_and_nothing_able_to_say_are_told_apart()
+    {
+        var unsure = Json(new
+        {
+            checks = new[]
+            {
+                new AppCheck("running", AppCheckStatus.Skipped, "Is it running?", "x"),
+                new AppCheck("url", AppCheckStatus.Pending, "The address", "x"),
+                new AppCheck("logs", AppCheckStatus.Passed, "The log", "x")
+            }
+        });
+        var wrong = Json(new { checks = new[] { new AppCheck("logs", AppCheckStatus.Warning, "The log", "x") } });
+
+        LaunchPlan.ProblemFound(unsure).Should().BeFalse();
+        LaunchPlan.NotChecked(unsure).Should().Equal("Is it running?", "The address");
+        LaunchPlan.ProblemFound(wrong).Should().BeTrue();
+    }
+
+    [Fact]
+    public void What_exists_comes_from_the_panels_own_list_when_it_has_one()
+    {
+        var appId = Guid.CreateVersion7();
+        var deploymentId = Guid.CreateVersion7();
+        var view = Json(LaunchScript.View(LaunchStatus.Failed, Guid.CreateVersion7(), appId, "shop", deploymentId: deploymentId,
+            created:
+            [
+                new LaunchCreatedThing("database", "shop-postgresql", "/databases/one", Ready: false),
+                new LaunchCreatedThing("app", "shop", $"/apps/details/{appId}", Ready: true)
+            ]));
+
+        LaunchPlan.WhatExists(view, "https://panel.example.com").Should().Equal(
+            "The database shop-postgresql (not ready): https://panel.example.com/databases/one",
+            $"The app shop: https://panel.example.com/apps/details/{appId}",
+            $"Its deployment: https://panel.example.com/deployments/details/{deploymentId}");
+
+        LaunchPlan.WhatExists(Json(LaunchScript.View(LaunchStatus.Failed, Guid.CreateVersion7(), created: [])), "https://panel.example.com")
+            .Should().BeEmpty();
+    }
+
+    [Fact]
+    public void A_deleted_app_has_no_deployment_page_left_to_name()
+    {
+        var view = Json(LaunchScript.View(LaunchStatus.Failed, Guid.CreateVersion7(), deploymentId: Guid.CreateVersion7(), appGone: true, created: []));
+
+        LaunchPlan.AppGone(view).Should().BeTrue();
+        LaunchPlan.WhatExists(view, "https://panel.example.com").Should().BeEmpty();
     }
 
     [Fact]

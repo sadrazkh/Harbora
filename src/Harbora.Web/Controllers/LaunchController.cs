@@ -81,10 +81,8 @@ public sealed class LaunchController(
                 return Refused(IsFa
                     ? "این فایل خالی است. پوشه‌ی پروژه را دوباره zip کن."
                     : "That file is empty. Zip your project folder again.");
-            if (!UploadedArchive.LooksLikeArchive(file))
-                return Refused(IsFa
-                    ? "این فایل zip نیست. پوشه‌ی پروژه را zip کن و همان را بفرست."
-                    : "That file isn't a zip. Zip your project folder and send that.");
+            if (UploadedArchive.WhyNot(file, IsFa) is { } notAZip)
+                return Refused(notAZip);
 
             archivePath = UploadedArchive.PathForLaunch(runtime.Value.WorkDir, file.FileName);
             await UploadedArchive.SaveAsync(file, archivePath, ct);
@@ -150,7 +148,7 @@ public sealed class LaunchController(
             && await launches.ProposeAsync(id, ct) is { } proposal)
             return NeedsFolder(proposal)
                 ? View("Root", new LaunchRootModel(id, proposal.Inspection.RootCandidates))
-                : await ConfirmScreenAsync(proposal, FormFrom(proposal), [], secretsToRetype: false, ct);
+                : await ConfirmScreenAsync(proposal, FormFrom(proposal), [], ct);
 
         return View(await ProgressAsync(view, ct));
     }
@@ -218,13 +216,8 @@ public sealed class LaunchController(
             || NeedsFolder(proposal))
             return Redirect($"/launch/{id}");
 
-        // A value the screen is about to draw again is only ever one it may draw again. A secret
-        // comes off here, however this ends, and the screen asks for it once more.
-        var typedSecret = proposal.EnvFields.Any(f =>
-            f.IsSecret && form.Values.TryGetValue(f.Key, out var value) && !string.IsNullOrEmpty(value));
-
         if (form.Recheck is not null)
-            return await ConfirmScreenAsync(proposal, form, [], typedSecret, ct);
+            return await ConfirmScreenAsync(proposal, form, [], ct);
 
         var (choices, formRefusals) = ChoicesFrom(form, proposal);
 
@@ -232,7 +225,7 @@ public sealed class LaunchController(
             ? formRefusals
             : await launches.ValidateConfirmAsync(id, choices, ct);
         if (refusals.Count > 0)
-            return await ConfirmScreenAsync(proposal, form, refusals, typedSecret, ct);
+            return await ConfirmScreenAsync(proposal, form, refusals, ct);
 
         var outcome = await launches.ConfirmAsync(id, choices, ClientIp, ct);
         if (outcome.Ok) return Redirect($"/launch/{id}");
@@ -241,7 +234,7 @@ public sealed class LaunchController(
         // a double submit that lost the race, or a step refused part-way with what exists on the row.
         var after = await launches.GetAsync(id, ct);
         return after?.Status == LaunchStatus.AwaitingConfirmation
-            ? await ConfirmScreenAsync(proposal, form, outcome.Refusals, typedSecret, ct)
+            ? await ConfirmScreenAsync(proposal, form, outcome.Refusals, ct)
             : Redirect($"/launch/{id}");
     }
 
@@ -333,20 +326,31 @@ public sealed class LaunchController(
             .Where(o => ticked.Contains(o.Type.ToString()))
             .Select(o => defaults.Services.FirstOrDefault(s => s.Type == o.Type) ?? new LaunchServiceChoice(o.Type))
             .ToList();
+        var tickedTypes = services.Select(s => s.Type).ToHashSet();
 
         var variables = new List<LaunchEnvChoice>();
         foreach (var field in proposal.EnvFields)
         {
+            var typed = form.Values.TryGetValue(field.Key, out var value) && !string.IsNullOrEmpty(value) ? value : null;
+
             if (field.Disposition == EnvVarDisposition.GeneratedSecret)
             {
                 variables.Add(new LaunchEnvChoice(field.Key, null, IsSecret: true));
             }
-            else if (field.Disposition is EnvVarDisposition.NeedsAnswer or EnvVarDisposition.KeepExample
-                     && form.Values.TryGetValue(field.Key, out var value) && !string.IsNullOrEmpty(value))
+            else if (field.Disposition is EnvVarDisposition.NeedsAnswer or EnvVarDisposition.KeepExample)
             {
                 // Blank is allowed, and means the variable is not set: an empty string in a variable is
-                // a value, and a surprisingly confusing one for an app to read.
-                variables.Add(new LaunchEnvChoice(field.Key, value, field.IsSecret));
+                // a value, and a surprisingly confusing one for an app to read. It still goes along with
+                // no value, because that is how the timeline comes to name what nobody answered.
+                variables.Add(new LaunchEnvChoice(field.Key, typed, field.IsSecret));
+            }
+            else if (typed is not null || !LaunchConnections.AnsweredBy(field).Overlaps(tickedTypes))
+            {
+                // A connection somebody typed is the app's own variable, and outranks an attachment
+                // whatever is ticked. Left blank with nothing ticked to answer it, nothing will set it,
+                // which the timeline has to say. Left blank with a service to answer it, it is not
+                // sent at all: the timeline would be naming something the app has.
+                variables.Add(new LaunchEnvChoice(field.Key, typed, LaunchConnections.IsMasked(field)));
             }
         }
 
@@ -387,8 +391,22 @@ public sealed class LaunchController(
     private static string WesternDigits(string value) =>
         new(value.Select(c => char.IsDigit(c) ? (char)('0' + (int)char.GetNumericValue(c)) : c).ToArray());
 
+    /// <summary>
+    /// The name the address is previewed from, which is the rule creating the app applies: what was typed,
+    /// cleaned up, or what the name comes to. The name as it was proposed has the answer already worked
+    /// out, uniqueness included, so a repository launched twice previews the <c>-2</c> it will really get.
+    /// </summary>
+    private static string AddressSlug(LaunchProposal proposal, LaunchChoices choices)
+    {
+        if (choices.Slug is { } typed) return AppProvisioningService.Slugify(typed);
+
+        return choices.Name == proposal.AppName && proposal.SuggestedSlug is { Length: > 0 } suggested
+            ? suggested
+            : AppProvisioningService.Slugify(choices.Name);
+    }
+
     private async Task<IActionResult> ConfirmScreenAsync(
-        LaunchProposal proposal, LaunchConfirmForm form, IReadOnlyList<ServiceRefusal> refusals, bool secretsToRetype, CancellationToken ct)
+        LaunchProposal proposal, LaunchConfirmForm form, IReadOnlyList<ServiceRefusal> refusals, CancellationToken ct)
     {
         // The chooser opens on a host and a tier of its own whenever nothing is asked for, and then posts
         // them. The figure beside the button has to be the figure for what the button would submit.
@@ -404,15 +422,22 @@ public sealed class LaunchController(
         // simply hides the line.
         var rootDomain = await addresses.RootDomainAsync(ct);
         var address = await addresses.PreviewAsync(
-            new App { Kind = ServiceKind.Web, Slug = choices.Slug ?? AppProvisioningService.Slugify(choices.Name) }, ct);
+            new App { Kind = ServiceKind.Web, Slug = AddressSlug(proposal, choices) }, ct);
+        var reserved = address.Outcome == AppAddressOutcome.Reserved;
 
-        foreach (var secret in proposal.EnvFields.Where(f => f.IsSecret))
+        // A value the screen is about to draw again is only ever one it may draw again. A secret
+        // comes off here, however this ends, and the screen asks for it once more.
+        var typedSecrets = proposal.EnvFields
+            .Where(f => LaunchConnections.IsMasked(f) && !string.IsNullOrEmpty(form.Values.GetValueOrDefault(f.Key)))
+            .ToList();
+        foreach (var secret in proposal.EnvFields.Where(LaunchConnections.IsMasked))
             form.Values.Remove(secret.Key);
 
         return View("Confirm", new LaunchConfirmModel(
-            proposal, form, quote, address.HasAddress ? rootDomain : null, address.Host,
-            address.Outcome == AppAddressOutcome.Reserved,
-            await EnvironmentsAsync(ct), refusals, secretsToRetype));
+            proposal, form, quote, address.HasAddress || reserved ? rootDomain : null, address.Host, reserved,
+            await EnvironmentsAsync(ct), refusals,
+            SecretsToRetype: typedSecrets.Any(f => !LaunchConnections.IsConnection(f)),
+            ConnectionsToRetype: typedSecrets.Any(LaunchConnections.IsConnection)));
     }
 
     /// <summary>The same places <c>AppsController</c>'s create form offers.</summary>

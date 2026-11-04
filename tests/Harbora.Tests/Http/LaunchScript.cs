@@ -40,11 +40,14 @@ internal static class LaunchScript
         IReadOnlyList<LaunchStepView>? steps = null,
         IReadOnlyList<AppCheck>? checks = null,
         bool canRetry = false,
-        LaunchSourceKind source = LaunchSourceKind.Upload) =>
+        LaunchSourceKind source = LaunchSourceKind.Upload,
+        bool appGone = false,
+        IReadOnlyList<LaunchCreatedThing>? created = null) =>
         new(id, status, source, "shop", appId, appName, publicUrl, deploymentId, failure, failure is null ? null : "شکست خورد",
             steps ?? Steps(), checks ?? [], canRetry,
             status is LaunchStatus.Succeeded or LaunchStatus.SucceededWithProblems or LaunchStatus.Failed
-                or LaunchStatus.InspectFailed or LaunchStatus.Abandoned);
+                or LaunchStatus.InspectFailed or LaunchStatus.Abandoned,
+            appGone, created);
 
     public static SourceInspection Inspection(
         IReadOnlyList<string>? roots = null, string? root = null) =>
@@ -68,11 +71,12 @@ internal static class LaunchScript
         var read = inspection ?? Inspection();
         IReadOnlyList<LaunchEnvField> env = fields ??
         [
-            new("DB_HOST", EnvVarDisposition.AliasOfAttach, null, false, ".env.example"),
+            new("DB_HOST", EnvVarDisposition.AliasOfAttach, null, false, ".env.example", ManagedServiceType.PostgreSql),
             new("STRIPE_SECRET_KEY", EnvVarDisposition.NeedsAnswer, null, true, ".env.example"),
             new("SUPPORT_EMAIL", EnvVarDisposition.NeedsAnswer, null, false, ".env.example"),
             new("JWT_SECRET", EnvVarDisposition.GeneratedSecret, null, true, ".env.example"),
-            new("LOG_LEVEL", EnvVarDisposition.KeepExample, "info", false, ".env.example")
+            new("LOG_LEVEL", EnvVarDisposition.KeepExample, "info", false, ".env.example"),
+            new("DATABASE_URL", EnvVarDisposition.ProvidedByAttach, null, false, ".env.example", ManagedServiceType.PostgreSql)
         ];
 
         return new LaunchProposal(
@@ -87,7 +91,8 @@ internal static class LaunchScript
                 RootDirectory = read.RootDirectory,
                 InstanceSizeKey = "small",
                 Services = [new LaunchServiceChoice(ManagedServiceType.PostgreSql, Aliases: [new AttachEnvAlias("DB_HOST", "PGHOST")])],
-                EnvVars = env.Where(f => f.Key != "DB_HOST").Select(f => new LaunchEnvChoice(f.Key, f.SuggestedValue, f.IsSecret)).ToList()
+                EnvVars = env.Where(f => f.Disposition is not (EnvVarDisposition.AliasOfAttach or EnvVarDisposition.ProvidedByAttach))
+                    .Select(f => new LaunchEnvChoice(f.Key, f.SuggestedValue, f.IsSecret)).ToList()
             },
             "shop",
             env,

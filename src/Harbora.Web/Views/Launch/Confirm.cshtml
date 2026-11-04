@@ -53,14 +53,19 @@
     }
 
     // The inspector writes what it found as `"pg" in dependencies`. The name in quotes is what a person
-    // recognises; anything without one is shown as it stands rather than guessed at.
-    (string? Token, string File, string Reason) Why(DetectedService service)
+    // recognises; anything without one is shown as it stands rather than guessed at. Its own Persian wins
+    // on a Persian screen, because it says more than the name does; a stored inspection may have none.
+    (string? Token, string File, string Reason, string? ReasonFa) Why(DetectedService service)
     {
         var evidence = service.Evidence.FirstOrDefault();
-        if (evidence is null) return (null, "", "");
+        if (evidence is null) return (null, "", "", null);
         var quoted = Regex.Match(evidence.Reason, "\"([^\"]+)\"");
-        return (quoted.Success ? quoted.Groups[1].Value : null, evidence.File, evidence.Reason);
+        return (quoted.Success ? quoted.Groups[1].Value : null, evidence.File, evidence.Reason, evidence.ReasonFa);
     }
+
+    // A space-separated list, so the script can say the same thing about a box somebody just changed.
+    string AnsweredBy(LaunchEnvField field) => string.Join(' ', LaunchConnections.AnsweredBy(field));
+    bool IsAnswered(LaunchEnvField field) => LaunchConnections.AnsweredBy(field).Any(s => ticked.Contains(s.ToString()));
 
     string? Example(string key) => inspection.EnvVars.FirstOrDefault(v => v.Name == key)?.ExampleValue;
     string? Typed(string key) => form.Values.TryGetValue(key, out var value) ? value : null;
@@ -69,12 +74,14 @@
     string[] detailFields = [nameof(LaunchChoices.Slug), nameof(LaunchChoices.Kind), nameof(LaunchChoices.ContainerPort),
         nameof(LaunchChoices.Command), nameof(LaunchChoices.ReleaseCommand), nameof(LaunchChoices.RootDirectory),
         nameof(LaunchChoices.EnvironmentId), nameof(LaunchChoices.ServerId), nameof(LaunchChoices.InstanceSizeKey)];
-    var detailsOpen = Model.Refusals.Any(r => r.Field is not null && detailFields.Contains(r.Field));
+    var detailsOpen = Model.ConnectionsToRetype || Model.Refusals.Any(r => r.Field is not null && detailFields.Contains(r.Field));
 }
 <form method="post" action="/launch/@proposal.LaunchId/confirm" class="mx-auto max-w-2xl space-y-8 py-2 md:py-8"
       data-launch-confirm
       data-quote-url="/launch/@proposal.LaunchId/quote"
-      data-root-domain="@Model.RootDomain">
+      data-root-domain="@Model.RootDomain"
+      data-suggested-name="@proposal.AppName"
+      data-suggested-slug="@proposal.SuggestedSlug">
     @Html.AntiForgeryToken()
 
     @if (Model.Refusals.Count > 0)
@@ -133,15 +140,18 @@
                     <input name="Name" value="@form.Name" type="text" dir="ltr" required autocomplete="off" spellcheck="false" class="form-control" data-launch-name />
                 </label>
                 @* Drawn for either kind and hidden for a worker, so changing the kind under Details can bring it back. *@
-                @if (Model.Address is { Length: > 0 } address)
+                @if (Model.RootDomain is { Length: > 0 })
                 {
-                    <p class="mt-1.5 text-xs text-ink-muted @webOnly" data-launch-web-only>
-                        @(isFa ? "آدرسش: " : "Its address: ")<bdi dir="ltr" class="break-all font-mono text-ink" data-launch-address>@address</bdi>
-                    </p>
-                }
-                else if (Model.AddressIsReserved)
-                {
-                    <p class="mt-1.5 text-xs text-ink-muted @webOnly" data-launch-web-only>@(isFa ? "این اسم برای خود پنل نگه داشته شده و آدرس نمی‌گیرد. اسم دیگری بگذار." : "That name is kept for the panel itself and gets no address. Choose another.")</p>
+                    @* Both lines, whichever is true now: what is said about a reserved name is about that name, and typing another takes it away. *@
+                    <div class="mt-1.5 text-xs text-ink-muted @webOnly" data-launch-web-only>
+                        <p class="@(Model.AddressIsReserved ? "hidden" : "")" data-launch-address-line>
+                            @(isFa ? "آدرسش: " : "Its address: ")<bdi dir="ltr" class="break-all font-mono text-ink" data-launch-address>@Model.Address</bdi>
+                        </p>
+                        @if (Model.AddressIsReserved)
+                        {
+                            <p data-launch-reserved>@(isFa ? "این اسم برای خود پنل نگه داشته شده و آدرس نمی‌گیرد. اسم دیگری بگذار." : "That name is kept for the panel itself and gets no address. Choose another.")</p>
+                        }
+                    </div>
                 }
                 else
                 {
@@ -164,7 +174,11 @@
                         @if (why.File.Length > 0)
                         {
                             <small class="mt-0.5 block break-words text-xs text-ink-faint" data-launch-why>
-                                @if (why.Token is not null && isFa)
+                                @if (isFa && why.ReasonFa is { Length: > 0 } reasonFa)
+                                {
+                                    <code dir="ltr">@why.File</code><text>: </text><span>@reasonFa</span>
+                                }
+                                else if (why.Token is not null && isFa)
                                 {
                                     <text>چون <code dir="ltr">@why.Token</code> در <code dir="ltr">@why.File</code> هست</text>
                                 }
@@ -248,10 +262,10 @@
 
     <div class="space-y-3">
         <div data-launch-cost><partial name="_Cost" model="Model.Quote" /></div>
-        <noscript><button type="submit" name="Recheck" value="1" formnovalidate class="btn-secondary w-full justify-center text-xs">@(isFa ? "هزینه را دوباره حساب کن" : "Work the cost out again")</button></noscript>
 
         @if (canCreate)
         {
+            <noscript><button type="submit" name="Recheck" value="1" formnovalidate class="btn-secondary w-full justify-center text-xs" data-launch-recheck>@(isFa ? "هزینه را دوباره حساب کن" : "Work the cost out again")</button></noscript>
             <button type="submit" class="btn-primary w-full justify-center py-3 text-base disabled:cursor-not-allowed disabled:opacity-50" disabled="@(Model.Quote.Refusal is not null)" data-launch-submit>
                 <i data-lucide="rocket" class="h-5 w-5"></i>@(isFa ? "راه بینداز" : "Launch")
             </button>
@@ -298,7 +312,15 @@
                 <label class="form-field">
                     <span>@(isFa ? "پوشه‌ی پروژه" : "Project folder")</span>
                     <input name="RootDirectory" value="@form.RootDirectory" type="text" dir="ltr" autocomplete="off" spellcheck="false" class="form-control" />
-                    <small>@(isFa ? "خالی یعنی همان ریشه." : "Blank means the top level.")</small>
+                    @* Blank goes back to the folder the rest of this was read from, so "the top level" is only true when that is where it was read. *@
+                    @if (inspection.RootDirectory is { Length: > 0 } readFrom)
+                    {
+                        <small data-launch-root-hint>@(isFa ? "خالی بگذاری، همان پوشه‌ای می‌ماند که این‌ها را از آن خواندم: " : "Leave it blank and it stays on the folder I read this from: ")<code dir="ltr">@readFrom</code></small>
+                    }
+                    else
+                    {
+                        <small data-launch-root-hint>@(isFa ? "خالی یعنی همان ریشه." : "Blank means the top level.")</small>
+                    }
                 </label>
             }
             @if (Model.Environments.Count > 1)
@@ -337,15 +359,44 @@
                     }
                 </label>
             }
-            @if (Model.Aliases.Any())
+            @if (Model.Connections.Any())
             {
-                <p class="text-xs text-ink-muted sm:col-span-2" data-launch-aliases>
+                @* The line promises only what a ticked service will really set. Every name with a service
+                   that could answer it is on it, hidden when none is ticked, so a tick can bring it back. *@
+                <p class="text-xs text-ink-muted sm:col-span-2 @(Model.Connections.Any(IsAnswered) ? "" : "hidden")" data-launch-aliases>
                     @(isFa ? "این‌ها را خودم به دیتابیس وصل می‌کنم: " : "These I connect to the database myself: ")
-                    @foreach (var alias in Model.Aliases)
+                    @foreach (var connection in Model.Connections.Where(c => AnsweredBy(c).Length > 0))
                     {
-                        <code dir="ltr" class="me-1.5">@alias.Key</code>
+                        <code dir="ltr" class="me-1.5 @(IsAnswered(connection) ? "" : "hidden")" data-launch-answered-name="@AnsweredBy(connection)">@connection.Key</code>
                     }
                 </p>
+
+                @* Every name is drawn, whatever is ticked, because with no script nothing can draw one
+                   later: unticking is the moment it is needed. The script hides what a ticked service answers. *@
+                <div class="space-y-3 sm:col-span-2" data-launch-own-connection>
+                    <div>
+                        <p class="text-sm font-medium text-ink">@(isFa ? "دیتابیس را جای دیگری داری؟ اینجا بنویس" : "Is your database somewhere else? Write it here")</p>
+                        <noscript><p class="mt-0.5 text-xs text-ink-muted" data-launch-own-connection-note>@(isFa ? "فقط وقتی لازم است که تیک دیتابیس بالا را برداشته باشی." : "You only need these if you've unticked the database above.")</p></noscript>
+                        @if (Model.ConnectionsToRetype)
+                        {
+                            <p class="mt-0.5 text-xs text-ink-muted" data-launch-retype-connection>@(isFa ? "این‌ها را برنگرداندم تا جایی نمایش داده نشوند؛ لطفاً دوباره بنویس." : "I didn't draw these back, so they stay off the screen. Please type them again.")</p>
+                        }
+                    </div>
+                    @foreach (var field in Model.Connections)
+                    {
+                        <label class="form-field" data-launch-field="@field.Key" data-launch-connection="@AnsweredBy(field)">
+                            <span class="font-mono" dir="ltr">@field.Key</span>
+                            @if (LaunchConnections.IsMasked(field))
+                            {
+                                <input name="Values[@field.Key]" type="password" dir="ltr" autocomplete="new-password" class="form-control" />
+                            }
+                            else
+                            {
+                                <input name="Values[@field.Key]" type="text" dir="ltr" autocomplete="off" spellcheck="false" value="@Typed(field.Key)" class="form-control" />
+                            }
+                        </label>
+                    }
+                </div>
             }
         </div>
     </details>
