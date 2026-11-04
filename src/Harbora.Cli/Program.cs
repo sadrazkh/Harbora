@@ -31,6 +31,7 @@ app.Configure(config =>
     config.AddCommand<StatusCommand>("status").WithDescription("Check server/session status.");
     config.AddCommand<AppsCommand>("apps").WithDescription("List applications.");
     config.AddCommand<DoctorCommand>("doctor").WithDescription("Check this project for problems before deploying.");
+    config.AddCommand<LaunchCommand>("launch").WithDescription("Read this folder or a repository, then create, connect, deploy and check the app.");
     config.AddCommand<DeployCommand>("deploy").WithDescription("Deploy an app and follow the logs.");
     config.AddCommand<LogsCommand>("logs").WithDescription("Stream logs for a deployment.");
     config.AddCommand<CancelCommand>("cancel").WithDescription("Stop a queued or running deployment.");

@@ -259,6 +259,10 @@ harbora init                                   # writes ./harbora.yml (slug = fo
 harbora doctor                                 # manifest, Dockerfile/COPY sources, $PORT, upload excludes, auth
                                                #   — deploy runs this itself before uploading
 
+harbora launch                                 # this folder, start to finish: says what it found and what it will cost,
+                                               #   then creates the app and its databases, deploys, and checks it works
+harbora launch --git https://github.com/you/shop --yes   # a repository, with no questions (CI)
+
 harbora deploy                                 # deploys this project from ./harbora.yml, following live logs
 harbora deploy my-app --ref main               # …or without a config file
 harbora deploy my-app --tag v1.0.0             # deploy a specific tag
