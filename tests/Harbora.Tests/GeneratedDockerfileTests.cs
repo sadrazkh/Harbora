@@ -295,6 +295,164 @@ public class GeneratedDockerfileTests : IDisposable
             .Should().NotContain("ENV BUILD_FLAG").And.NotContain("ENV NEXT_PUBLIC_API");
     }
 
+    // --- The version a project asks for -----------------------------------------------------------
+
+    private void Project(string csproj, string name = "Shop.csproj") =>
+        File.WriteAllText(Path.Combine(_dir, name), csproj);
+
+    private static string TargetFramework(string value) =>
+        $"<Project Sdk=\"Microsoft.NET.Sdk.Web\"><PropertyGroup><TargetFramework>{value}</TargetFramework></PropertyGroup></Project>";
+
+    [Theory]
+    [InlineData("net10.0", "10.0")]
+    [InlineData("net8.0", "8.0")]
+    [InlineData("net9.0", "9.0")]
+    [InlineData(" net10.0 ", "10.0")]
+    public void A_dotnet_project_is_built_and_run_on_the_version_it_targets(string framework, string expected)
+    {
+        Project(TargetFramework(framework));
+
+        var dockerfile = Buildpacks.Detect(_dir, 8080)!.Value.Dockerfile;
+
+        dockerfile.Should().Contain($"FROM mcr.microsoft.com/dotnet/sdk:{expected} AS build");
+        dockerfile.Should().Contain($"FROM mcr.microsoft.com/dotnet/aspnet:{expected}");
+    }
+
+    [Theory]
+    [InlineData("<Project Sdk=\"Microsoft.NET.Sdk.Web\" />")]
+    [InlineData("not xml at all")]
+    public void A_project_that_does_not_say_stays_on_the_image_it_always_had(string csproj)
+    {
+        Project(csproj);
+
+        var dockerfile = Buildpacks.Detect(_dir, 8080)!.Value.Dockerfile;
+
+        dockerfile.Should().Contain("dotnet/sdk:9.0").And.Contain("dotnet/aspnet:9.0");
+    }
+
+    [Theory]
+    [InlineData("$(MyFramework)")]
+    [InlineData("net48")]
+    [InlineData("netstandard2.0")]
+    public void A_target_with_no_image_of_its_own_stays_on_the_default(string framework)
+    {
+        Project(TargetFramework(framework));
+
+        Buildpacks.Detect(_dir, 8080)!.Value.Dockerfile.Should().Contain("dotnet/sdk:9.0").And.Contain("dotnet/aspnet:9.0");
+    }
+
+    [Fact]
+    public void A_commented_out_target_does_not_count()
+    {
+        Project("<Project Sdk=\"Microsoft.NET.Sdk.Web\"><!-- <TargetFramework>net6.0</TargetFramework> --><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>");
+
+        Buildpacks.Detect(_dir, 8080)!.Value.Dockerfile.Should().Contain("dotnet/sdk:8.0").And.NotContain("6.0");
+    }
+
+    [Fact]
+    public void A_target_kept_in_directory_build_props_counts()
+    {
+        Project("<Project Sdk=\"Microsoft.NET.Sdk.Web\" />");
+        File.WriteAllText(Path.Combine(_dir, "Directory.Build.props"), "<Project><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
+
+        Buildpacks.Detect(_dir, 8080)!.Value.Dockerfile.Should().Contain("dotnet/sdk:10.0");
+    }
+
+    [Fact]
+    public void The_project_read_is_the_one_being_published_in_a_folder_below()
+    {
+        Directory.CreateDirectory(Path.Combine(_dir, "src", "Web"));
+        File.WriteAllText(Path.Combine(_dir, "src", "Web", "Web.csproj"), TargetFramework("net10.0"));
+
+        var dockerfile = Buildpacks.Detect(_dir, 8080)!.Value.Dockerfile;
+
+        dockerfile.Should().Contain("dotnet/sdk:10.0").And.Contain("dotnet publish \"src/Web/Web.csproj\"");
+    }
+
+    private void GoMod(string text) => File.WriteAllText(Path.Combine(_dir, "go.mod"), text);
+
+    [Theory]
+    [InlineData("module x\n\ngo 1.23\n", "1.23")]
+    [InlineData("module x\n\ngo 1.24.3\n", "1.24")]
+    [InlineData("module x\n\ngo 1.25rc1\n", "1.25")]
+    [InlineData("module x\ngo 1.26\ntoolchain go1.26.1\n", "1.26")]
+    public void A_go_module_gets_the_toolchain_it_asks_for_since_these_images_will_not_download_one(string goMod, string expected)
+    {
+        GoMod(goMod);
+
+        Buildpacks.Detect(_dir, 8080)!.Value.Dockerfile.Should().Contain($"FROM golang:{expected}-alpine AS build");
+    }
+
+    [Theory]
+    [InlineData("module x\n")]
+    [InlineData("module x\n\ngo 1.22\n")]
+    [InlineData("module x\n\ngo 1.22.5\n")]
+    [InlineData("module x\n\ngo 1.20\n")]
+    [InlineData("module x\n// go 1.30\n")]
+    [InlineData("module x\n\ngo nonsense\n")]
+    public void A_go_module_at_or_below_the_floor_keeps_the_image_it_always_had(string goMod)
+    {
+        GoMod(goMod);
+
+        Buildpacks.Detect(_dir, 8080)!.Value.Dockerfile.Should().Contain("FROM golang:1.22-alpine AS build");
+    }
+
+    private void GoFile(string path)
+    {
+        var full = Path.Combine(_dir, path.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        File.WriteAllText(full, "package main");
+    }
+
+    [Fact]
+    public void The_standard_go_layout_builds_its_one_command()
+    {
+        GoMod("module x\n");
+        GoFile("cmd/server/main.go");
+        GoFile("internal/thing/thing.go");
+
+        Buildpacks.Detect(_dir, 8080)!.Value.Dockerfile.Should().Contain("go build -o /app/server ./cmd/server");
+    }
+
+    [Fact]
+    public void A_main_go_at_the_top_is_what_is_built_whatever_else_is_in_cmd()
+    {
+        GoMod("module x\n");
+        GoFile("main.go");
+        GoFile("cmd/tool/main.go");
+
+        Buildpacks.Detect(_dir, 8080)!.Value.Dockerfile.ReplaceLineEndings("\n").Should().Contain("go build -o /app/server .\n");
+    }
+
+    [Fact]
+    public void Several_commands_with_nothing_to_say_which_is_left_to_fail_saying_so()
+    {
+        GoMod("module x\n");
+        GoFile("cmd/api/main.go");
+        GoFile("cmd/worker/main.go");
+
+        Buildpacks.Detect(_dir, 8080)!.Value.Dockerfile.ReplaceLineEndings("\n").Should().Contain("go build -o /app/server .\n");
+    }
+
+    [Fact]
+    public void A_folder_in_cmd_with_no_main_go_is_not_a_command()
+    {
+        GoMod("module x\n");
+        GoFile("cmd/server/main.go");
+        GoFile("cmd/shared/shared.go");
+
+        Buildpacks.Detect(_dir, 8080)!.Value.Dockerfile.Should().Contain("./cmd/server");
+    }
+
+    [Fact]
+    public void A_folder_name_no_shell_line_could_hold_plainly_is_not_written_into_one()
+    {
+        GoMod("module x\n");
+        GoFile("cmd/my server/main.go");
+
+        Buildpacks.Detect(_dir, 8080)!.Value.Dockerfile.ReplaceLineEndings("\n").Should().Contain("go build -o /app/server .\n");
+    }
+
     // --- PHP, which until now could not run a Laravel at all --------------------------------------
 
     [Theory]

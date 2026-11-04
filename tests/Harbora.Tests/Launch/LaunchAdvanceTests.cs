@@ -159,6 +159,24 @@ public sealed class LaunchAdvanceTests
     }
 
     [Fact]
+    public void A_build_that_wrote_no_site_says_that_rather_than_quoting_a_screen_of_shell()
+    {
+        // What the daemon really sends back: the whole RUN step, with the sentence inside it as an echo.
+        var error =
+            "Build of harbora/shop:build-1 failed at Step 7/12 : RUN found=\"\"; for dir in dist build out; do " +
+            $"if [ -z \"$found\" ]; then echo \"{Harbora.Infrastructure.Deployments.Buildpacks.NotASite}\" >&2; exit 1; fi: " +
+            "The command '/bin/sh -c found=\"\"; for dir in dist build' returned a non-zero code: 1";
+
+        var move = LaunchAdvance.Decide(Snapshot(LaunchStatus.Deploying, deploymentId: Guid.CreateVersion7(),
+            deployment: new(DeploymentStatus.Failed, error)));
+
+        move.FailedStep.Should().Be(LaunchStepKeys.Deploy);
+        move.Message.Should().Be(
+            "The deployment failed: The build finished without producing an index.html, so this is not a site. It needs a start script in package.json, or a Dockerfile.");
+        move.MessageFa.Should().Contain("index.html").And.Contain("Dockerfile").And.NotContain("/bin/sh").And.NotContain("found=");
+    }
+
+    [Fact]
     public void An_uploads_failure_says_to_upload_a_new_version_because_the_archive_is_gone()
     {
         var move = LaunchAdvance.Decide(Snapshot(LaunchStatus.Deploying, source: LaunchSourceKind.Upload,

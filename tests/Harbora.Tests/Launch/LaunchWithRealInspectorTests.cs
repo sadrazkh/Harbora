@@ -524,6 +524,33 @@ public sealed class LaunchWithRealInspectorTests
         (await NotSetLineAsync(h, id)).Should().Contain("DATABASE_URL");
     }
 
+    [Fact]
+    public async Task A_javascript_monorepo_asks_which_app_and_each_answer_is_about_that_app()
+    {
+        using var h = new LaunchHarness();
+        var id = await UploadAsync(h, "mono-0123456789abcdef0123456789abcdef.zip", new()
+        {
+            ["package.json"] = """{"private":true,"workspaces":["apps/*"],"scripts":{"build":"turbo run build"}}""",
+            ["apps/api/package.json"] = NodeWithPostgres,
+            ["apps/api/.env.example"] = "DB_HOST=\nPORT=8080\n",
+            ["apps/web/package.json"] = """{"scripts":{"build":"vite build"}}""",
+            ["apps/web/index.html"] = "<html></html>",
+            ["packages/ui/package.json"] = """{"scripts":{"build":"tsup"}}"""
+        });
+
+        var asked = await h.Request().ProposeAsync(id, default);
+        asked!.Inspection.RootCandidates.Should().BeEquivalentTo(["apps/api", "apps/web"]);
+
+        var api = await h.Request().ChooseRootAsync(id, "apps/api", default);
+        api.Value!.Defaults.RootDirectory.Should().Be("apps/api");
+        api.Value.Defaults.ContainerPort.Should().Be(8080);
+        api.Value.Defaults.Services.Should().ContainSingle().Which.Type.Should().Be(ManagedServiceType.PostgreSql);
+
+        var web = await h.Request().ChooseRootAsync(id, "apps/web", default);
+        web.Value!.Inspection.Stack.Should().Be(DetectedStack.Frontend);
+        web.Value.Defaults.RootDirectory.Should().Be("apps/web");
+    }
+
     private const string ViteShaped =
         """{"name":"site","scripts":{"dev":"vite","build":"vite build"},"devDependencies":{"vite":"5"}}""";
 

@@ -702,12 +702,140 @@ public class SourceInspectorTests : InspectorTreeTests
     }
 
     [Fact]
-    public void A_procfile_web_line_is_still_left_alone_where_the_stack_can_start_by_itself()
+    public void A_procfile_web_line_is_the_start_command_even_where_the_stack_could_start_by_itself()
     {
         Write("package.json", RealNodeApp);
         Write("Procfile", "web: node other.js\n");
 
-        Inspect().StartCommand.Should().BeNull();
+        Inspect().StartCommand.Should().Be("node other.js");
+    }
+
+    [Fact]
+    public void A_python_apps_real_server_is_kept_rather_than_its_development_one()
+    {
+        Write("requirements.txt", "flask\ngunicorn\n");
+        Write("app.py");
+        Write("Procfile", "web: gunicorn app:app\n");
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.Python);
+        result.Kind.Should().Be(DetectedAppKind.Web);
+        result.StartCommand.Should().Be("gunicorn app:app");
+    }
+
+    [Fact]
+    public void A_php_apps_own_command_is_kept()
+    {
+        Write("index.php");
+        Write("Procfile", "web: php -S 0.0.0.0:$PORT\n");
+
+        Inspect().StartCommand.Should().Be("php -S 0.0.0.0:$PORT");
+    }
+
+    [Theory]
+    [InlineData("web: vendor/bin/heroku-php-apache2 public/\n")]
+    [InlineData("web: vendor/bin/heroku-php-nginx -C nginx.conf public/\n")]
+    public void A_launcher_that_exists_only_on_heroku_is_left_to_this_images_own_apache(string procfile)
+    {
+        Write("composer.json", "{}");
+        Write("artisan");
+        Write("Procfile", procfile);
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.Php);
+        result.Kind.Should().Be(DetectedAppKind.Web);
+        result.StartCommand.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("go.mod", "module x", "web: bin/server\n")]
+    [InlineData("Shop.csproj", "<Project Sdk=\"Microsoft.NET.Sdk.Web\" />", "web: cd $HOME/heroku_output && dotnet ./Shop.dll\n")]
+    [InlineData("index.html", "<html></html>", "web: serve .\n")]
+    [InlineData("Dockerfile", "FROM scratch\n", "web: node other.js\n")]
+    public void An_image_that_already_knows_how_it_starts_keeps_that(string marker, string content, string procfile)
+    {
+        Write(marker, content);
+        Write("Procfile", procfile);
+
+        var result = Inspect();
+
+        result.Kind.Should().Be(DetectedAppKind.Web);
+        result.StartCommand.Should().BeNull("a compiled image holds one output and runs it, and the line names a path that is only on Heroku");
+    }
+
+    [Fact]
+    public void A_worker_line_is_still_the_start_command_on_any_stack()
+    {
+        Write("go.mod", "module x");
+        Write("Procfile", "worker: ./server --jobs\n");
+
+        var result = Inspect();
+
+        result.Kind.Should().Be(DetectedAppKind.Worker);
+        result.StartCommand.Should().Be("./server --jobs");
+    }
+
+    // --- Nuxt, whose build writes a server --------------------------------------------------------
+
+    private const string NuxtProject =
+        """{"scripts":{"build":"nuxt build","dev":"nuxt dev","preview":"nuxt preview","postinstall":"nuxt prepare"},"devDependencies":{"nuxt":"^3.11.0"}}""";
+
+    [Fact]
+    public void A_default_nuxt_project_runs_the_server_its_build_writes_rather_than_being_taken_for_a_site()
+    {
+        Write("package.json", NuxtProject);
+        Write("nuxt.config.ts");
+        Write("app.vue");
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.Node);
+        result.Kind.Should().Be(DetectedAppKind.Web);
+        result.StartCommand.Should().Be("node .output/server/index.mjs");
+        result.Port.Should().Be(3000);
+    }
+
+    [Fact]
+    public void A_nuxt_project_in_dependencies_is_the_same()
+    {
+        Write("package.json", """{"scripts":{"build":"nuxt build"},"dependencies":{"nuxt":"^3.11.0"}}""");
+
+        Inspect().StartCommand.Should().Be("node .output/server/index.mjs");
+    }
+
+    [Fact]
+    public void A_nuxt_project_that_generates_a_site_is_a_site()
+    {
+        Write("package.json", """{"scripts":{"build":"nuxt generate"},"devDependencies":{"nuxt":"^3.11.0"}}""");
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.Frontend);
+        result.StartCommand.Should().BeNull();
+    }
+
+    [Fact]
+    public void A_nuxt_project_with_its_own_start_keeps_it()
+    {
+        Write("package.json", """{"scripts":{"build":"nuxt build","start":"node custom.mjs"},"dependencies":{"nuxt":"^3.11.0"}}""");
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.Node);
+        result.StartCommand.Should().BeNull();
+    }
+
+    [Fact]
+    public void Sveltekit_is_left_to_its_adapter_and_the_build_says_if_that_was_not_a_site()
+    {
+        Write("package.json", """{"scripts":{"build":"vite build"},"devDependencies":{"@sveltejs/kit":"^2.0.0"}}""");
+
+        var result = Inspect();
+
+        result.Stack.Should().Be(DetectedStack.Frontend);
+        result.StartCommand.Should().BeNull();
     }
 
     [Fact]
@@ -849,6 +977,181 @@ public class SourceInspectorTests : InspectorTreeTests
         note.MessageFa.Should().Contain("ساخت");
     }
 
+    // --- A JavaScript monorepo's root ---------------------------------------------------------------
+
+    private const string RootTooling = """{"private":true,"workspaces":["apps/*"],"scripts":{"build":"turbo run build","dev":"turbo run dev"},"devDependencies":{"turbo":"2"}}""";
+    private const string SomeApp = """{"scripts":{"start":"node index.js"}}""";
+
+    [Fact]
+    public void A_root_with_only_build_tooling_asks_which_of_its_apps()
+    {
+        Write("package.json", RootTooling);
+        Write("apps/web/package.json", """{"scripts":{"build":"vite build"}}""");
+        Write("apps/api/package.json", SomeApp);
+        Write("packages/ui/package.json", """{"scripts":{"build":"tsup"}}""");
+
+        var result = Inspect();
+
+        result.RootDirectory.Should().BeNull();
+        result.RootCandidates.Should().Equal("apps/api", "apps/web");
+        Codes(result).Should().Contain("several-apps-found");
+    }
+
+    [Fact]
+    public void A_client_and_a_server_beside_a_root_that_starts_nothing_are_two_apps()
+    {
+        Write("package.json", """{"scripts":{"dev":"concurrently \"npm:dev:*\""}}""");
+        Write("client/package.json", """{"scripts":{"build":"vite build"}}""");
+        Write("client/public/index.html");
+        Write("server/package.json", SomeApp);
+
+        Inspect().RootCandidates.Should().Equal("client", "server");
+    }
+
+    [Fact]
+    public void An_older_monorepo_keeps_its_apps_in_packages_and_is_read_only_when_nothing_else_is_found()
+    {
+        Write("package.json", """{"private":true,"scripts":{"build":"lerna run build"}}""");
+        Write("packages/web/package.json", SomeApp);
+        Write("packages/api/package.json", SomeApp);
+
+        Inspect().RootCandidates.Should().Equal("packages/api", "packages/web");
+    }
+
+    [Fact]
+    public void One_app_behind_the_tooling_is_the_app()
+    {
+        Write("package.json", "{}");
+        Write("server/go.mod", "module x");
+
+        var result = Inspect();
+
+        result.RootDirectory.Should().Be("server");
+        result.Stack.Should().Be(DetectedStack.Go);
+    }
+
+    [Fact]
+    public void Apps_of_any_language_count_behind_it()
+    {
+        Write("package.json", "{}");
+        Write("backend/Backend.csproj", Csproj());
+        Write("frontend/package.json", SomeApp);
+        Write("worker/requirements.txt");
+
+        Inspect().RootCandidates.Should().Equal("backend", "frontend", "worker");
+    }
+
+    [Fact]
+    public void A_root_that_can_start_something_is_the_app_whatever_is_below_it()
+    {
+        Write("package.json", """{"scripts":{"start":"node server/index.js"}}""");
+        Write("client/package.json", """{"scripts":{"build":"vite build"}}""");
+        Write("server/package.json", SomeApp);
+
+        var result = Inspect();
+
+        result.RootDirectory.Should().BeNull();
+        result.RootCandidates.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void An_ordinary_vite_project_stays_where_it_is()
+    {
+        Write("package.json", """{"scripts":{"build":"vite build","dev":"vite"}}""");
+        Write("index.html");
+        Write("src/main.js");
+        Write("public/favicon.ico");
+
+        var result = Inspect();
+
+        result.RootDirectory.Should().BeNull();
+        result.RootCandidates.Should().BeEmpty();
+        result.Stack.Should().Be(DetectedStack.Frontend);
+    }
+
+    [Fact]
+    public void A_create_react_app_with_its_index_html_in_public_is_not_a_static_site_in_a_folder()
+    {
+        Write("package.json", """{"scripts":{"start":"react-scripts start","build":"react-scripts build"}}""");
+        Write("public/index.html");
+        Write("src/index.js");
+
+        var result = Inspect();
+
+        result.RootDirectory.Should().BeNull();
+        result.Stack.Should().Be(DetectedStack.Frontend);
+    }
+
+    [Fact]
+    public void A_project_that_builds_its_own_source_is_not_left_for_a_helper_package_beside_it()
+    {
+        Write("package.json", """{"scripts":{"start":"react-scripts start","build":"react-scripts build"}}""");
+        Write("public/index.html");
+        Write("src/index.js");
+        Write("functions/package.json", SomeApp);
+
+        var result = Inspect();
+
+        result.RootDirectory.Should().BeNull();
+        result.RootCandidates.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Laravel_with_a_resources_tree_and_a_frontend_build_is_laravel()
+    {
+        Write("composer.json", "{}");
+        Write("artisan");
+        Write("package.json", """{"scripts":{"build":"vite build","dev":"vite"}}""");
+        Write("resources/js/app.js");
+        Write("resources/js/package.json", "{}");
+        Write("public/index.php");
+
+        var result = Inspect();
+
+        result.RootDirectory.Should().BeNull();
+        result.RootCandidates.Should().BeEmpty();
+        result.Stack.Should().Be(DetectedStack.Php);
+    }
+
+    [Theory]
+    [InlineData("docs/package.json")]
+    [InlineData("examples/basic/package.json")]
+    [InlineData("scripts/package.json")]
+    [InlineData("tools/package.json")]
+    public void A_root_with_only_its_own_helpers_below_it_stays_where_it_is(string helper)
+    {
+        Write("package.json", """{"scripts":{"build":"tsc"}}""");
+        Write(helper, SomeApp);
+
+        var result = Inspect();
+
+        result.RootDirectory.Should().BeNull();
+        result.RootCandidates.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void A_procfile_at_the_root_says_how_the_root_runs()
+    {
+        Write("package.json", """{"scripts":{"build":"tsc"}}""");
+        Write("Procfile", "web: node dist/index.js\n");
+        Write("client/package.json", SomeApp);
+        Write("server/package.json", SomeApp);
+
+        Inspect().RootCandidates.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void A_lone_dotnet_project_below_a_frontends_tooling_stays_as_the_pipeline_already_builds_it()
+    {
+        Write("package.json", """{"scripts":{"build":"vite build"}}""");
+        Write("svc/App.csproj", Csproj());
+
+        var result = Inspect();
+
+        result.RootDirectory.Should().BeNull();
+        result.Stack.Should().Be(DetectedStack.DotNet);
+    }
+
     // --- Kind and start command --------------------------------------------------------------
 
     [Fact]
@@ -861,7 +1164,7 @@ public class SourceInspectorTests : InspectorTreeTests
         var result = Inspect();
 
         result.Kind.Should().Be(DetectedAppKind.Web);
-        result.StartCommand.Should().BeNull();
+        result.StartCommand.Should().Be("python bot.py");
     }
 
     [Fact]

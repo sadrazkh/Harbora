@@ -167,9 +167,7 @@ public static class LaunchAdvance
                 var happened = launch.Deployment.Status == DeploymentStatus.Failed
                     ? ("The deployment failed", "استقرار شکست خورد")
                     : ("The deployment was stopped", "استقرار متوقف شد");
-                var detail = string.IsNullOrWhiteSpace(launch.Deployment.ErrorMessage)
-                    ? ""
-                    : ": " + launch.Deployment.ErrorMessage;
+                var (detail, detailFa) = DeploymentSays(launch.Deployment.ErrorMessage);
 
                 // The pipeline consumes an upload on its first attempt, so there is nothing here to try
                 // again with. Saying so is what stops a person pressing a button that cannot help.
@@ -178,13 +176,29 @@ public static class LaunchAdvance
                         " کد آپلودشده در همان تلاش مصرف شد: نسخهٔ تازه را از صفحهٔ اپ آپلود کنید.")
                     : ("", "");
                 return Fail(LaunchStepKeys.Deploy,
-                    $"{happened.Item1}{detail}.{next}", $"{happened.Item2}{detail}.{nextFa}");
+                    $"{happened.Item1}{detail}.{next}", $"{happened.Item2}{detailFa}.{nextFa}");
 
             default:
                 // Queued, building, or PendingApproval: none of them is a failure, and all of them end
                 // by themselves. An approval that is never given expires into Cancelled.
                 return LaunchMove.Stay;
         }
+    }
+
+    /// <summary>
+    /// A failed <c>RUN</c> comes back from the daemon as that whole step quoted, with an exit code on the
+    /// end. For a build that wrote no site that is a screen of shell with the one sentence that matters
+    /// buried in it as an <c>echo</c>, so here it is lifted out: it is the answer for a SvelteKit whose
+    /// adapter did not write a site, and for a compiled backend with no start script.
+    /// </summary>
+    private static (string Detail, string DetailFa) DeploymentSays(string? error)
+    {
+        if (string.IsNullOrWhiteSpace(error)) return ("", "");
+
+        return error.Contains(Buildpacks.NotASite, StringComparison.Ordinal)
+            ? (": " + Buildpacks.NotASite.TrimEnd('.'),
+                ": ساخت تمام شد ولی index.html نساخت، پس این یک سایت نیست. یک اسکریپت start در package.json می‌خواهد، یا یک Dockerfile")
+            : (": " + error, ": " + error);
     }
 
     private static LaunchMove DecideVerifying(LaunchSnapshot launch)
