@@ -22,6 +22,23 @@ public class LogTextTests
         LogText.Clean("migrating\0done").Should().Be("migratingdone");
     }
 
+    [Theory]
+    [InlineData("\u001b[91mnpm notice\n\u001b[0m", "npm notice\n")]
+    [InlineData("\u001b[1;31merror\u001b[0m: nope", "error: nope")]
+    [InlineData("\u001b[?25lhidden cursor", "hidden cursor")]
+    public void A_colour_code_goes_whole_and_leaves_no_bracket_behind(string raw, string expected)
+    {
+        // A real build's log had [91m and [0m around everything a step wrote to stderr: the escape
+        // character was removed and the rest of the code was printed.
+        LogText.Clean(raw).Should().Be(expected);
+    }
+
+    [Fact]
+    public void A_bracket_that_is_not_a_colour_code_is_left_alone()
+    {
+        LogText.Clean("[91m is what this looks like when quoted").Should().Be("[91m is what this looks like when quoted");
+    }
+
     [Fact]
     public void Dockers_stream_framing_is_stripped()
     {
