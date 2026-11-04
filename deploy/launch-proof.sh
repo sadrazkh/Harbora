@@ -535,7 +535,9 @@ installer_ref="${LP_EXPECT_SHA:-$LP_REF}"
 log "curl -fsSL ${LP_REPO_RAW}/${installer_ref}/deploy/install.sh | bash"
 curl -fsSL "${LP_REPO_RAW}/${installer_ref}/deploy/install.sh" -o "$WORK/install.sh"
 grep -q 'Harbora' "$WORK/install.sh" || die "What came from ${LP_REPO_RAW}/${installer_ref}/deploy/install.sh is not the installer."
-bash "$WORK/install.sh" install </dev/null 2>&1 | tee "$WORK/install.log"
+install_exit=0
+bash "$WORK/install.sh" install </dev/null 2>&1 | tee "$WORK/install.log" || install_exit=$?
+[ "$install_exit" -eq 0 ] || fail "install.sh exited $install_exit. Its last lines: $(tail -n 25 "$WORK/install.log" | cut -c1-300)"
 
 # Its exit code is not evidence: it calls `verify_install || true` and prints the banner either way.
 if grep -q 'Installation finished WITH ERRORS' "$WORK/install.log"; then
@@ -639,7 +641,8 @@ git -C "$APP_DIR" archive HEAD src/Harbora.Cli src/Harbora.Shared Directory.Buil
 docker run --rm -v "$WORK/cli-src:/src" -v "$WORK/cli:/out" -w /src mcr.microsoft.com/dotnet/sdk:10.0 \
   dotnet publish src/Harbora.Cli/Harbora.Cli.csproj -c Release -r linux-x64 --self-contained true \
   -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false \
-  -o /out --nologo -v q
+  -o /out --nologo -v q > "$WORK/out/publish.txt" 2>&1 \
+  || fail "dotnet publish of the CLI failed: $(tail -n 15 "$WORK/out/publish.txt" | cut -c1-300)"
 HARBORA="$WORK/cli/harbora"
 [ -x "$HARBORA" ] || die "dotnet publish finished, and there is no executable at $HARBORA."
 
