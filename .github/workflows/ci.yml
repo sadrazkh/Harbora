@@ -263,7 +263,7 @@ jobs:
 
           # Named individually because their absence from the sweep was the actual defect, and a
           # count alone would not notice one of them being renamed out of reach again.
-          for required in deploy/install.sh deploy/harbora deploy/live-host-proof.sh; do
+          for required in deploy/install.sh deploy/harbora deploy/live-host-proof.sh deploy/launch-proof.sh; do
             printf '%s\n' "${scripts[@]}" | grep -qx "$required" || {
               echo "::error::$required was not picked up by the sweep, so it would not have been checked."
               exit 1
