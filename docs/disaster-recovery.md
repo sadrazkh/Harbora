@@ -261,7 +261,7 @@ If the app runs on a node or a legacy agent, this refuses — see *the gap*, abo
 
 ### The app was deleted
 
-The app's rows are gone. Recreate it (**Apps → New App**) with the same slug and domain, restore its
+The app's rows are gone. Recreate it (**Apps → Full form**) with the same slug and domain, restore its
 configuration from an **App config** backup if you have one, deploy, then restore its volume.
 
 If several apps went with it and you would rather rewind the whole panel, `harbora restore-db` is

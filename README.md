@@ -57,6 +57,21 @@
 
 <sub>Screenshots are from the panel itself, annotated. The UI is bilingual — Persian and English, RTL and LTR.</sub>
 
+## 🎯 From your code to a running app
+
+You wrote an app. Give it to Harbora and the database, the connection, the deployment and the checks are done for you, with nothing to learn first and no AI involved.
+
+**In the panel:** open **Launch an app** (`/launch`), give it a Git address or a zip, read the one screen that says what it found, what it will create and what that costs, and press **Launch**. It ends on the app's address, or on the exact step that stopped and what to do about it.
+
+**From a terminal:**
+
+```bash
+cd my-app
+harbora launch
+```
+
+The only thing asked of your code: read the variables you are given (`DATABASE_URL`, `REDIS_URL`, …) and listen on `0.0.0.0`. The one-page guide is **[docs/tutorial/15-launch.md](docs/tutorial/15-launch.md)**. No panel yet? Install one below.
+
 ## 🚀 Install in one command
 
 On a fresh **Linux VPS** (Ubuntu / Debian / Fedora / Alpine), as root:
@@ -153,9 +168,9 @@ Updating never overwrites `deploy/.env`, but it **does** add settings newer vers
 ## ▶️ First run
 
 1. Open **`https://<panel-domain>/setup`** and create your **owner** account — that is you, the provider.
-2. You are in. The dashboard shows apps, deployments and host resources.
+2. You are in. With nothing in the workspace yet the dashboard offers one thing, **Get started**, which is the launch above. After that it shows apps, deployments and host resources.
 
-> **⏱ 60-second smoke test.** **Apps → New App** → source *Prebuilt image* → image `nginx:alpine`, port `80`, size `nano`, domain `test.<root-domain>` → **Save** → **Deploy**. Watch the live logs, then open the domain: nginx, with a valid certificate.
+> **⏱ 60-second smoke test.** **Apps → Full form** → source *Prebuilt image* → image `nginx:alpine`, port `80`, size `nano`, domain `test.<root-domain>` → **Save** → **Deploy**. Watch the live logs, then open the domain: nginx, with a valid certificate.
 
 A copy-paste walkthrough, including adding worker nodes, is in **[deploy/RUNBOOK.md](deploy/RUNBOOK.md)**. A screen-by-screen tour of the panel is in **[docs/tutorial](docs/tutorial)**.
 
@@ -164,6 +179,7 @@ A copy-paste walkthrough, including adding worker nodes, is in **[deploy/RUNBOOK
 <details open>
 <summary><b>🚀 Deploy and build</b></summary>
 
+- **Launch**: give it a Git address, a zip or a folder, and one screen says what it found, what it will create and what that costs. One button then creates the databases, connects them under the names your code reads, deploys, and checks what a green deployment does not prove: that the app stayed up, that each database answers on the app's network, that its address works from outside, and that its log is not complaining. Guide: **[docs/tutorial/15-launch.md](docs/tutorial/15-launch.md)**.
 - **Deploy** from a Git repo (with a Dockerfile **or none** — automatic buildpacks detect Node / .NET / Go / PHP / Python / static and generate the build), a Dockerfile, a **Docker Compose stack**, a static site (Git repo served by Nginx), a prebuilt image, a CLI upload, or a one-click **template**. Templates can provision complete multi-service projects (WordPress + MariaDB, Redis Commander + Redis), private networking, generated secrets, reference variables and persistent volumes. Compose imports use the same private-network, health-check and safe cutover pipeline as ordinary apps.
 - **Git integration**: connect GitHub/GitLab/Gitea by token **or OAuth**; deploy-on-push/tag through HMAC-verified webhooks; commit metadata, deploy history, rollback.
 - **Visual routing designer**: drag-and-drop rules, host/path routing, SSL toggle, HTTP→HTTPS, WebSocket, basic-auth, custom headers, a live Traefik-config preview, validate and apply with rollback.
@@ -281,7 +297,7 @@ harbora run -- npm start                       # run a local command with that s
 For a project that is not in a repository the server can reach — a private machine, a work laptop, a folder you have never pushed anywhere:
 
 ```bash
-# 1. In the panel: New App → source "Push from my machine" → Save
+# 1. In the panel: Apps → Full form → source "Harbora CLI" → Save
 # 2. Once, on your machine. Your panel account is enough; no token to create first:
 harbora login --email you@example.com --server https://panel.example.com
 
@@ -290,6 +306,8 @@ harbora deploy            # asks which app, then remembers it in harbora.yml
 ```
 
 The folder is packed, uploaded and built **on the server** — the same build path a Git deploy takes, so stack detection, zero-downtime cutover and rollback behave identically. `harbora deploy` pushes automatically when the folder has no `.git`.
+
+No app for it yet? `harbora launch` from the same folder does step 1 for you and makes its databases too: **[docs/tutorial/15-launch.md](docs/tutorial/15-launch.md)**.
 
 | Flag | Effect |
 |---|---|
@@ -476,6 +494,7 @@ Written down because a platform that hides these is a platform you find them in 
 - A v1 node runs prebuilt images. Building from source happens on the panel; the node is told a digest to pull, never a repository to clone.
 - **Only the panel's own host can back up volumes and databases.** A volume or managed database on any other server — a v1 node or a legacy agent — cannot be backed up or restored yet: carrying an archive between two machines needs a transport Harbora does not have. It refuses before it starts rather than writing an archive nobody can read back. Plan for it in [docs/disaster-recovery.md](docs/disaster-recovery.md).
 - **All three function hosts build and run; what is still unwritten is `docker build` on a server.** The generator's own output — the real `FunctionProject` source, copied byte for byte rather than retyped — was built and exercised in a scratch harness on 2026-08-18: each runtime answered `/__harbora/health` with its own name and the right function count, routed requests, refused an unsigned invocation with 401, accepted a signed one with 204, and logged a scheduled run. The one step nothing in this repository records is the first `docker build` of those Dockerfiles through the deploy pipeline on a real server. Written up in [the functions design](docs/superpowers/specs/2026-08-18-functions-design.md) §3.
+- **Launch is tested in pieces, not yet end to end on a real server.** The reading of a source tree runs against real files, but creating, deploying and checking are tested against fakes for Docker, Traefik, certificates and the database engines, so no record here shows a launch going from a real repository to a real address. Three limits are by design: the database check proves the database answers on the app's network with its own credentials, not that your code connected; a 404 at the address counts as something answering; and MongoDB, RabbitMQ and NATS are not connection-tested at all, and say so rather than passing.
 - **Functions do not scale to zero and are not billed per request.** The host runs like any other app and is metered by the hour — the answer this platform already settled on for a self-hosted, single-VPS product. Nor do they install packages: each host has what its base image ships, and a function that needs npm or NuGet is an ordinary application.
 - **The AI service is a preview.** Everything around it is built and tested — plans, keys, routing, rate limits, metering, SSRF checks — but no request has ever been made to a real model provider from this codebase, so nothing has proven the last hop. It is labelled *Preview* in the panel and hidden from the sidebar in Simple mode until one has.
 - **The in-panel assistant is new, and most of it has not met a real model yet.** It is a chat drawer opened from the top bar (`Ctrl+J`) that answers in Persian or English, writes its answer as it is generated (and keeps it if you reload mid-answer), looks things up with read-only tools, and turns every change — apps, databases, projects, environment variables, domains, deploys, rollbacks, deletes — into a plan you approve: safe changes ask once and can be remembered, dangerous ones always ask, and a delete asks you to type the resource's name. Secrets go in through a lock button, so the model only ever sees a placeholder and the panel puts the value in when the step runs. It has the signed-in person's permissions and no more, and its model calls are counted per workspace per day. It stays off until the owner gives **Settings** an OpenAI-compatible provider (OpenRouter works) and the `assistant` feature is enabled under **Platform → Features** (the provider's own default plan has it). Everything is tested against scripted fakes. The first, read-only release has been run against a real free model on OpenRouter — the **Test the agent model** button passed 6 of 6 — but the write tools, the streamed answers and the lock button have not yet been run against a real provider, so which free models call tools well, in Persian especially, is still unproven. Guide: [docs/tutorial/08-ai.md](docs/tutorial/08-ai.md).
