@@ -531,7 +531,7 @@ public sealed class LaunchServiceTests
 
         first.Status.Should().Be(LaunchStatus.Failed);
         h.Row(id).FailedStep.Should().Be(LaunchStepKeys.App);
-        first.Steps.Single(s => s.Key == LaunchStepKeys.Services).State.Should().Be(LaunchStepState.Done);
+        first.Steps.Single(s => s.Key == LaunchStepKeys.Services).State.Should().Be(LaunchStepState.Running, "it is still being set up, and nothing has said otherwise");
         first.Steps.Single(s => s.Key == LaunchStepKeys.App).State.Should().Be(LaunchStepState.Failed);
 
         (await h.Request().RetryAsync(id, null, default)).Value!.Status.Should().Be(LaunchStatus.WaitingForServices);
@@ -746,6 +746,148 @@ public sealed class LaunchServiceTests
 
         h.Row(id).Status.Should().Be(LaunchStatus.Succeeded);
         h.DeploymentsQueued.Should().Be(1, "the checks' retry does not deploy again");
+    }
+
+    // ---- what exists, from the rows --------------------------------------------------------------
+
+    [Fact]
+    public async Task What_a_launch_made_is_read_from_the_rows_with_a_link_and_whether_it_is_ready()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(NodeWithPostgres());
+
+        var before = await h.Request().GetAsync(id, default);
+        before!.Created.Should().BeEmpty("nothing has been made on a confirm screen");
+        before.AppGone.Should().BeFalse();
+
+        await h.ConfirmAsync(id);
+
+        var view = await h.Request().GetAsync(id, default);
+        var database = view!.Created!.Single(c => c.Kind == "database");
+        var app = view.Created!.Single(c => c.Kind == "app");
+        var appRow = h.Store().Apps.IgnoreQueryFilters().Single();
+        var databaseRow = h.Store().ManagedServices.IgnoreQueryFilters().Single();
+
+        database.Name.Should().Be(databaseRow.Name);
+        database.LinkPath.Should().Be($"/databases/{databaseRow.Id}");
+        database.Ready.Should().BeFalse("it is still being set up");
+        app.Name.Should().Be(appRow.Name);
+        app.LinkPath.Should().Be($"/apps/details/{appRow.Id}");
+        app.Ready.Should().BeFalse("nothing is deployed");
+
+        h.ServicesAre(ServiceStatus.Running);
+        using (var db = h.Store())
+        {
+            db.Apps.IgnoreQueryFilters().Single().Status = AppStatus.Running;
+            db.SaveChanges();
+        }
+
+        view = await h.Request().GetAsync(id, default);
+        view!.Created.Should().OnlyContain(c => c.Ready);
+    }
+
+    [Fact]
+    public async Task A_database_that_failed_is_named_as_there_and_not_ready()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(NodeWithPostgres());
+        await h.ConfirmAsync(id);
+        h.ServicesAre(ServiceStatus.Failed, "image pull failed");
+
+        (await h.Request().GetAsync(id, default))!.Created!.Single(c => c.Kind == "database").Ready.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task An_app_deleted_since_is_gone_whatever_the_status_says_and_is_no_longer_listed()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(NodeWithPostgres());
+        await h.ConfirmAsync(id);
+        h.ServicesAre(ServiceStatus.Running);
+        await h.TickAsync();
+        h.DeploymentIs(h.Row(id).DeploymentId!.Value, DeploymentStatus.Succeeded);
+        await h.TickAsync();
+        h.Advance(TimeSpan.FromSeconds(30));
+        await h.TickAsync();
+        h.Row(id).Status.Should().Be(LaunchStatus.Succeeded);
+
+        using (var db = h.Store())
+        {
+            db.Apps.RemoveRange(db.Apps.IgnoreQueryFilters());
+            db.SaveChanges();
+        }
+
+        var view = await h.Request().GetAsync(id, default);
+        view!.Status.Should().Be(LaunchStatus.Succeeded);
+        view.AppGone.Should().BeTrue();
+        view.PublicUrl.Should().BeNull();
+        view.Created.Should().ContainSingle().Which.Kind.Should().Be("database");
+    }
+
+    [Fact]
+    public async Task A_launch_that_has_made_no_app_yet_has_not_lost_one()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(NodeWithPostgres());
+        h.Creates.RefuseApp = new ServiceRefusal("No.", "نه.");
+        await h.ConfirmAsync(id);
+
+        var view = await h.Request().GetAsync(id, default);
+        view!.Status.Should().Be(LaunchStatus.Failed);
+        view.AppGone.Should().BeFalse();
+        view.Created.Should().ContainSingle().Which.Kind.Should().Be("database");
+    }
+
+    [Fact]
+    public async Task The_databases_step_says_what_the_rows_say_on_a_launch_that_stopped_past_it()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(NodeWithPostgres());
+        h.Creates.RefuseApp = new ServiceRefusal("No.", "نه.");
+        await h.ConfirmAsync(id);
+        h.Row(id).FailedStep.Should().Be(LaunchStepKeys.App);
+
+        LaunchStepView Databases() =>
+            h.Request().GetAsync(id, default).GetAwaiter().GetResult()!.Steps.Single(s => s.Key == LaunchStepKeys.Services);
+
+        var serviceId = h.Store().ManagedServices.IgnoreQueryFilters().Single().Id;
+
+        Databases().State.Should().Be(LaunchStepState.Running, "it is still provisioning, whatever stopped the launch");
+        Databases().Detail.Should().Contain("shop-postgresql");
+        Databases().LinkPath.Should().Be($"/databases/{serviceId}");
+
+        h.ServicesAre(ServiceStatus.Failed, "image pull failed");
+        Databases().State.Should().Be(LaunchStepState.Failed);
+        Databases().Detail.Should().Contain("image pull failed");
+        Databases().DetailFa.Should().Contain("image pull failed");
+        Databases().LinkPath.Should().Be($"/databases/{serviceId}");
+
+        h.ServicesAre(ServiceStatus.Running);
+        Databases().State.Should().Be(LaunchStepState.Done);
+    }
+
+    [Fact]
+    public async Task A_blank_posted_with_a_null_value_is_named_and_nothing_sets_it()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(NodeWithPostgres());
+
+        await h.ConfirmAsync(id, c => c with
+        {
+            EnvVars =
+            [
+                new LaunchEnvChoice("STRIPE_SECRET_KEY", null, IsSecret: true),
+                new LaunchEnvChoice("LOG_LEVEL", null),
+                new LaunchEnvChoice("JWT_SECRET", null, IsSecret: true)
+            ]
+        });
+
+        var set = h.Store().EnvironmentVariables.IgnoreQueryFilters().Select(v => v.Key).ToList();
+        set.Should().Equal("JWT_SECRET");
+
+        var app = (await h.Request().GetAsync(id, default))!.Steps.Single(s => s.Key == LaunchStepKeys.App);
+        app.Detail.Should().Contain("STRIPE_SECRET_KEY").And.Contain("LOG_LEVEL").And.NotContain("JWT_SECRET");
+        app.DetailFa.Should().Contain("STRIPE_SECRET_KEY");
     }
 
     // ---- tenancy -------------------------------------------------------------------------------

@@ -34,7 +34,7 @@ public sealed partial class LaunchService
         var app = launch.AppId is { } appId
             ? await db.Apps.IgnoreQueryFilters().AsNoTracking()
                 .Where(a => a.Id == appId && a.WorkspaceId == launch.WorkspaceId)
-                .Select(a => new { a.Id, a.Name })
+                .Select(a => new { a.Id, a.Name, a.Status })
                 .FirstOrDefaultAsync(ct)
             : null;
 
@@ -68,6 +68,14 @@ public sealed partial class LaunchService
             ? await UnsetVariablesAsync(app.Id, choices, LaunchJson.ReadInspection(launch.InspectionJson), ct)
             : [];
 
+        // From the rows and never from a message: this is what somebody is paying for while they read
+        // the page, and a sentence written when the launch failed goes on saying so after a delete.
+        var created = services
+            .Select(s => new LaunchCreatedThing("database", s.Name, $"/databases/{s.Id}", s.Status == ServiceStatus.Running))
+            .ToList();
+        if (app is not null)
+            created.Add(new LaunchCreatedThing("app", app.Name, $"/apps/details/{app.Id}", app.Status == AppStatus.Running));
+
         var now = clock.UtcNow;
         return new LaunchView(
             launch.Id,
@@ -83,7 +91,9 @@ public sealed partial class LaunchService
             StepsOf(launch, choices, services, app?.Id, deployment, unset, checks),
             checks,
             LaunchAdvance.CanRetry(launch, now),
-            LaunchAdvance.IsTerminal(launch.Status));
+            LaunchAdvance.IsTerminal(launch.Status),
+            AppGone: launch.AppId is not null && app is null,
+            Created: created);
     }
 
     /// <summary>
@@ -167,6 +177,21 @@ public sealed partial class LaunchService
             var waiting = string.Join(", ", services.Where(s => s.Status != ServiceStatus.Running).Select(s => s.Name));
             servicesStep = new(LaunchStepKeys.Services, servicesTitle, servicesTitleFa, LaunchStepState.Running,
                 waiting.Length == 0 ? null : $"Starting {waiting}.", waiting.Length == 0 ? null : $"در حال راه‌اندازی {waiting}.", serviceLink);
+        }
+        else if (services.FirstOrDefault(s => s.Status == ServiceStatus.Failed) is { } broken)
+        {
+            // A launch that stopped at the app, with its database failing behind it, did not get its
+            // database. How far the launch got is one thing and what the rows say is another.
+            servicesStep = new(LaunchStepKeys.Services, servicesTitle, servicesTitleFa, LaunchStepState.Failed,
+                $"The database {broken.Name} could not be started: {broken.ErrorMessage ?? "It gave no reason."}",
+                $"دیتابیس «{broken.Name}» بالا نیامد: {broken.ErrorMessage ?? "دلیلی گزارش نکرد."}",
+                serviceLink);
+        }
+        else if (services.Any(s => s.Status == ServiceStatus.Provisioning))
+        {
+            var starting = string.Join(", ", services.Where(s => s.Status == ServiceStatus.Provisioning).Select(s => s.Name));
+            servicesStep = new(LaunchStepKeys.Services, servicesTitle, servicesTitleFa, LaunchStepState.Running,
+                $"Starting {starting}.", $"در حال راه‌اندازی {starting}.", serviceLink);
         }
         else
         {
