@@ -26,8 +26,10 @@ namespace Harbora.Infrastructure.Verification;
 /// </para>
 ///
 /// <para>
-/// Every read here ignores the workspace filter and is pinned to this app instead, because the launch
-/// tick has no session and a filtered read there would come back empty and look like "nothing wrong".
+/// Every read a run makes ignores the workspace filter and is pinned to this app instead, because a
+/// filtered read with no session in front of it can come back empty and look like "nothing wrong". What
+/// it calls outside this class reads through the filter, and sees the same rows on both real paths: the
+/// launch tick has no HTTP context and so is unscoped, and the button is a member of this workspace.
 /// </para>
 /// </summary>
 public sealed class AppVerifier(
@@ -639,6 +641,12 @@ public sealed class AppVerifier(
         {
             var docker = await engines.ResolveAsync(app.ServerId, token);
             var names = await ContainerNamesAsync(docker, app, deployment, token);
+
+            // Otherwise the empty list below reads as a log with nothing wrong in it.
+            if (names.Count == 0)
+                return Skipped(LogsKey, unread, unreadFa,
+                    "Its containers could not be found, so there is no log to read.",
+                    "کانتینرهایش پیدا نشدند، پس لاگی برای خواندن نیست.");
 
             var lines = new List<string>();
             foreach (var name in names)

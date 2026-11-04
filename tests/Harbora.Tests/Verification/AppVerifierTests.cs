@@ -901,6 +901,20 @@ public class AppVerifierTests
     }
 
     [Fact]
+    public async Task A_compose_stack_with_no_containers_left_is_not_a_clean_log()
+    {
+        var h = new VerifierHarness();
+        var app = h.GivenApp(configure: a => a.SourceType = AppSourceType.DockerCompose);
+        h.GivenActiveDeployment(app);
+
+        var report = await RunAsync(h, app);
+
+        Check(report, "running").Status.Should().Be(AppCheckStatus.Failed);
+        Check(report, "restarts").Status.Should().Be(AppCheckStatus.Skipped);
+        Check(report, "logs").Status.Should().Be(AppCheckStatus.Skipped);
+    }
+
+    [Fact]
     public async Task Every_replicas_log_is_read()
     {
         var h = new VerifierHarness();
@@ -929,7 +943,7 @@ public class AppVerifierTests
         h.GivenActiveDeployment(app);
         h.GivenContainer(ContainerOf(app), app, restartCount: 3);
         h.GivenSecret(app, "JWT_SECRET", envSecret);
-        var healthy = h.GivenService(app, name: "healthy", password: dbPassword);
+        h.GivenService(app, name: "healthy", password: dbPassword);
         var broken = h.GivenService(app, name: "broken", password: dbPassword, status: ServiceStatus.Failed,
             configure: s => s.ErrorMessage = $"provision failed, password {dbPassword} rejected");
         var refusing = h.GivenService(app, name: "refusing", password: dbPassword);
@@ -956,7 +970,6 @@ public class AppVerifierTests
         everything.Should().NotContain(dbPassword);
         everything.Should().NotContain(neverHeardOf);
         Check(report, "restarts").Detail.Should().Contain("***", "the line is still quoted, with the value gone");
-        _ = healthy;
     }
 
     [Fact]
