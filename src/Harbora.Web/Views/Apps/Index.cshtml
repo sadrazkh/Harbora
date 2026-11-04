@@ -65,9 +65,10 @@
         <h1>@T["Applications"]</h1>
         <p>@(isFa ? "برنامه‌ها را بسازید، استقرارها را دنبال کنید و وضعیت هر محیط را ببینید." : "Build, deploy and operate every service across your environments.")</p>
     </div>
-    <div class="flex flex-wrap gap-2">
+    <div class="flex flex-wrap items-center gap-2">
+        <a href="/apps/create" class="px-1 text-xs text-ink-muted hover:text-ink hover:underline">@(isFa ? "فرم کامل" : "Full form")</a>
         <a href="/git" class="btn-secondary"><i data-lucide="git-branch" class="h-4 w-4"></i>@(isFa ? "ورود از Git" : "Import from Git")</a>
-        <a href="/apps/create" class="btn-primary"><i data-lucide="plus" class="h-4 w-4"></i>@T["New App"]</a>
+        <a href="/launch" class="btn-primary"><i data-lucide="plus" class="h-4 w-4"></i>@T["New App"]</a>
     </div>
 </div>
 
@@ -119,8 +120,9 @@
     @if (Model.Apps.Count == 0)
     {
         <partial name="Design/_EmptyState" model="@(new EmptyStateModel("rocket",
-            isFa ? "هنوز برنامه‌ای نساخته‌اید. از یک قالب آماده شروع کنید یا مخزن خودتان را متصل کنید." : "You haven't created an application yet. Start from a ready-made template or connect your own repository.",
-            isFa ? "+ برنامه جدید" : "+ New app", "/apps/create"))" />
+            isFa ? "هنوز اپی اینجا نیست. کدت را بده تا راهش بیندازیم." : "No apps here yet. Give us your code and we'll get it running.",
+            isFa ? "+ اپ جدید" : "+ New app", "/launch"))" />
+        <p class="-mt-10 pb-8 text-center text-xs text-ink-muted"><a href="/apps/create" class="hover:text-ink hover:underline">@(isFa ? "یا همه‌چیز را دستی تنظیم کن" : "Or set everything by hand")</a></p>
     }
     else
     {

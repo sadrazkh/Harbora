@@ -62,6 +62,10 @@ public static class NavigationMap
             new("billing", "Billing", "Index", "wallet")
         ]),
         new("deploy", [
+            // First, and in both panel modes: "here is my code, make it work" is the reason most people
+            // came, and the one thing on this panel that asks them to know nothing. Gated like the form it
+            // stands in for, because somebody who cannot create an app has nothing to do on it.
+            new("launch", "Launch", "Index", "cloud-upload", Capabilities.AppsCreate),
             new("applications", "Apps", "Index", "boxes"),
             new("services", "Databases", "Index", "layers"),
             new("deployments", "Deployments", "Index", "rocket")

@@ -1,0 +1,104 @@
+@model LaunchQuestionModel
+@using Harbora.Domain.Authorization
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    ViewData["Title"] = isFa ? "راه انداختن اپ" : "Launch";
+    var canCreate = NavigationCapabilities.For(User)(Capabilities.AppsCreate);
+}
+@* One question. Nothing on this page needs a person to know what a container is, and nothing on it
+   creates anything or costs anything: all it asks is where the code is. *@
+<div class="mx-auto max-w-4xl py-2 md:py-8" data-launch-question>
+    <h1 class="text-center text-2xl font-bold tracking-tight text-ink md:text-3xl">@(isFa ? "کدت کجاست؟" : "Where is your code?")</h1>
+
+    @if (Model.Message is { Length: > 0 } message)
+    {
+        @* Calm on purpose. Nothing broke: a URL was wrong or a repository was private, and the fix is on this page. *@
+        <div class="mt-6 flex items-start gap-2.5 rounded-xl border border-line bg-surface-2 p-4 text-sm" data-launch-message role="status">
+            <i data-lucide="info" class="mt-0.5 h-4 w-4 shrink-0 text-ink-muted"></i>
+            <div class="min-w-0">
+                @if (Model.ReadingFailed)
+                {
+                    <p class="font-medium text-ink">@(isFa ? "نشد کدت را بخوانم." : "I couldn't read your code.")</p>
+                }
+                <p class="break-words text-ink @(Model.ReadingFailed ? "mt-1" : "")">@message</p>
+                @if (Model.ReadingFailed)
+                {
+                    <p class="mt-1 text-xs text-ink-muted">@(isFa ? "چیزی ساخته نشد و پولی هم کم نشد. درستش کن و دوباره بفرست." : "Nothing was created and nothing was charged. Fix it and send it again.")</p>
+                }
+            </div>
+        </div>
+    }
+
+    @if (!canCreate)
+    {
+        <p class="mt-6 text-center text-sm text-ink-muted" data-launch-no-permission>@(isFa ? "برای آوردن اپ جدید باید اجازه‌ی ساختن اپ داشته باشی. از مدیر این فضای کاری بپرس." : "You need permission to create apps to bring a new one here. Ask whoever runs this workspace.")</p>
+    }
+    else
+    {
+        <div class="mt-6 grid gap-4 md:mt-8 md:grid-cols-2">
+            <form method="post" action="/launch" class="dashboard-panel flex flex-col gap-4 md:p-6" data-launch-git>
+                @Html.AntiForgeryToken()
+                <h2 class="flex items-center gap-2 text-sm font-semibold text-ink"><i data-lucide="git-branch" class="h-4 w-4 text-ink-muted"></i>@(isFa ? "از گیت" : "From Git")</h2>
+                <label class="form-field">
+                    <span>@(isFa ? "آدرس مخزن" : "Repository URL")</span>
+                    <input name="GitUrl" value="@Model.GitUrl" type="text" inputmode="url" dir="ltr" autocomplete="off" spellcheck="false" placeholder="https://github.com/you/your-app" class="form-control" />
+                </label>
+                <details class="text-xs text-ink-muted" open="@Model.AskedForDetails">
+                    <summary class="cursor-pointer select-none hover:text-ink">@(isFa ? "مخزن خصوصی است؟ یا شاخه‌ی دیگری می‌خواهی؟" : "Private repository? Or a different branch?")</summary>
+                    <div class="mt-3 space-y-3">
+                        @* Never drawn back with a value in it, whatever happens to the form. *@
+                        <label class="form-field">
+                            <span>@(isFa ? "توکن دسترسی" : "Access token")</span>
+                            <input name="GitToken" type="password" dir="ltr" autocomplete="new-password" class="form-control" />
+                        </label>
+                        <label class="form-field">
+                            <span>@(isFa ? "شاخه" : "Branch")</span>
+                            <input name="GitRef" value="@Model.GitRef" type="text" dir="ltr" autocomplete="off" spellcheck="false" class="form-control" />
+                            <small>@(isFa ? "خالی بگذاری، شاخه‌ی اصلی مخزن خوانده می‌شود." : "Leave it blank and the repository's default branch is read.")</small>
+                        </label>
+                    </div>
+                </details>
+                <button type="submit" class="btn-primary mt-auto justify-center">@(isFa ? "بخوانش" : "Read it")</button>
+            </form>
+
+            <form method="post" action="/launch" enctype="multipart/form-data" class="dashboard-panel flex flex-col gap-4 md:p-6"
+                  data-launch-upload
+                  data-max-bytes="@UploadedArchive.MaxBytes"
+                  data-too-big="@(isFa ? "این فایل از ۵۱۲ مگابایت بزرگ‌تر است." : "That file is over 512 MB.")"
+                  data-sending="@(isFa ? "دارم می‌فرستم…" : "Sending…")">
+                @Html.AntiForgeryToken()
+                <h2 class="flex items-center gap-2 text-sm font-semibold text-ink"><i data-lucide="folder-open" class="h-4 w-4 text-ink-muted"></i>@(isFa ? "از کامپیوترت" : "From your computer")</h2>
+                @* A real file input, visible, so the zone is a nicety rather than the mechanism: with no
+                   script a person still chooses a file, sees its name and can drop onto the control. *@
+                <label class="flex cursor-pointer flex-col items-center gap-3 rounded-xl border-2 border-dashed border-line-strong bg-surface-2 p-5 text-center transition data-[over=true]:border-accent" data-launch-drop>
+                    <i data-lucide="cloud-upload" class="h-6 w-6 text-ink-faint"></i>
+                    @if (isFa)
+                    {
+                        <span class="text-sm text-ink-muted">پوشه‌ی پروژه را zip کن و اینجا بینداز. <code dir="ltr">node_modules</code> و <code dir="ltr">.env</code> را خودمان کنار می‌گذاریم.</span>
+                    }
+                    else
+                    {
+                        <span class="text-sm text-ink-muted">Zip your project folder and drop it here. We leave out <code>node_modules</code> and <code>.env</code> ourselves.</span>
+                    }
+                    <input name="File" type="file" accept="@UploadedArchive.Accept" required class="block w-full min-w-0 text-xs text-ink-muted file:me-3 file:cursor-pointer file:rounded-lg file:border-0 file:bg-surface file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-ink" />
+                    <span class="text-[11px] text-ink-faint">@(isFa ? "تا ۵۱۲ مگابایت" : "Up to 512 MB")</span>
+                </label>
+                <p class="field-error hidden" data-launch-file-error></p>
+                <button type="submit" class="btn-primary mt-auto justify-center" data-launch-upload-button>@(isFa ? "بخوانش" : "Read it")</button>
+            </form>
+        </div>
+    }
+
+    <div class="mt-6 space-y-1.5 text-center text-xs text-ink-muted md:mt-8">
+        @if (isFa)
+        {
+            <p>یک اپ آماده می‌خواهی؟ وردپرس و بقیه در <a href="/templates" class="text-accent-text hover:underline">قالب‌ها</a> با یک کلیک نصب می‌شوند.</p>
+            <p>تنظیم دستی همه‌چیز: <a href="/apps/create" class="text-accent-text hover:underline">فرم کامل</a></p>
+        }
+        else
+        {
+            <p>Want a ready-made app? WordPress and the rest install in one click under <a href="/templates" class="text-accent-text hover:underline">Templates</a>.</p>
+            <p>Set everything by hand: <a href="/apps/create" class="text-accent-text hover:underline">the full form</a></p>
+        }
+    </div>
+</div>

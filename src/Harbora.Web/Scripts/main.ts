@@ -6,6 +6,7 @@ import TerminalIsland from './islands/Terminal.vue';
 import { mountDeployProgress } from './deployProgress';
 import { initMobileSidebar } from './mobileSidebar.js';
 import { initAssistantDrawer } from './assistantDrawer.js';
+import { initLaunch } from './launch.js';
 
 // "Islands" pattern: Razor renders the page; we hydrate only the interactive nodes.
 // Each island is a mount point identified by id/selector — like initialising a jQuery plugin,
@@ -119,6 +120,7 @@ mountDeployProgress();
 // Mobile slide-over sidebar: open/close, locking the page's real scrolling element while it is
 // open (see the comment in mobileSidebar.js for why that is not `body`), and Escape.
 initMobileSidebar();
+initLaunch();
 
 // ---- icons ----
 // Declared as `data-lucide` attributes in Razor rather than inlined SVG, so a partial stays
@@ -131,7 +133,7 @@ initMobileSidebar();
 import {
     createIcons, Activity, AlertTriangle, Archive, ArrowRight, ArrowUpLeft, ArrowUpRight, Bell,
     BookOpen, Box, Boxes, Building2, CalendarClock, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp,
-    CircleCheck, CircleCheckBig, CircleHelp, CircleX, CloudUpload, Code, Coins, Container, Copy, CornerLeftUp, Cpu, CreditCard,
+    Circle, CircleCheck, CircleCheckBig, CircleHelp, CircleMinus, CircleX, CloudUpload, Code, Coins, Container, Copy, CornerLeftUp, Cpu, CreditCard,
     Cuboid, Database, DatabaseZap, Download, ExternalLink, File, FileCode2, FileCog, FileJson2, Folder,
     FolderLock, FolderOpen, Gauge, GitBranch, Globe, Globe2, HardDrive, History, Info, KeyRound,
     Languages, Layers, Layers3, LayoutDashboard, Link, List, ListChecks, Lock, LockKeyhole, LogOut, Mail, Megaphone, Menu, Monitor, Moon, Network,
@@ -144,8 +146,8 @@ import {
 
 const usedIcons = {
     Activity, AlertTriangle, Archive, ArrowRight, ArrowUpLeft, ArrowUpRight, Bell, BookOpen, Box,
-    Boxes, Building2, CalendarClock, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, CircleCheck,
-    CircleCheckBig, CircleHelp, CircleX, CloudUpload, Code, Coins, Container, Copy, CornerLeftUp, Cpu, CreditCard, Cuboid,
+    Boxes, Building2, CalendarClock, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Circle, CircleCheck,
+    CircleCheckBig, CircleHelp, CircleMinus, CircleX, CloudUpload, Code, Coins, Container, Copy, CornerLeftUp, Cpu, CreditCard, Cuboid,
     Database, DatabaseZap, Download, ExternalLink, File, FileCode2, FileCog, FileJson2, Folder, FolderLock,
     FolderOpen, Gauge, GitBranch, Globe, Globe2, HardDrive, History, Info, KeyRound, Languages,
     Layers, Layers3, LayoutDashboard, Link, List, ListChecks, Lock, LockKeyhole, LogOut, Mail, Megaphone, Menu, Monitor, Moon, Network,

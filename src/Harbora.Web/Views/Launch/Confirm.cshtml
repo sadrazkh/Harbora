@@ -1,0 +1,346 @@
+@model LaunchConfirmModel
+@using System.Text.RegularExpressions
+@using Harbora.Domain.Authorization
+@using Harbora.Infrastructure.Launch
+@using Harbora.Shared.Inspection
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    ViewData["Title"] = isFa ? "راه انداختن اپ" : "Launch";
+
+    var proposal = Model.Proposal;
+    var form = Model.Form;
+    var inspection = proposal.Inspection;
+    var canCreate = NavigationCapabilities.For(User)(Capabilities.AppsCreate);
+    var ticked = form.Services.ToHashSet(StringComparer.Ordinal);
+    var webOnly = Model.IsWorker ? "hidden" : "";
+
+    var detected = proposal.ServiceOptions.Where(o => o.Detected is not null)
+        .OrderByDescending(o => o.Detected!.Certain).ToList();
+    var others = proposal.ServiceOptions.Where(o => o.Detected is null).ToList();
+
+    // Stack and kind in words. A person who wrote a bot knows it is a bot, and "Worker" is our word.
+    string Found()
+    {
+        var worker = inspection.Kind == DetectedAppKind.Worker;
+        string? stack = inspection.Stack switch
+        {
+            DetectedStack.Node => "Node.js",
+            DetectedStack.DotNet => ".NET",
+            DetectedStack.Go => "Go",
+            DetectedStack.Php => "PHP",
+            DetectedStack.Python => "Python",
+            _ => null
+        };
+        return (inspection.Stack, worker, isFa) switch
+        {
+            (DetectedStack.Unknown, _, true) => "نفهمیدم این کد با چه چیزی نوشته شده. می‌توانی امتحان کنی، ولی شاید ساخته نشود؛ یک Dockerfile خیال همه را راحت می‌کند.",
+            (DetectedStack.Unknown, _, false) => "I couldn't tell what this code is written in. You can still try, but it may not build: a Dockerfile would settle it.",
+            (DetectedStack.Static, _, true) => "یک سایت ساده که فایل‌هایش همان‌طور که هستند روی وب نشان داده می‌شوند",
+            (DetectedStack.Static, _, false) => "A plain website, served on the web just as its files are",
+            (DetectedStack.Compose, _, true) => "یک پروژه‌ی Docker Compose",
+            (DetectedStack.Compose, _, false) => "A Docker Compose project",
+            (DetectedStack.Dockerfile, true, true) => "یک ربات با Dockerfile که پس‌زمینه اجرا می‌شود (آدرس وب لازم ندارد)",
+            (DetectedStack.Dockerfile, true, false) => "A bot with a Dockerfile that runs in the background (it needs no web address)",
+            (DetectedStack.Dockerfile, false, true) => "یک اپ با Dockerfile که روی وب جواب می‌دهد",
+            (DetectedStack.Dockerfile, false, false) => "An app with a Dockerfile that answers on the web",
+            (_, true, true) => $"یک ربات {stack} که پس‌زمینه اجرا می‌شود (آدرس وب لازم ندارد)",
+            (_, true, false) => $"A {stack} bot that runs in the background (it needs no web address)",
+            (_, false, true) => $"یک اپ {stack} که روی وب جواب می‌دهد",
+            (_, false, false) => $"A {stack} app that answers on the web"
+        };
+    }
+
+    // The inspector writes what it found as `"pg" in dependencies`. The name in quotes is what a person
+    // recognises; anything without one is shown as it stands rather than guessed at.
+    (string? Token, string File, string Reason) Why(DetectedService service)
+    {
+        var evidence = service.Evidence.FirstOrDefault();
+        if (evidence is null) return (null, "", "");
+        var quoted = Regex.Match(evidence.Reason, "\"([^\"]+)\"");
+        return (quoted.Success ? quoted.Groups[1].Value : null, evidence.File, evidence.Reason);
+    }
+
+    string? Example(string key) => inspection.EnvVars.FirstOrDefault(v => v.Name == key)?.ExampleValue;
+    string? Typed(string key) => form.Values.TryGetValue(key, out var value) ? value : null;
+
+    // A refusal about something folded away has to unfold it, or the person is told to fix a field they cannot see.
+    string[] detailFields = [nameof(LaunchChoices.Slug), nameof(LaunchChoices.Kind), nameof(LaunchChoices.ContainerPort),
+        nameof(LaunchChoices.Command), nameof(LaunchChoices.ReleaseCommand), nameof(LaunchChoices.RootDirectory),
+        nameof(LaunchChoices.EnvironmentId), nameof(LaunchChoices.ServerId), nameof(LaunchChoices.InstanceSizeKey)];
+    var detailsOpen = Model.Refusals.Any(r => r.Field is not null && detailFields.Contains(r.Field));
+}
+<form method="post" action="/launch/@proposal.LaunchId/confirm" class="mx-auto max-w-2xl space-y-8 py-2 md:py-8"
+      data-launch-confirm
+      data-quote-url="/launch/@proposal.LaunchId/quote"
+      data-root-domain="@Model.RootDomain">
+    @Html.AntiForgeryToken()
+
+    @if (Model.Refusals.Count > 0)
+    {
+        <div class="alert-danger space-y-1 break-words" data-launch-refusals role="alert">
+            @foreach (var refusal in Model.Refusals)
+            {
+                <p>@(isFa ? refusal.MessageFa : refusal.Message)</p>
+            }
+        </div>
+    }
+
+    <section data-launch-found>
+        <h1 class="text-2xl font-bold tracking-tight text-ink">@(isFa ? "این را پیدا کردم" : "Here's what I found")</h1>
+        <p class="mt-2 text-sm text-ink" data-launch-found-sentence>@Found()</p>
+
+        @if (inspection.Notes.Count > 0)
+        {
+            <ul class="mt-3 space-y-1.5 text-sm text-ink-muted">
+                @foreach (var note in inspection.Notes)
+                {
+                    <li class="flex items-start gap-2" data-launch-note="@note.Code"><i data-lucide="info" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink-faint"></i><span class="min-w-0 break-words">@(isFa ? note.MessageFa : note.Message)</span></li>
+                }
+            </ul>
+        }
+
+        @if (inspection.RootCandidates.Count > 0)
+        {
+            <fieldset class="mt-4 space-y-2" data-launch-roots>
+                <legend class="mb-2 text-sm font-medium text-ink">@(isFa ? "کدام پوشه را راه بیندازم؟" : "Which folder should I launch?")</legend>
+                @foreach (var candidate in inspection.RootCandidates)
+                {
+                    <label class="flex cursor-pointer items-center gap-3 rounded-xl border border-line bg-surface-2 p-3">
+                        <input type="radio" name="RootDirectory" value="@candidate" required checked="@(form.RootDirectory == candidate)" />
+                        <code class="min-w-0 break-all text-sm text-ink" dir="ltr">@candidate</code>
+                    </label>
+                }
+            </fieldset>
+        }
+    </section>
+
+    <section data-launch-created>
+        <h2 class="text-lg font-semibold text-ink">@(isFa ? "این‌ها ساخته می‌شوند" : "This is what gets created")</h2>
+        <div class="mt-3 space-y-2">
+            <div class="rounded-xl border border-line bg-surface-2 p-3" data-launch-app>
+                <label class="form-field">
+                    <span>@(isFa ? "اسم اپ" : "The app's name")</span>
+                    <input name="Name" value="@form.Name" type="text" dir="ltr" required autocomplete="off" spellcheck="false" class="form-control" data-launch-name />
+                </label>
+                @* Drawn for either kind and hidden for a worker, so changing the kind under Details can bring it back. *@
+                @if (Model.Address is { Length: > 0 } address)
+                {
+                    <p class="mt-1.5 text-xs text-ink-muted @webOnly" data-launch-web-only>
+                        @(isFa ? "آدرسش: " : "Its address: ")<bdi dir="ltr" class="break-all font-mono text-ink" data-launch-address>@address</bdi>
+                    </p>
+                }
+                else
+                {
+                    <p class="mt-1.5 text-xs text-ink-muted @webOnly" data-launch-web-only>@(isFa ? "این پنل هنوز دامنه‌ی اصلی ندارد، پس اپ خودکار آدرس عمومی نمی‌گیرد." : "This panel has no root domain yet, so the app won't get a public address by itself.")</p>
+                }
+            </div>
+
+            @foreach (var option in detected)
+            {
+                var service = option.Detected!;
+                var why = Why(service);
+                <label class="flex cursor-pointer items-start gap-3 rounded-xl border border-line bg-surface-2 p-3" data-launch-service="@option.Type" data-launch-certain="@(service.Certain ? "true" : "false")">
+                    <input type="checkbox" name="Services" value="@option.Type" checked="@ticked.Contains(option.Type.ToString())" class="mt-1" />
+                    <span class="min-w-0 text-sm">
+                        <span class="font-medium text-ink">@(isFa ? option.DisplayNameFa : option.DisplayName)</span>
+                        @if (!service.Certain)
+                        {
+                            <span class="text-xs text-ink-muted"> · @(isFa ? "شاید لازم باشد" : "may be needed")</span>
+                        }
+                        @if (why.File.Length > 0)
+                        {
+                            <small class="mt-0.5 block break-words text-xs text-ink-faint" data-launch-why>
+                                @if (why.Token is not null && isFa)
+                                {
+                                    <text>چون <code dir="ltr">@why.Token</code> در <code dir="ltr">@why.File</code> هست</text>
+                                }
+                                else if (why.Token is not null)
+                                {
+                                    <text>Because <code>@why.Token</code> is in <code>@why.File</code></text>
+                                }
+                                else
+                                {
+                                    <code dir="ltr">@why.File</code><text>: </text><span dir="ltr">@why.Reason</span>
+                                }
+                            </small>
+                        }
+                    </span>
+                </label>
+            }
+
+            @if (others.Count > 0)
+            {
+                <details class="text-sm" open="@others.Any(o => ticked.Contains(o.Type.ToString()))" data-launch-more-services>
+                    <summary class="cursor-pointer select-none px-1 py-1 text-xs text-accent-text hover:underline">@(isFa ? "یک دیتابیس دیگر اضافه کن" : "Add another database")</summary>
+                    <div class="mt-2 grid gap-2 sm:grid-cols-2">
+                        @foreach (var option in others)
+                        {
+                            <label class="flex cursor-pointer items-center gap-3 rounded-xl border border-line bg-surface-2 p-3" data-launch-service="@option.Type">
+                                <input type="checkbox" name="Services" value="@option.Type" checked="@ticked.Contains(option.Type.ToString())" />
+                                <span class="min-w-0 text-ink">@(isFa ? option.DisplayNameFa : option.DisplayName)</span>
+                            </label>
+                        }
+                    </div>
+                </details>
+            }
+
+            @if (Model.Generated.Any())
+            {
+                var names = Model.Generated.Select(f => f.Key).ToList();
+                <p class="px-1 text-xs text-ink-muted" data-launch-generated>
+                    @for (var i = 0; i < names.Count; i++)
+                    {
+                        if (i > 0)
+                        {
+                            @(i == names.Count - 1 ? (isFa ? " و " : " and ") : (isFa ? "، " : ", "))
+                        }
+                        <code dir="ltr">@names[i]</code>
+                    }
+                    @(isFa ? " را خودم می‌سازم" : ": I'll make these myself")
+                </p>
+            }
+        </div>
+    </section>
+
+    @* No such fields, no block. Its absence is the goal: most apps have nothing only a person can answer. *@
+    @if (Model.Asked.Any())
+    {
+        <section data-launch-asked>
+            <h2 class="text-lg font-semibold text-ink">@(isFa ? "فقط این‌ها را از تو لازم دارم" : "I only need this from you")</h2>
+            @if (Model.SecretsToRetype)
+            {
+                <p class="mt-1 text-xs text-ink-muted" data-launch-retype>@(isFa ? "کلیدها را برنگرداندم تا جایی نمایش داده نشوند؛ لطفاً دوباره بنویس." : "I didn't draw the keys back, so they stay off the screen. Please type them again.")</p>
+            }
+            <div class="mt-3 space-y-4">
+                @foreach (var field in Model.Asked)
+                {
+                    <label class="form-field" data-launch-field="@field.Key">
+                        <span class="font-mono" dir="ltr">@field.Key</span>
+                        @if (field.IsSecret)
+                        {
+                            @* No value attribute at all: what somebody typed here does not come back in a page. *@
+                            <input name="Values[@field.Key]" type="password" dir="ltr" autocomplete="new-password" placeholder="@Example(field.Key)" class="form-control" />
+                        }
+                        else
+                        {
+                            <input name="Values[@field.Key]" type="text" dir="ltr" autocomplete="off" spellcheck="false" value="@Typed(field.Key)" placeholder="@Example(field.Key)" class="form-control" />
+                        }
+                        <small>@(isFa ? "می‌توانی خالی بگذاری، ولی شاید اپ بدون این بالا نیاید." : "You can leave it blank, but the app may not start without it.")</small>
+                    </label>
+                }
+            </div>
+        </section>
+    }
+
+    <div class="space-y-3">
+        <div data-launch-cost><partial name="_Cost" model="Model.Quote" /></div>
+        <noscript><button type="submit" name="Recheck" value="1" formnovalidate class="btn-secondary w-full justify-center text-xs">@(isFa ? "هزینه را دوباره حساب کن" : "Work the cost out again")</button></noscript>
+
+        @if (canCreate)
+        {
+            <button type="submit" class="btn-primary w-full justify-center py-3 text-base disabled:cursor-not-allowed disabled:opacity-50" disabled="@(Model.Quote.Refusal is not null)" data-launch-submit>
+                <i data-lucide="rocket" class="h-5 w-5"></i>@(isFa ? "راه بینداز" : "Launch")
+            </button>
+        }
+        else
+        {
+            <p class="text-center text-sm text-ink-muted" data-launch-no-permission>@(isFa ? "برای راه انداختنش باید اجازه‌ی ساختن اپ داشته باشی. از مدیر این فضای کاری بپرس." : "You need permission to create apps to launch this. Ask whoever runs this workspace.")</p>
+        }
+    </div>
+
+    @* Everything else, closed by default. Nobody has to open it. *@
+    <details class="rounded-xl border border-line bg-surface" open="@detailsOpen" data-launch-details>
+        <summary class="cursor-pointer select-none px-4 py-3 text-sm font-medium text-ink-muted hover:text-ink">@(isFa ? "جزئیات" : "Details")</summary>
+        <div class="grid gap-4 border-t border-line p-4 sm:grid-cols-2">
+            <label class="form-field">
+                <span>@(isFa ? "اسم کوتاه (slug)" : "Short name (slug)")</span>
+                <input name="Slug" value="@form.Slug" type="text" dir="ltr" autocomplete="off" spellcheck="false" class="form-control" data-launch-slug />
+                <small>@(isFa ? "خالی بگذاری، از روی اسم اپ ساخته می‌شود." : "Leave it blank and it comes from the app's name.")</small>
+            </label>
+            <label class="form-field">
+                <span>@(isFa ? "چه جور چیزی است؟" : "What kind of thing is it?")</span>
+                <select name="Kind" class="form-control" data-launch-kind>
+                    <option value="Web" selected="@(!Model.IsWorker)">@(isFa ? "روی وب جواب می‌دهد" : "It answers on the web")</option>
+                    <option value="Worker" selected="@Model.IsWorker">@(isFa ? "پس‌زمینه اجرا می‌شود (ربات، صف)" : "It runs in the background (a bot, a queue)")</option>
+                </select>
+            </label>
+            <label class="form-field @webOnly" data-launch-web-only>
+                <span>@(isFa ? "پورت" : "Port")</span>
+                <input name="ContainerPort" value="@form.ContainerPort" type="text" inputmode="numeric" dir="ltr" autocomplete="off" class="form-control" />
+                <small>@(isFa ? "همان پورتی که اپت رویش گوش می‌دهد." : "The port your app listens on.")</small>
+            </label>
+            <label class="form-field">
+                <span>@(isFa ? "دستور اجرا" : "Start command")</span>
+                <input name="Command" value="@form.Command" type="text" dir="ltr" autocomplete="off" spellcheck="false" class="form-control" />
+                <small>@(isFa ? "خالی بگذاری، پیش‌فرض خود پروژه اجرا می‌شود." : "Leave it blank and the project's own default runs.")</small>
+            </label>
+            <label class="form-field">
+                <span>@(isFa ? "دستور پیش از اجرا" : "Release command")</span>
+                <input name="ReleaseCommand" value="@form.ReleaseCommand" type="text" dir="ltr" autocomplete="off" spellcheck="false" class="form-control" />
+                <small>@(isFa ? "یک بار پیش از بالا آمدن نسخه‌ی تازه اجرا می‌شود؛ مثلاً ساختن جدول‌های دیتابیس." : "Runs once before a new version goes live: building the database's tables, say.")</small>
+            </label>
+            @if (inspection.RootCandidates.Count == 0)
+            {
+                <label class="form-field">
+                    <span>@(isFa ? "پوشه‌ی پروژه" : "Project folder")</span>
+                    <input name="RootDirectory" value="@form.RootDirectory" type="text" dir="ltr" autocomplete="off" spellcheck="false" class="form-control" />
+                    <small>@(isFa ? "خالی یعنی همان ریشه." : "Blank means the top level.")</small>
+                </label>
+            }
+            @if (Model.Environments.Count > 1)
+            {
+                <label class="form-field">
+                    <span>@(isFa ? "کجا ساخته شود؟" : "Where should it go?")</span>
+                    <select name="EnvironmentId" class="form-control">
+                        @foreach (var environment in Model.Environments)
+                        {
+                            <option value="@environment.Value" selected="@(form.EnvironmentId?.ToString() == environment.Value)">@environment.Text</option>
+                        }
+                    </select>
+                </label>
+            }
+            <div class="min-w-0 sm:col-span-2">
+                @await Component.InvokeAsync("SizePicker", new
+                {
+                    sizeField = nameof(form.InstanceSizeKey),
+                    serverField = nameof(form.ServerId),
+                    selectedSize = form.InstanceSizeKey,
+                    selectedServer = form.ServerId,
+                    allowNoLimit = false
+                })
+            </div>
+            @foreach (var field in Model.Examples)
+            {
+                <label class="form-field" data-launch-field="@field.Key">
+                    <span class="font-mono" dir="ltr">@field.Key</span>
+                    @if (field.IsSecret)
+                    {
+                        <input name="Values[@field.Key]" type="password" dir="ltr" autocomplete="new-password" class="form-control" />
+                    }
+                    else
+                    {
+                        <input name="Values[@field.Key]" type="text" dir="ltr" autocomplete="off" spellcheck="false" value="@Typed(field.Key)" class="form-control" />
+                    }
+                </label>
+            }
+            @if (Model.Aliases.Any())
+            {
+                <p class="text-xs text-ink-muted sm:col-span-2" data-launch-aliases>
+                    @(isFa ? "این‌ها را خودم به دیتابیس وصل می‌کنم: " : "These I connect to the database myself: ")
+                    @foreach (var alias in Model.Aliases)
+                    {
+                        <code dir="ltr" class="me-1.5">@alias.Key</code>
+                    }
+                </p>
+            }
+        </div>
+    </details>
+</form>
+
+@if (canCreate)
+{
+    <form method="post" action="/launch/@proposal.LaunchId/abandon" class="mx-auto mt-2 max-w-2xl text-center" data-launch-abandon>
+        @Html.AntiForgeryToken()
+        <button type="submit" class="text-xs text-ink-faint hover:text-ink hover:underline">@(isFa ? "نه، بی‌خیال" : "No, never mind")</button>
+    </form>
+}

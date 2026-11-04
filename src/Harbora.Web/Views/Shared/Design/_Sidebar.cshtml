@@ -36,7 +36,11 @@
     // folds into collapsible groups below. Pulled from `groups` rather than NavigationMap.All
     // directly, so a pinned entry still respects whatever capability/feature check already decided
     // whether this person can see it — the sidebar's one hard rule, unchanged by this redesign.
-    string[] pinnedKeys = ["dashboard", "applications", "services", "deployments"];
+    //
+    // "launch" is pinned for the same reason it heads the deploy group: every other entry in that group
+    // is pinned already, so leaving it out would fold the way in to this panel inside a closed group
+    // holding one row.
+    string[] pinnedKeys = ["dashboard", "launch", "applications", "services", "deployments"];
     var allEntries = groups.SelectMany(g => g.Entries).ToList();
     var pinned = pinnedKeys
         .Select(key => allEntries.FirstOrDefault(e => e.Item.Key == key))
@@ -83,6 +87,7 @@
         ("notifications", true) => "اعلان‌ها",      ("notifications", false) => "Notifications",
         ("workspaces",   true) => "ورک‌اسپیس‌ها و اعضا", ("workspaces", false) => "Workspaces & members",
         ("billing",      true) => "صورت‌حساب",     ("billing",      false) => "Billing",
+        ("launch",       true) => "راه انداختن اپ", ("launch",       false) => "Launch an app",
         ("applications", true) => "برنامه‌ها",      ("applications", false) => "Applications",
         ("services",     true) => "دیتابیس‌ها",      ("services",     false) => "Databases",
         ("deployments",  true) => "استقرارها",      ("deployments",  false) => "Deployments",

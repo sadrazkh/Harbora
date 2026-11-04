@@ -1,0 +1,41 @@
+@model LaunchProgressModel
+@using Harbora.Domain.Launch
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var view = Model.View;
+
+    // These two are whole pages of their own, with forms in them, rather than a part of this one. The
+    // poll cannot swap them in, so it reloads when the launch arrives at either.
+    var wholePage = view.Status is LaunchStatus.AwaitingConfirmation or LaunchStatus.InspectFailed;
+}
+<div data-launch-state data-status="@view.Status" data-terminal="@(view.IsTerminal ? "true" : "false")" data-reload="@(wholePage ? "true" : "false")">
+    @if (wholePage)
+    {
+        <p class="py-10 text-center text-sm text-ink-muted">
+            <a href="/launch/@view.Id" class="text-accent-text hover:underline">@(isFa ? "خواندن تمام شد. ادامه بده" : "Finished reading. Carry on")</a>
+        </p>
+    }
+    else if (view.Status == LaunchStatus.Inspecting)
+    {
+        <div class="flex flex-col items-center gap-3 py-12 text-center" data-launch-reading>
+            <i data-lucide="refresh-cw" class="h-6 w-6 animate-spin text-accent-text"></i>
+            <h1 class="text-xl font-bold tracking-tight text-ink">@(isFa ? "دارم کدت را می‌خوانم…" : "Reading your code…")</h1>
+            <p class="max-w-full break-all text-xs text-ink-muted" dir="ltr">@view.SourceLabel</p>
+            @* LaunchView carries no start time, so "after a minute" is counted from when this page opened. *@
+            <p class="hidden text-sm text-ink-muted" data-launch-slow>@(isFa ? "هنوز دارم می‌خوانم؛ مخزن بزرگی است. می‌توانی این صفحه را ببندی و بعداً برگردی، کار ادامه دارد." : "Still reading: this is a big one. You can close this page and come back later, it keeps going.")</p>
+            <noscript><p class="text-sm text-ink-muted">@(isFa ? "مخزن بزرگ چند دقیقه طول می‌کشد. می‌توانی این صفحه را ببندی و بعداً برگردی، کار ادامه دارد." : "A big repository can take a few minutes. You can close this page and come back later, it keeps going.")</p></noscript>
+        </div>
+    }
+    else if (view.Status == LaunchStatus.Abandoned)
+    {
+        <div class="py-10 text-center" data-launch-abandoned>
+            <h1 class="text-xl font-bold tracking-tight text-ink">@(isFa ? "این یکی رها شد." : "This one was left behind.")</h1>
+            <p class="mt-2 text-sm text-ink-muted">@(isFa ? "چیزی ساخته نشده بود و پولی هم کم نشد." : "Nothing was created and nothing was charged.")</p>
+            <a href="/launch" class="btn-primary mt-5 justify-center">@(isFa ? "از اول" : "Start again")</a>
+        </div>
+    }
+    else
+    {
+        <partial name="_Timeline" model="Model" />
+    }
+</div>

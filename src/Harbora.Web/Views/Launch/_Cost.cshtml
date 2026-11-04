@@ -1,0 +1,31 @@
+@model Harbora.Infrastructure.Launch.LaunchQuote
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var hourly = Model.Lines.Sum(l => l.HourlyMinor ?? 0);
+    string Money(long minor) => MinorUnits.Format(minor, Model.Currency);
+}
+@* The one place in this flow a bill can surprise somebody. The figures stay LTR islands in a Persian
+   sentence, the way the rest of the panel writes money: they must read the same in both languages. *@
+<div data-launch-cost-state data-refused="@(Model.Refusal is null ? "false" : "true")" class="rounded-xl border border-line bg-surface-2 p-4 text-sm text-ink">
+    @if (Model.Refusal is { } refusal)
+    {
+        <p class="break-words text-danger" data-launch-cost-refusal>@(isFa ? refusal.MessageFa : refusal.Message)</p>
+        <a href="/billing" class="mt-1 inline-block text-xs text-accent-text hover:underline">@(isFa ? "برو به صورت‌حساب" : "Go to billing")</a>
+    }
+    else if (Model.Exempt)
+    {
+        <p>@(isFa ? "هزینه‌ای از این فضای کاری کم نمی‌شود." : "Nothing is charged to this workspace.")</p>
+    }
+    else if (Model.FirstHourMinor == 0 && hourly == 0)
+    {
+        <p>@(isFa ? "این اندازه رایگان است؛ چیزی از موجودی کم نمی‌شود." : "This size is free: nothing comes off your balance.")</p>
+    }
+    else if (isFa)
+    {
+        <p>الان <bdi dir="ltr">@Money(Model.FirstHourMinor)</bdi> از موجودی کم می‌شود (یک ساعت اجرا)، بعد ساعتی <bdi dir="ltr">@Money(hourly)</bdi>.@if (Model.BalanceMinor is { } balance) {<text> موجودی: <bdi dir="ltr">@Money(balance)</bdi>.</text>}</p>
+    }
+    else
+    {
+        <p><bdi dir="ltr">@Money(Model.FirstHourMinor)</bdi> comes off your balance now (one hour of running), then <bdi dir="ltr">@Money(hourly)</bdi> an hour.@if (Model.BalanceMinor is { } balance) {<text> Balance: <bdi dir="ltr">@Money(balance)</bdi>.</text>}</p>
+    }
+</div>

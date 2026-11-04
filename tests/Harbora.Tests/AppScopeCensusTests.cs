@@ -170,6 +170,20 @@ public class AppScopeCensusTests
             + "see it there. DatabaseProvisioningServiceTests proves a member scoped to another "
             + "project is refused.",
 
+        ["LaunchController.cs:Start(LaunchStartForm form"] =
+            "Records where the code is and queues reading it. Nothing is created and no placement exists "
+            + "yet: the app and its environment are chosen on the confirm screen. LaunchService asks "
+            + "whether the caller may create apps at all, as AppProvisioningService does.",
+        ["LaunchController.cs:Confirm(Guid id"] =
+            "Hands the whole creation to ILaunchService, which goes through AppProvisioningService and "
+            + "DatabaseProvisioningService on the request, and each of those asks AllowsAsync on the "
+            + "resolved environment itself (see the AppsController.Create exemption above). A scan of "
+            + "this method body cannot see it there.",
+        ["LaunchController.cs:Retry(Guid id"] = "Same reason as Confirm above: a retry creates only through those services.",
+        ["LaunchController.cs:Abandon(Guid id"] =
+            "Only possible before anything was created, so there is no resource and no placement to ask "
+            + "about; AbandonAsync refuses once there is.",
+
         ["EmailProvidersController.cs:Create(string name"] =
             "BYO SMTP providers are a per-workspace credential catalogue (this file's own opening "
             + "remark), matched to an app only through Attach/Detach — both of which do check "
