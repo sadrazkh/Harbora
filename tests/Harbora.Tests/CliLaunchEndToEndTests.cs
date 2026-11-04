@@ -70,9 +70,9 @@ public sealed class CliLaunchEndToEndTests : IClassFixture<LaunchPanelFixture>, 
     private FakeLaunchService Launches => _fixture.Launches;
     private Guid Id => Launches.NextStartId;
 
-    private ApiClient Api(Func<HttpRequestMessage, bool>? breaksOn = null) => breaksOn is null
-        ? new(Server, _token, _fixture.Panel.Server.CreateHandler())
-        : new(Server, _token, new Unreliable(_fixture.Panel.Server.CreateHandler(), breaksOn));
+    private ApiClient Api(string token, Func<HttpRequestMessage, bool>? breaksOn) => breaksOn is null
+        ? new(Server, token, _fixture.Panel.Server.CreateHandler())
+        : new(Server, token, new Unreliable(_fixture.Panel.Server.CreateHandler(), breaksOn));
 
     /// <summary>The real thing, with a connection that drops whenever the test says it does.</summary>
     private sealed class Unreliable(HttpMessageHandler inner, Func<HttpRequestMessage, bool> breaksOn) : DelegatingHandler(inner)
@@ -132,7 +132,19 @@ public sealed class CliLaunchEndToEndTests : IClassFixture<LaunchPanelFixture>, 
     };
 
     private async Task<(int Exit, string Output)> LaunchAsync(
-        LaunchRun run, ILaunchPrompts? person = null, CancellationToken ct = default, Func<HttpRequestMessage, bool>? breaksOn = null)
+        LaunchRun run, ILaunchPrompts? person = null, CancellationToken ct = default,
+        Func<HttpRequestMessage, bool>? breaksOn = null, string? token = null)
+    {
+        // A launch that never ends is followed for ever, which is right for a person and would hang the
+        // whole suite: a regression that goes on past the point it should have stopped has to fail here.
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        limit.CancelAfter(TimeSpan.FromSeconds(30));
+
+        return await CapturedAsync(() => LaunchCommand.RunAsync(Api(token ?? _token, breaksOn), run, person, limit.Token));
+    }
+
+    /// <summary>What a person would have seen. Spectre folds to a width, so only the words are compared.</summary>
+    private static async Task<(int Exit, string Output)> CapturedAsync(Func<Task<int>> command)
     {
         var previous = AnsiConsole.Console;
         var writer = new StringWriter();
@@ -143,7 +155,7 @@ public sealed class CliLaunchEndToEndTests : IClassFixture<LaunchPanelFixture>, 
             Out = new AnsiConsoleOutput(writer)
         });
 
-        try { return (await LaunchCommand.RunAsync(Api(breaksOn), run, person, ct), Regex.Replace(writer.ToString(), @"\s+", " ").Trim()); }
+        try { return (await command(), Regex.Replace(writer.ToString(), @"\s+", " ").Trim()); }
         finally { AnsiConsole.Console = previous; }
     }
 
@@ -412,22 +424,13 @@ public sealed class CliLaunchEndToEndTests : IClassFixture<LaunchPanelFixture>, 
     [Fact]
     public async Task A_token_that_may_not_create_apps_gets_a_sentence()
     {
-        var viewer = new ApiClient(Server,
-            _fixture.GivenToken(_fixture.WorkspaceId, $"launch-cli-viewer-{Interlocked.Increment(ref _nextUser)}@example.com", SystemRole.Viewer),
-            _fixture.Panel.Server.CreateHandler());
+        var viewer = _fixture.GivenToken(_fixture.WorkspaceId, $"launch-cli-viewer-{Interlocked.Increment(ref _nextUser)}@example.com", SystemRole.Viewer);
 
-        var previous = AnsiConsole.Console;
-        var writer = new StringWriter();
-        AnsiConsole.Console = AnsiConsole.Create(new AnsiConsoleSettings
-        {
-            Ansi = AnsiSupport.No, ColorSystem = ColorSystemSupport.NoColors, Out = new AnsiConsoleOutput(writer)
-        });
-        int exit;
-        try { exit = await LaunchCommand.RunAsync(viewer, Run(), null, default); }
-        finally { AnsiConsole.Console = previous; }
+        var (exit, output) = await LaunchAsync(Run(), token: viewer);
 
         exit.Should().Be(1);
-        Regex.Replace(writer.ToString(), @"\s+", " ").Should().Contain("may not create apps");
+        output.Should().Contain("may not create apps");
+        output.Should().Contain("Nothing was created.");
         Launches.Started.Should().BeEmpty();
     }
 
@@ -1080,6 +1083,26 @@ public sealed class CliLaunchEndToEndTests : IClassFixture<LaunchPanelFixture>, 
         parsed.Ref.Should().Be("develop");
         parsed.GitToken.Should().Be("ghp_x");
         parsed.Path.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("not both", "launch", "./app", "--git", "https://github.com/you/shop")]
+    [InlineData("only mean something with --git", "launch", "--ref", "develop")]
+    [InlineData("only mean something with --git", "launch", "--git-token", "ghp_x")]
+    public async Task Flags_that_contradict_each_other_stop_the_real_command_before_it_needs_a_server(string expected, params string[] args)
+    {
+        var app = new CommandApp();
+        app.Configure(config =>
+        {
+            config.AddCommand<LaunchCommand>("launch");
+            config.PropagateExceptions();
+        });
+
+        var (exit, output) = await CapturedAsync(() => app.RunAsync(args));
+
+        exit.Should().Be(1);
+        output.Should().Contain(expected);
+        output.Should().NotContain("ghp_x");
     }
 
     [Fact]

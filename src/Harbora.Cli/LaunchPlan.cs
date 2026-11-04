@@ -131,7 +131,7 @@ public static class LaunchPlan
     public static (IReadOnlySet<string> Dropped, IReadOnlyList<string> Unknown) ResolveNoService(
         JsonElement proposal, IEnumerable<string>? names)
     {
-        var types = Items(proposal, "serviceOptions").Select(o => Text(o, "type") ?? "").ToList();
+        var types = ServiceTypes(proposal);
         var dropped = new HashSet<string>(StringComparer.Ordinal);
         var unknown = new List<string>();
 
@@ -149,8 +149,15 @@ public static class LaunchPlan
         return (dropped, unknown);
     }
 
+    /// <summary>
+    /// Everything on offer, and everything proposed even if it is not: an engine the operator has since
+    /// withdrawn can still be detected, and turning that one down is the only way past it from here.
+    /// </summary>
     public static IReadOnlyList<string> ServiceTypes(JsonElement proposal) =>
-        Items(proposal, "serviceOptions").Select(o => Text(o, "type") ?? "").ToList();
+        Items(proposal, "serviceOptions").Concat(Items(proposal.GetProperty("defaults"), "services"))
+            .Select(o => Text(o, "type") ?? "")
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
 
     /// <summary>
     /// The proposal's own defaults with the person's answers on them, as what the API takes back. Kept as

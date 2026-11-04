@@ -136,13 +136,26 @@ public class CliLaunchPlanTests
     {
         var proposal = Json(new
         {
-            serviceOptions = new[] { new { type = "MySql" }, new { type = "MongoDb" } }
+            serviceOptions = new[] { new { type = "MySql" }, new { type = "MongoDb" } },
+            defaults = new { services = Array.Empty<object>() }
         });
 
         var (dropped, unknown) = LaunchPlan.ResolveNoService(proposal, ["m"]);
 
         dropped.Should().BeEmpty();
         unknown.Should().Equal("m");
+    }
+
+    [Fact]
+    public void A_proposed_service_the_catalogue_no_longer_offers_can_still_be_turned_down()
+    {
+        var proposal = Json(new
+        {
+            serviceOptions = new[] { new { type = "Redis" } },
+            defaults = new { services = new[] { new { type = "Nats" } } }
+        });
+
+        LaunchPlan.ResolveNoService(proposal, ["nats"]).Dropped.Should().Equal("Nats");
     }
 
     // ---- the choices -------------------------------------------------------------------------------
