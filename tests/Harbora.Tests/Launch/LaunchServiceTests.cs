@@ -443,7 +443,10 @@ public sealed class LaunchServiceTests
             EnvVars = c.EnvVars.Select(v => v.Key == "STRIPE_SECRET_KEY" ? v with { Value = "sk_live_abc" } : v).ToList()
         });
 
-        failed.FailureMessage.Should().Contain("not kept");
+        failed.FailureMessage.Should().Contain("STRIPE_SECRET_KEY was not kept").And.NotContain("LOG_LEVEL",
+            "that one was left as the example file has it, so a retry reads it again");
+        failed.FailureMessage.Should().NotContain("sk_live_abc");
+        failed.FailureMessageFa.Should().Contain("STRIPE_SECRET_KEY").And.NotContain("sk_live_abc");
         h.Row(id).ChoicesJson.Should().NotContain("sk_live_abc");
 
         var retried = (await h.Request().RetryAsync(id, null, default)).Value!;
@@ -697,9 +700,10 @@ public sealed class LaunchServiceTests
     public async Task A_clone_failure_says_what_to_do_and_never_repeats_the_token_even_when_the_error_does()
     {
         using var h = new LaunchHarness();
-        h.Git.FailWith = $"fatal: could not read from https://{Token}@git.example.com/acme/shop.git ({Uri.EscapeDataString(Token + "/")})";
+        h.Git.FailWith = $"fatal: could not read from https://{Token}@git.example.com/acme/shop.git ({Uri.EscapeDataString(Token)})";
 
-        var id = (await h.Request().StartAsync(h.GitRequest(token: Token), default)).Value;
+        // Arrives in the URL, and the failure quotes it back: the worst case for a message on a page.
+        var id = (await h.Request().StartAsync(h.GitRequest($"https://oauth2:{Token}@git.example.com/acme/shop.git"), default)).Value;
         await h.Worker().InspectAsync(id, default);
 
         var view = await h.Request().GetAsync(id, default);
@@ -970,10 +974,45 @@ public sealed class LaunchServiceTests
             EnvVars = [Var("CACHE_URL", EnvVarDisposition.AliasOfAttach, null, DetectedServiceKind.Redis, EnvAliasRole.Url)]
         });
 
-        await h.ConfirmAsync(id, c => c with { Services = [new LaunchServiceChoice(ManagedServiceType.Redis)] });
+        var view = await h.ConfirmAsync(id, c => c with { Services = [new LaunchServiceChoice(ManagedServiceType.Redis)] });
 
         ManagedServiceAttachEnv.ReadAliases(h.Store().AppManagedServices.IgnoreQueryFilters().Single().EnvAliasesJson)
             .Should().Equal(new AttachEnvAlias("CACHE_URL", "REDIS_URL"));
+        view.Steps.Single(s => s.Key == LaunchStepKeys.App).Detail.Should().BeNull("the attachment answers CACHE_URL, so nothing is missing");
+    }
+
+    [Fact]
+    public async Task The_host_the_checks_approved_is_the_one_everything_lands_on()
+    {
+        using var h = new LaunchHarness();
+        var id = await h.ReadyGitAsync(NodeWithPostgres());
+        var choices = await h.DefaultsAsync(id);
+        h.Scheduler.PlaceOn(h.ServerB.Id, h.ServerA.Id);
+
+        (await h.Request().ConfirmAsync(id, choices, null, default)).Ok.Should().BeTrue();
+
+        h.Scheduler.Placements.Should().Be(1, "asked twice, it could approve one host and land on another");
+        h.Store().Apps.IgnoreQueryFilters().Single().ServerId.Should().Be(h.ServerB.Id);
+        LaunchJson.ReadChoices(h.Row(id).ChoicesJson)!.ServerId.Should().Be(h.ServerB.Id, "so a retry stays on it");
+    }
+
+    [Fact]
+    public async Task An_uploads_archive_swept_from_an_old_failure_says_what_is_left_to_do()
+    {
+        using var h = new LaunchHarness();
+        var (id, archive) = await h.ReadyUploadAsync(Bare());
+        await h.ConfirmAsync(id);
+        h.RefuseNextDeployment = new InvalidOperationException("A rollback is running.");
+        await h.TickAsync();
+        (await h.Request().GetAsync(id, default))!.CanRetry.Should().BeTrue();
+
+        h.Advance(TimeSpan.FromHours(25));
+        await h.TickAsync();
+
+        File.Exists(archive).Should().BeFalse();
+        var view = await h.Request().GetAsync(id, default);
+        view!.CanRetry.Should().BeFalse();
+        view.FailureMessage.Should().Contain("upload a new version");
     }
 
     [Fact]

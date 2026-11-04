@@ -64,6 +64,7 @@ public sealed partial class LaunchService(
     /// <summary>The column's own limit (<c>HarboraDbContext</c>): past it Postgres refuses the whole save.</summary>
     private const int MaxMessageLength = 2000;
     private const int MaxRefLength = 255;
+    private const int MaxArchivePathLength = 1024;
 
     private static readonly ServiceRefusal NotFound = new(
         "This launch does not exist.", "این راه‌اندازی وجود ندارد.");
@@ -156,7 +157,9 @@ public sealed partial class LaunchService(
         if (string.IsNullOrWhiteSpace(path)) return null;
         var uploads = Path.GetFullPath(Path.Combine(runtime.Value.WorkDir, "_uploads")) + Path.DirectorySeparatorChar;
         var full = Path.GetFullPath(path);
-        return full.StartsWith(uploads, StringComparison.Ordinal) && File.Exists(full) ? full : null;
+        return full.Length <= MaxArchivePathLength && full.StartsWith(uploads, StringComparison.Ordinal) && File.Exists(full)
+            ? full
+            : null;
     }
 
     /// <summary>
@@ -343,10 +346,10 @@ public sealed partial class LaunchService(
         string? archive = null;
         await UpdateAsync(launchId, l =>
         {
+            also?.Invoke(l);
             archive = l.ArchivePath;
             l.ArchivePath = null;
             l.EncryptedGitToken = null;
-            also?.Invoke(l);
         }, ct);
         DeleteArchive(archive);
     }

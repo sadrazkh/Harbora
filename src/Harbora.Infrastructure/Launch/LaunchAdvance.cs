@@ -69,7 +69,7 @@ public static class LaunchAdvance
     /// restarted in the middle: no tick moves it on, because each create judges the signed-in user, so
     /// it is handed back to a person to press retry.
     /// </summary>
-    public static readonly TimeSpan CreatingGiveUpAfter = TimeSpan.FromMinutes(30);
+    public static readonly TimeSpan CreatingGiveUpAfter = TimeSpan.FromMinutes(10);
 
     /// <summary>A failed launch holds a retry open this long, and with it a token and an archive.</summary>
     public static readonly TimeSpan RetryLifetime = TimeSpan.FromHours(24);

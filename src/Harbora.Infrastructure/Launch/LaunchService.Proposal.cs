@@ -176,8 +176,8 @@ public sealed partial class LaunchService
         var launch = await db.AppLaunches.AsNoTracking().FirstOrDefaultAsync(l => l.Id == launchId, ct);
         if (launch is null) return new LaunchQuote([], 0, null, creationBilling.Currency, false, NotFound);
 
-        var (serverId, _) = await SettleServerAsync(launch.WorkspaceId, choices, ct);
-        return await QuoteOnAsync(launch.WorkspaceId, choices, serverId, ct);
+        var server = await SettleServerAsync(launch.WorkspaceId, choices, ct);
+        return await QuoteOnAsync(launch.WorkspaceId, choices, server.ServerId, ct);
     }
 
     private async Task<LaunchQuote> QuoteOnAsync(Guid workspaceId, LaunchChoices choices, Guid? serverId, CancellationToken ct)
@@ -207,10 +207,9 @@ public sealed partial class LaunchService
     /// does not fit beside it, or that a database's placement knows nothing of a plan's pool. The
     /// answer is written into what is confirmed, so a retry stays on the same host.
     /// </summary>
-    private async Task<(Guid? ServerId, ServiceRefusal? Refusal)> SettleServerAsync(
-        Guid workspaceId, LaunchChoices choices, CancellationToken ct)
+    private async Task<SettledServer> SettleServerAsync(Guid workspaceId, LaunchChoices choices, CancellationToken ct)
     {
-        if (choices.ServerId is { } chosen) return (chosen, null);
+        if (choices.ServerId is { } chosen) return new SettledServer(chosen, null);
 
         var size = string.IsNullOrWhiteSpace(choices.InstanceSizeKey)
             ? null
@@ -221,11 +220,13 @@ public sealed partial class LaunchService
 
         var placed = await scheduler.PlaceAsync((size?.MemoryBytes ?? 0) * count, (size?.CpuCores ?? 0) * count, pool, ct);
         return placed.Ok
-            ? (placed.ServerId, null)
-            : (null, new ServiceRefusal(
+            ? new SettledServer(placed.ServerId, null)
+            : new SettledServer(null, new ServiceRefusal(
                 placed.Reason ?? "No server has room for everything this launch creates.",
                 placed.ReasonFa ?? placed.Reason ?? "هیچ سروری برای همهٔ چیزهایی که این راه‌اندازی می‌سازد جا ندارد."));
     }
+
+    private sealed record SettledServer(Guid? ServerId, ServiceRefusal? Refusal);
 
     /// <summary>
     /// Each database's name: the person's, else <c>{app}-{engine}</c>, suffixed until it is free. Across
@@ -271,7 +272,7 @@ public sealed partial class LaunchService
         if (launch.Status != LaunchStatus.AwaitingConfirmation)
             return AlreadyConfirmed(launch.Status) ? [] : [NoLongerConfirmable];
 
-        return await CheckChoicesAsync(launch, choices, ct);
+        return await CheckChoicesAsync(launch, choices, await SettleServerAsync(launch.WorkspaceId, choices, ct), ct);
     }
 
     private static readonly ServiceRefusal NoLongerConfirmable = new(
@@ -283,7 +284,8 @@ public sealed partial class LaunchService
         or LaunchStatus.WaitingForServices or LaunchStatus.Deploying or LaunchStatus.Verifying
         or LaunchStatus.Succeeded or LaunchStatus.SucceededWithProblems or LaunchStatus.Failed;
 
-    private async Task<IReadOnlyList<ServiceRefusal>> CheckChoicesAsync(AppLaunch launch, LaunchChoices choices, CancellationToken ct)
+    private async Task<IReadOnlyList<ServiceRefusal>> CheckChoicesAsync(
+        AppLaunch launch, LaunchChoices choices, SettledServer server, CancellationToken ct)
     {
         var refusals = new List<ServiceRefusal>();
         var inspection = LaunchJson.ReadInspection(launch.InspectionJson);
@@ -313,8 +315,8 @@ public sealed partial class LaunchService
                 "A project that runs only from a Docker Compose file cannot be launched from an upload yet. Push it to a Git repository and launch that, or add a Dockerfile.",
                 "پروژه‌ای که فقط با فایل Docker Compose اجرا می‌شود فعلاً از راه آپلود راه نمی‌افتد. آن را در یک مخزن گیت بگذارید و از آنجا راه بیندازید، یا یک Dockerfile اضافه کنید."));
 
-        var (serverId, placement) = await SettleServerAsync(launch.WorkspaceId, choices, ct);
-        if (placement is not null) refusals.Add(placement);
+        if (server.Refusal is { } placement) refusals.Add(placement);
+        var serverId = server.ServerId;
 
         var names = await ServiceNamesAsync(choices, ct);
         for (var i = 0; i < choices.Services.Count; i++)

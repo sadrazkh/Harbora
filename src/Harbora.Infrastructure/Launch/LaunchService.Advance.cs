@@ -140,11 +140,20 @@ public sealed partial class LaunchService
                 return true;
 
             case LaunchMoveKind.DropLeftovers:
+                // Whatever this takes away is what a retry would have needed, so the message has to stop
+                // offering one, and say what is left to do instead.
                 await DropLeftoversAsync(launchId, ct, l =>
                 {
-                    if (l.AppId is not null) return;
-                    l.FailureMessage = Clip($"{l.FailureMessage} This launch has closed: start a new one.");
-                    l.FailureMessageFa = Clip($"{l.FailureMessageFa} این راه‌اندازی بسته شد: یکی تازه شروع کنید.");
+                    if (l.AppId is null)
+                    {
+                        l.FailureMessage = Clip($"{l.FailureMessage} This launch has closed: start a new one.");
+                        l.FailureMessageFa = Clip($"{l.FailureMessageFa} این راه‌اندازی بسته شد: یکی تازه شروع کنید.");
+                    }
+                    else if (l.ArchivePath is not null)
+                    {
+                        l.FailureMessage = Clip($"{l.FailureMessage} The uploaded code has been removed: upload a new version from the app's page.");
+                        l.FailureMessageFa = Clip($"{l.FailureMessageFa} کد آپلودشده پاک شد: نسخهٔ تازه را از صفحهٔ اپ آپلود کنید.");
+                    }
                 });
                 return false;
 

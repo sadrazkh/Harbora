@@ -41,12 +41,22 @@ public sealed partial class LaunchService
                 : ServiceOutcome<LaunchView>.Refused(NoLongerConfirmable);
 
         // Refused here, nothing has changed and the person is back on their screen. From the move on,
-        // a refusal is a step that failed, with what exists named on the row.
-        var refusals = await CheckChoicesAsync(launch, choices, ct);
+        // a refusal is a step that failed, with what exists named on the row. Asked once, so the host
+        // these checks approved is the one everything is then told to land on.
+        var server = await SettleServerAsync(launch.WorkspaceId, choices, ct);
+        var refusals = await CheckChoicesAsync(launch, choices, server, ct);
         if (refusals.Count > 0) return ServiceOutcome<LaunchView>.Refused(refusals);
 
-        var (serverId, _) = await SettleServerAsync(launch.WorkspaceId, choices, ct);
-        var settled = choices with { ServerId = serverId };
+        // A database ticked by hand arrives with no aliases of its own; what the example file says it
+        // is read under is settled here, so the retry and the timeline both read one answer.
+        var inspection = LaunchJson.ReadInspection(launch.InspectionJson);
+        var settled = choices with
+        {
+            ServerId = server.ServerId,
+            Services = choices.Services
+                .Select(s => s with { Aliases = s.Aliases ?? AliasesFor(inspection, s.Type) })
+                .ToList()
+        };
 
         // The claim. A second submit in the same instant matches nothing here and creates nothing.
         if (!await LaunchMoves.TryMoveAsync(db, launchId, LaunchStatus.AwaitingConfirmation, LaunchStatus.Creating, clock.UtcNow, ct))
@@ -211,8 +221,8 @@ public sealed partial class LaunchService
             {
                 if (attached.Contains(serviceIds[i])) continue;
 
-                var aliases = choices.Services[i].Aliases ?? AliasesFor(inspection, choices.Services[i].Type);
-                var outcome = await attachments.AttachAsync(serviceIds[i], appId.Value, null, null, clientIp, ct, aliases);
+                var outcome = await attachments.AttachAsync(
+                    serviceIds[i], appId.Value, null, null, clientIp, ct, choices.Services[i].Aliases);
                 if (!outcome.Ok)
                 {
                     await FailCreatingAsync(launchId, step, outcome.Refusals[0].Message, outcome.Refusals[0].MessageFa, answers, ct);
@@ -327,11 +337,18 @@ public sealed partial class LaunchService
         }
 
         // Answers are not stored anywhere that survives this, and a person should hear that now rather
-        // than find a variable missing after the next try.
-        if (answers.Values.Any(v => !string.IsNullOrEmpty(v)))
+        // than find a variable missing after the next try. Only what a retry cannot read again: a value
+        // left as the example file has it comes back by itself. Names only, never a value.
+        var inspection = LaunchJson.ReadInspection(launch.InspectionJson);
+        var lost = answers
+            .Where(a => !string.IsNullOrEmpty(a.Value)
+                        && inspection.EnvVars.FirstOrDefault(v => v.Name == a.Key)?.ExampleValue != a.Value)
+            .Select(a => a.Key)
+            .ToList();
+        if (lost.Count > 0)
         {
-            message += " What you typed was not kept: after trying again, set those variables on the app's page.";
-            messageFa += " چیزهایی که وارد کرده بودید نگه داشته نشد: بعد از تلاش دوباره، آن متغیرها را در صفحهٔ اپ تنظیم کنید.";
+            message += $" What you typed for {string.Join(", ", lost)} was not kept: after trying again, set it on the app's page.";
+            messageFa += $" آنچه برای {string.Join("، ", lost)} وارد کرده بودید نگه داشته نشد: بعد از تلاش دوباره، آن را در صفحهٔ اپ تنظیم کنید.";
         }
 
         await UpdateAsync(launchId, l =>
