@@ -29,8 +29,8 @@ public class OneOffCleanupTests
     {
         var daemon = new Daemon();
 
-        var images = DispatchStandIn.Create<IImageOperations>((method, _) => method.Name == "CreateImageAsync"
-            ? Task.CompletedTask
+        var images = DispatchStandIn.Create<IImageOperations>((method, _) => method.Name == "InspectImageAsync"
+            ? Task.FromResult(new ImageInspectResponse())
             : throw new NotSupportedException(method.Name));
 
         var containers = DispatchStandIn.Create<IContainerOperations>((method, args) =>

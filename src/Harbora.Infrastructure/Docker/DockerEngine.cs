@@ -709,7 +709,11 @@ public sealed class DockerEngine(IDockerClient client, ILogger<DockerEngine> log
 
     public async Task<int> RunOneOffAsync(DockerOneOffRequest request, IProgress<string>? log, CancellationToken ct)
     {
-        await PullImageAsync(request.Image, new Progress<string>(l => log?.Report(l)), ct);
+        // Only when it is not here already. A release task runs on the image this deployment has just
+        // built, which exists on this host and in no registry, so asking for it anyway got "pull access
+        // denied" from Docker Hub and failed every deployment that has a release command.
+        if (!await ImageExistsAsync(request.Image, ct))
+            await PullImageAsync(request.Image, new Progress<string>(l => log?.Report(l)), ct);
 
         // The image's entrypoint is replaced rather than argued with — see OneOffLaunch for why
         // leaving it in place silently turns the command into arguments the image ignores.
