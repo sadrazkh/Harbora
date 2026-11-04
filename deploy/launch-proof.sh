@@ -397,6 +397,11 @@ deployment_log() { api GET "/api/v1/deployments/$1/logs" | jq -r '.[].message'; 
 image_of_app()   { docker ps --filter "label=harbora.app=$1" --format '{{.Image}}' | head -1; }
 container_of()   { docker ps --filter "label=harbora.app=$1" --format '{{.Names}}' | head -1; }
 
+# Whether stdin holds this text, having read all of it. `grep -q` stops at the first match, whatever is
+# feeding it then dies of SIGPIPE, and under pipefail that reads as "not found", which for a search
+# proving a secret is nowhere is the one wrong answer that looks right.
+holds() { grep -acF -- "$1" >/dev/null; }
+
 # Whether a value is anywhere in an image: every layer and config `docker save` gives, unpacked as far
 # as gzip goes, and its history. Every caller of this for "it is nowhere" also asks it about a value
 # that must be found, because a search that cannot find anything would pass that test for ever.
@@ -405,9 +410,9 @@ image_contains() {
   tmp="$(mktemp -d "$WORK/image.XXXXXX")"
   docker save "$image" | tar -x -C "$tmp"
   while IFS= read -r file; do
-    if zcat -f -- "$file" 2>/dev/null | grep -aqF -- "$value"; then found=0; break; fi
+    if { zcat -f -- "$file" 2>/dev/null || true; } | holds "$value"; then found=0; break; fi
   done < <(find "$tmp" -type f)
-  if docker history --no-trunc "$image" 2>/dev/null | grep -qF -- "$value"; then found=0; fi
+  if { docker history --no-trunc "$image" 2>/dev/null || true; } | holds "$value"; then found=0; fi
   rm -rf "$tmp"
   return "$found"
 }
@@ -817,7 +822,7 @@ case_crashes() {
   must_eq "the launch's status" "$(view_field status)" SucceededWithProblems
   must_eq "harbora launch's exit code" "$LAUNCH_EXIT" 2
   must_eq "the restarts check" "$(check_status restarts)" Failed
-  check_detail restarts | grep -qF "giving up on purpose" \
+  check_detail restarts | holds "giving up on purpose" \
     || fail "The restarts check does not quote the app's last words: $(check_detail restarts)"
   say_must "It is running, but something is wrong"
   retire_app "$(view_field appId)"
@@ -869,7 +874,7 @@ case_python_worker() {
   container="$(container_of "$slug")"
   [ -n "$container" ] || fail "No running container carries the label harbora.app=$slug."
   docker logs "$container" 2>&1 | tail -n 5
-  docker logs "$container" 2>&1 | grep -q 'redis answered: ping=True' \
+  docker logs "$container" 2>&1 | holds 'redis answered: ping=True' \
     || fail "The worker's log never shows Redis answering: $(docker logs --tail 5 "$container" 2>&1 | cut -c1-300)"
   retire_app "$(view_field appId)"
   fact "python-worker-redis: a worker from a Procfile line, with no address and no url check, whose own log shows Redis answering through REDIS_URL."
@@ -952,7 +957,7 @@ case_pages() {
   page "/launch/$launch" 2 'data-launch-state' 'data-status="Succeeded"' 'data-launch-checks' 'data-check-status="Passed"' 'data-launch-address-link'
   page "/launch/$launch/progress" 3 'data-launch-state' 'data-terminal="true"' 'data-launch-checks'
 
-  if docker logs harbora-panel 2>&1 | grep -qF -- "$secret"; then fail "The panel's log holds the generated JWT_SECRET."; fi
+  if docker logs harbora-panel 2>&1 | holds "$secret"; then fail "The panel's log holds the generated JWT_SECRET."; fi
   fact "The launch pages render over a real finished launch with the markers they should have, and neither the generated secret nor the database password is in their HTML or the panel's log."
 }
 
@@ -1076,7 +1081,7 @@ case_cra() {
   run_launch cra-shaped "$dir"
   must_eq "harbora launch's exit code" "$LAUNCH_EXIT" 0
   must_eq "the launch's status" "$(view_field status)" Succeeded
-  deployment_log "$(view_field deploymentId)" | grep -qF "Frontend (Nginx)" \
+  deployment_log "$(view_field deploymentId)" | holds "Frontend (Nginx)" \
     || fail "A Create React App project was not built as a frontend."
 
   url="$(view_field publicUrl)"
@@ -1121,7 +1126,7 @@ case_node_build_var() {
   slug="$(slug_of_app "$(view_field appId)")"
   image="$(image_of_app "$slug")"
   [ -n "$image" ] || fail "No running container carries the label harbora.app=$slug."
-  if docker inspect "$image" --format '{{json .Config.Env}}' | grep -qF "NEXT_PUBLIC_API"; then
+  if docker inspect "$image" --format '{{json .Config.Env}}' | holds "NEXT_PUBLIC_API"; then
     fail "NEXT_PUBLIC_API is in the image's ENV: it should only ever be an ARG. $(docker inspect "$image" --format '{{json .Config.Env}}')"
   fi
   retire_app "$(view_field appId)"
@@ -1150,15 +1155,14 @@ case_python_marked() {
   slug="$(slug_of_app "$app_id")"
   image="$(image_of_app "$slug")"
   [ -n "$image" ] || fail "No running container carries the label harbora.app=$slug."
-  if docker inspect "$image" --format '{{json .Config.Env}}' | grep -qF "BUILD_MARK"; then
+  if docker inspect "$image" --format '{{json .Config.Env}}' | holds "BUILD_MARK"; then
     fail "BUILD_MARK is in the image's ENV: it should only ever be an ARG."
   fi
   # A record rather than an assertion: Buildpacks.ArgLines says a single-stage image's history can show
   # a marked value, and what it really shows depends on the daemon.
-  if docker history --no-trunc "$image" 2>/dev/null | grep -qF "$value"; then history_says="is"; else history_says="is not"; fi
-  history_says="$history_says (Docker $(docker version --format '{{.Server.Version}}' 2>/dev/null))"
+  if { docker history --no-trunc "$image" 2>/dev/null || true; } | holds "$value"; then history_says="shows"; else history_says="does not show"; fi
   retire_app "$app_id"
-  fact "python-marked-var: a pip install step saw nothing until the variable was marked AvailableAtBuild, then saw its value; the image's ENV does not hold it, and its docker history $history_says showing it (single-stage, as Buildpacks.ArgLines says)."
+  fact "python-marked-var: a pip install step saw nothing until the variable was marked AvailableAtBuild, then saw its value; the image's ENV does not hold it, and on Docker $(docker version --format '{{.Server.Version}}' 2>/dev/null) its docker history $history_says the value (a single-stage image, which Buildpacks.ArgLines warns about)."
 }
 
 case_php_pdo() {
