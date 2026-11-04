@@ -518,7 +518,7 @@ public sealed class AppProvisioningService(
         return string.IsNullOrWhiteSpace(pool) ? null : pool;
     }
 
-    private static string Slugify(string value)
+    public static string Slugify(string value)
     {
         var chars = (value ?? "").Trim().ToLowerInvariant().Select(c => char.IsLetterOrDigit(c) ? c : '-').ToArray();
         var slug = new string(chars).Trim('-');

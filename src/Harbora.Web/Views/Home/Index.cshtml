@@ -52,13 +52,18 @@
     {
         (Model.ServersOnline > 0, isFa ? "اتصال سرور" : "Connect a server", "/servers"),
         (Model.DomainsTotal > 0, isFa ? "افزودن دامنه" : "Add a domain", "/domains"),
-        (Model.AppCount > 0, isFa ? "ساخت اولین برنامه" : "Create your first app", "/apps/create"),
+        (Model.AppCount > 0, isFa ? "ساخت اولین برنامه" : "Create your first app", "/launch"),
         (Model.BackupSchedulesEnabled > 0, isFa ? "فعال‌سازی پشتیبان" : "Enable backups", "/backups")
     };
     var completedSteps = steps.Count(s => s.Done);
     var nextStep = steps.FirstOrDefault(s => !s.Done);
 
     var resourceRows = Model.ResourceApps.Count + Model.ResourceDatabases.Count;
+
+    // A workspace with nothing in it is a person arriving, not a production overview to read. Five
+    // zeros and two empty lists tell them nothing; this tells them the next thing to do.
+    var firstRun = Model.AppCount == 0 && Model.DatabaseCount == 0;
+    var canCreate = NavigationCapabilities.For(User)(Harbora.Domain.Authorization.Capabilities.AppsCreate);
 }
 
 <div class="page-heading">
@@ -83,6 +88,25 @@
     <div class="alert-warning mb-5"><i data-lucide="triangle-alert" class="h-4 w-4"></i><span>@(isFa ? "Docker در دسترس نیست؛ متریک زنده و استقرار موقتاً متوقف است." : "Docker is unreachable; live metrics and deployments are temporarily paused.")</span><a href="/servers">@(isFa ? "بررسی سرورها" : "Check servers")</a></div>
 }
 
+@if (firstRun)
+{
+    <section class="dashboard-panel flex flex-col items-center gap-3 px-6 py-14 text-center" data-first-run>
+        <span class="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft text-accent-text"><i data-lucide="rocket" class="h-6 w-6"></i></span>
+        @if (canCreate)
+        {
+            <h2 class="text-xl font-bold tracking-tight text-ink">@(isFa ? "اولین اپت را بیاور" : "Bring your first app")</h2>
+            <p class="max-w-md text-sm text-ink-muted">@(isFa ? "کدت را بده؛ می‌خوانمش، هرچه لازم دارد می‌سازم، وصلش می‌کنم و امتحانش می‌کنم." : "Give me your code: I'll read it, make what it needs, connect it and test it.")</p>
+            <a href="/launch" class="btn-primary mt-1 justify-center"><i data-lucide="rocket" class="h-4 w-4"></i>@(isFa ? "شروع کن" : "Get started")</a>
+        }
+        else
+        {
+            <h2 class="text-xl font-bold tracking-tight text-ink">@(isFa ? "هنوز اپی اینجا نیست" : "No apps here yet")</h2>
+            <p class="max-w-md text-sm text-ink-muted">@(isFa ? "کسی که اجازه‌ی ساختن اپ دارد باید اولین اپ را بیاورد." : "Somebody who may create apps needs to bring the first one.")</p>
+        }
+    </section>
+}
+else
+{
 @* Redesign 3a: five hairline-divided cells replace the five icon cards — Platform status folds
    into the last cell (still one click from /servers), and the wall of coloured tiles becomes one
    quiet strip. *@
@@ -119,7 +143,7 @@
         {
             <partial name="Design/_EmptyState" model="@(new EmptyStateModel("boxes",
                 isFa ? "هنوز هیچ اپ یا دیتابیسی ساخته نشده است." : "No apps or databases yet.",
-                isFa ? "ساخت منبع" : "New resource", "/apps/create"))" />
+                isFa ? "ساخت منبع" : "New resource", "/launch"))" />
         }
         else
         {
@@ -247,3 +271,4 @@
         }
     </div>
 </section>
+}

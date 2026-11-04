@@ -1325,6 +1325,23 @@
     </div>
 
     <aside class="space-y-6">
+        @* ---- a new version ----
+           An app made from a zip has no repository to pull from, and somebody who gave us a zip has no
+           CLI, so without this it could never be updated. *@
+        @if (app.SourceType == AppSourceType.Upload
+             && NavigationCapabilities.For(User)(Harbora.Domain.Authorization.Capabilities.AppsDeploy))
+        {
+            <section class="rounded-xl border border-line bg-surface p-4" data-app-upload>
+                <div class="font-semibold">@(isFa ? "نسخه‌ی تازه" : "A new version")</div>
+                <p class="mt-1 text-xs text-ink-muted">@(isFa ? "پوشه‌ی پروژه را دوباره zip کن و اینجا بفرست؛ همین اپ با آن از نو ساخته و اجرا می‌شود." : "Zip your project folder again and send it here: this app is rebuilt from it and started.")</p>
+                <form method="post" action="/apps/@app.Id/upload" enctype="multipart/form-data" class="mt-3 space-y-2">
+                    @Html.AntiForgeryToken()
+                    <input name="file" type="file" accept="@UploadedArchive.Accept" required class="block w-full min-w-0 text-xs text-ink-muted file:me-3 file:cursor-pointer file:rounded-lg file:border-0 file:bg-surface-2 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-ink" />
+                    <button type="submit" class="btn-primary w-full justify-center"><i data-lucide="cloud-upload" class="h-4 w-4"></i>@(isFa ? "بفرست و اجرا کن" : "Send and run it")</button>
+                </form>
+            </section>
+        }
+
         @* ---- databases ----
            The page said nothing about them at all: the only way to attach one was to know to open
            each database in turn, and nothing here listed what this application was already using.

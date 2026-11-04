@@ -1,0 +1,35 @@
+@model LaunchRootModel
+@using Harbora.Domain.Authorization
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    ViewData["Title"] = isFa ? "راه انداختن اپ" : "Launch";
+    var canCreate = NavigationCapabilities.For(User)(Capabilities.AppsCreate);
+}
+@* This and nothing else. No services, no cost and no button to launch: everything the inspector could
+   say so far is about the repository, and none of it is about the app the person means. *@
+<div class="mx-auto max-w-lg py-2 md:py-8" data-launch-root-question>
+    <h1 class="text-center text-xl font-bold tracking-tight text-ink md:text-2xl">@(isFa ? "این مخزن چند اپ دارد. کدام را راه بیندازم؟" : "This repository holds several apps. Which one?")</h1>
+
+    @if (Model.Message is { Length: > 0 } message)
+    {
+        <div class="alert-danger mt-5 break-words" data-launch-refusals role="alert">@message</div>
+    }
+
+    @if (canCreate)
+    {
+        <form method="post" action="/launch/@Model.LaunchId/root" class="mt-6 space-y-2" data-launch-roots>
+            @Html.AntiForgeryToken()
+            @foreach (var candidate in Model.Candidates)
+            {
+                <button type="submit" name="folder" value="@candidate" class="btn-secondary w-full justify-center">
+                    <i data-lucide="folder" class="h-4 w-4 shrink-0 text-ink-muted"></i>
+                    <code dir="ltr" class="min-w-0 break-all">@candidate</code>
+                </button>
+            }
+        </form>
+    }
+    else
+    {
+        <p class="mt-6 text-center text-sm text-ink-muted" data-launch-no-permission>@(isFa ? "برای راه انداختنش باید اجازه‌ی ساختن اپ داشته باشی. از مدیر این فضای کاری بپرس." : "You need permission to create apps to launch this. Ask whoever runs this workspace.")</p>
+    }
+</div>

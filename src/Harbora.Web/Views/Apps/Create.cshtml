@@ -19,6 +19,17 @@
     var addressableTemplates = quickStarts.Where(q => !string.IsNullOrWhiteSpace(q.Manifest.Image)).ToList();
 }
 
+<p class="mb-3 text-sm text-ink-muted" data-launch-offer>
+    @if (isFa)
+    {
+        <text>کدت آماده است؟ لازم نیست این فرم را پر کنی: <a href="/launch" class="text-accent-text hover:underline">بده خودمان راهش می‌اندازیم</a>.</text>
+    }
+    else
+    {
+        <text>Is your code ready? You don't have to fill this in: <a href="/launch" class="text-accent-text hover:underline">give it to us and we'll get it running</a>.</text>
+    }
+</p>
+
 <nav class="breadcrumb mb-4" aria-label="breadcrumb">
     <a href="/apps">@T["Applications"]</a><i data-lucide="chevron-right" class="h-3.5 w-3.5 rtl:rotate-180"></i><span>@(isFa ? "منبع جدید" : "New resource")</span>
 </nav>
