@@ -85,6 +85,7 @@ dotnet test Harbora.slnx --no-build --nologo -v q                               
 Passed!  - Failed: 0, Passed:  500, Skipped: 17, Total:  517 - Harbora.NodeAgent.Tests.dll
 Passed!  - Failed: 0, Passed:   15, Skipped:  0, Total:   15 - Harbora.NodeIngress.Tests.dll
 Passed!  - Failed: 0, Passed: 9327, Skipped:  0, Total: 9327 - Harbora.Tests.dll
+Skipped! - Failed: 0, Passed:    0, Skipped: 117, Total:  117 - Harbora.Postgres.Tests.dll (no Docker here, so none of these ran)
 grep -c "Harbora.Tests.dll" in the log: 2
 ```
 
