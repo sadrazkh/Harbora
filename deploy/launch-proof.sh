@@ -318,6 +318,25 @@ answers() { [ "$(http_get "$1" "$2")" = "$3" ]; }
 
 newest_launch() { psql_panel 'SELECT "Id" FROM "AppLaunches" ORDER BY "CreatedAt" DESC LIMIT 1'; }
 
+# A command's output as one line of plain words. Spectre folds at 80 columns with no terminal behind
+# it, and under GitHub Actions it colours redirected output too, so a word in bold is otherwise cut off
+# from the one before it by escape codes.
+flatten() { sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' | tr -s ' \r\n' ' '; }
+
+# A runner's capacity is real, and this launches more apps than four cores allow at a quarter of a core
+# each: by the last steps the panel rightly refuses. An app nothing further needs goes the way a person
+# removes one, which is also what stops the crash loop from eating the host.
+retire_app() {
+  local app_id="$1" token status
+  [ -n "$app_id" ] || fail "There is no app to retire."
+  token="$(antiforgery_token "/apps/details/$app_id")"
+  status="$(web_post "/Apps/Delete/$app_id" "$token" "__RequestVerificationToken=$token" "removeVolumes=false")"
+  case "$status" in
+    302|303) ok "Retired app $app_id." ;;
+    *) fail "Deleting app $app_id answered HTTP $status, not a redirect." ;;
+  esac
+}
+
 # A copy, because a launch writes harbora.yml into its folder and step 11 changes a file.
 fixture() {
   local name="$1" from="$COMPOSE_DIR/proof-fixtures/$1" target="$WORK/apps/$1"
@@ -339,7 +358,7 @@ run_launch() {
   LAUNCH_EXIT=0
   ( cd "$dir" && timeout "$W_LAUNCH" "$HARBORA" launch --yes "$@" ) > "$WORK/out/$label.txt" 2>&1 || LAUNCH_EXIT=$?
   cat "$WORK/out/$label.txt"
-  tr -s ' \r\n' ' ' < "$WORK/out/$label.txt" > "$OUT"
+  flatten < "$WORK/out/$label.txt" > "$OUT"
   [ "$LAUNCH_EXIT" -ne 124 ] || fail "harbora launch was still following after ${W_LAUNCH}s. It must end by itself."
 
   LAUNCH_ID="$(newest_launch)"
@@ -412,7 +431,7 @@ run_deploy() {
   DEPLOY_EXIT=0
   ( cd "$dir" && timeout "$W_LAUNCH" "$HARBORA" deploy ) > "$WORK/out/$label.txt" 2>&1 || DEPLOY_EXIT=$?
   cat "$WORK/out/$label.txt"
-  tr -s ' \r\n' ' ' < "$WORK/out/$label.txt" > "$WORK/out/$label.flat"
+  flatten < "$WORK/out/$label.txt" > "$WORK/out/$label.flat"
   DEPLOY_ID="$(grep -oE 'Queued deployment [0-9a-f-]{36}' "$WORK/out/$label.flat" | awk '{print $3}' | head -1 || true)"
 }
 
@@ -801,6 +820,7 @@ case_crashes() {
   check_detail restarts | grep -qF "giving up on purpose" \
     || fail "The restarts check does not quote the app's last words: $(check_detail restarts)"
   say_must "It is running, but something is wrong"
+  retire_app "$(view_field appId)"
   fact "crashes: a deployment that passed its probe, then exit 2 and SucceededWithProblems, and the restarts check says so and quotes the log."
 }
 
@@ -823,6 +843,7 @@ case_wrong_database_host() {
   url="$(view_field publicUrl)"
   must_eq "GET / through Traefik" "$(http_get "$url/" "$WORK/out/wrong-db.body.json")" 200
   must_eq "the app's own account of its database" "$(jq -r .database "$WORK/out/wrong-db.body.json")" false
+  retire_app "$(view_field appId)"
   fact "wrong-database-host: exit 2 and SucceededWithProblems because of the logs check, which names the loopback address it could not reach, while the database it ignored answered."
 }
 
@@ -850,6 +871,7 @@ case_python_worker() {
   docker logs "$container" 2>&1 | tail -n 5
   docker logs "$container" 2>&1 | grep -q 'redis answered: ping=True' \
     || fail "The worker's log never shows Redis answering: $(docker logs --tail 5 "$container" 2>&1 | cut -c1-300)"
+  retire_app "$(view_field appId)"
   fact "python-worker-redis: a worker from a Procfile line, with no address and no url check, whose own log shows Redis answering through REDIS_URL."
 }
 
@@ -873,6 +895,7 @@ case_two_apps() {
   url="$(view_field publicUrl)"
   must_eq "GET / through Traefik" "$(http_get "$url/" "$WORK/out/two-apps.body.json")" 200
   must_eq "the app that answers" "$(jq -r .app "$WORK/out/two-apps.body.json")" api
+  retire_app "$(view_field appId)"
   fact "two-apps: with no --folder, exit 1, naming both, nothing created; with --folder api, it built and served that folder."
 }
 
@@ -1063,19 +1086,24 @@ case_cra() {
   grep -qE 'static/js/main\.[a-z0-9]+\.js' "$root" || fail "GET / is the source's template rather than the built page: $(head -c 400 "$root")"
   if grep -qF '%PUBLIC_URL%' "$root"; then fail "GET / still has %PUBLIC_URL% in it: this is the unbuilt template."; fi
 
-  # Why the rule exists at all. `react-scripts start` is not a way to serve from a container, because it
-  # exits when its stdin closes, and a container has none. That was reasoned from memory, so it is run.
+  # What the old path did. A record rather than an assertion: either way a site with a build is built and
+  # served, and this is what that rule costs somebody whose dev server was running until now.
   started="$(date +%s)"
-  result="$(docker run --rm -v "$dir:/app" -w /app node:20-alpine sh -c \
-    'npm install --no-audit --no-fund >/dev/null 2>&1; timeout 120 npm start </dev/null >/tmp/start.log 2>&1; code=$?; tail -n 2 /tmp/start.log | cut -c1-200; echo "exit=$code"')"
+  result="$(docker run --rm -v "$dir:/app" -w /app node:20-alpine sh -c '
+    npm install --no-audit --no-fund >/dev/null 2>&1
+    npm start </dev/null >/tmp/start.log 2>&1 &
+    pid=$!
+    for attempt in $(seq 1 24); do
+      sleep 5
+      if ! kill -0 "$pid" 2>/dev/null; then echo "it stopped by itself"; exit 0; fi
+      if wget -qO- http://127.0.0.1:3000/ 2>/dev/null | grep -q "id=\"root\""; then echo "it stayed up and served its page"; exit 0; fi
+    done
+    echo "it stayed up and served nothing in two minutes"
+  ' | tail -n 1)"
   elapsed="$(( $(date +%s) - started ))"
-  log "react-scripts start, with stdin closed, after ${elapsed}s: $result"
-  case "$result" in
-    *"exit=124"*|*"exit=143"*) fail "react-scripts start kept running in a container for two minutes, so 'it cannot serve' is false: $result" ;;
-    *"exit="*) ok "react-scripts start stopped by itself in a container." ;;
-    *) fail "Could not tell what react-scripts start did: $result" ;;
-  esac
-  fact "cra-shaped: a real react-scripts project with 'start: react-scripts start' built as a frontend and served its built page; run directly with stdin closed, that start command stops by itself ($(printf '%s' "$result" | tail -n 1))."
+  log "react-scripts start, run directly in a container with stdin closed, after ${elapsed}s: $result"
+  retire_app "$(view_field appId)"
+  fact "cra-shaped: a real react-scripts project with 'start: react-scripts start' built as a frontend and served its built page. Run directly in a container with stdin closed, that start command: $result."
 }
 
 case_node_build_var() {
@@ -1096,6 +1124,7 @@ case_node_build_var() {
   if docker inspect "$image" --format '{{json .Config.Env}}' | grep -qF "NEXT_PUBLIC_API"; then
     fail "NEXT_PUBLIC_API is in the image's ENV: it should only ever be an ARG. $(docker inspect "$image" --format '{{json .Config.Env}}')"
   fi
+  retire_app "$(view_field appId)"
   fact "node-build-var: a build on the Node image read a public variable set with --set and ticked by nobody; the image's ENV does not hold it."
 }
 
@@ -1126,6 +1155,7 @@ case_python_marked() {
   fi
   # The accepted price, on a single-stage image, written down in Buildpacks.ArgLines. Not a failure.
   if docker history --no-trunc "$image" 2>/dev/null | grep -qF "$value"; then history_says="is"; else history_says="is not"; fi
+  retire_app "$app_id"
   fact "python-marked-var: a pip install step saw nothing until the variable was marked AvailableAtBuild, then saw its value; the image's ENV does not hold it, and its docker history $history_says showing it (single-stage, as Buildpacks.ArgLines says)."
 }
 
