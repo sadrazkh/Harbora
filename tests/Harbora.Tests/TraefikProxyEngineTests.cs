@@ -48,6 +48,27 @@ public class TraefikProxyEngineTests
         preview.Content.Should().Contain("http://harbora-app:80");
     }
 
+    [Fact]
+    public void No_routes_render_to_a_file_with_nothing_in_it()
+    {
+        // The launch proof's first run on a clean machine: `http:` holding three empty sections is a file
+        // Traefik refuses, with "http cannot be a standalone element", and it stops loading the directory
+        // over it. So the node channel's router, in the file next to this one, never loaded.
+        var content = Engine().Preview([]).Content;
+
+        content.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Should().OnlyContain(line => line.StartsWith('#'), "a comment is the one thing Traefik has no opinion about");
+    }
+
+    [Fact]
+    public void A_route_that_is_turned_off_does_not_keep_an_empty_file_from_being_empty()
+    {
+        var route = HostRoute();
+        route.IsEnabled = false;
+
+        Engine().Preview([route]).Content.Should().NotContain("http:");
+    }
+
     // ---- replicas: one loadBalancer, several servers (confirms the multi-server assumption) ----
 
     [Fact]
