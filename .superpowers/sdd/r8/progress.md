@@ -50,5 +50,5 @@ It was also a real behaviour question, not only a test one. Seeding a large repl
 
 - Upgrade MinIO on 57 (2024-10 → 2025-10 over existing data is untested), or stay.
 - `ghcr.io/coollabsio/minio` as the default image for new installs is a choice to confirm.
-- `Jobs` is 942 MB of a 1085 MB database: 4.2 million rows since 2026-08-09, none of them pruned. Not touched, and not caused by this round.
+- `Jobs` is 942 MB of a 1085 MB database: 4.2 million rows, the oldest from 2026-08-09. Not touched, and the cause was not looked into.
 - 90eb216 and 6316507 went out with the global email rather than the owner's. Fixing it needs a force-push, so it was left.
