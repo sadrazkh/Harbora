@@ -239,6 +239,8 @@ public sealed class ManagedServiceEngine(
             foreach (var extra in networks.Skip(1))
                 await docker.ConnectNetworkAsync(svc.ContainerName, extra, ct);
 
+            await WaitUntilItAnswersAsync(svc, ct);
+
             svc.Status = ServiceStatus.Running;
             // What is actually running, as opposed to what was asked for. They diverge whenever a
             // moving tag is pulled again, and a database that changed major version this way will
@@ -282,6 +284,48 @@ public sealed class ManagedServiceEngine(
             // JobWorker.SettleAsync does for the job row itself.
             await FailAsync(svc, reason, CancellationToken.None);
         }
+    }
+
+    /// <summary>
+    /// Holds a new database at Provisioning until it really answers, because Running is what everything
+    /// after this reads as ready: a launch deploys on it, and so does a deployment waiting beside it. A
+    /// container is started seconds before the server inside it is, and much longer on a first start,
+    /// when MySQL initialises its data directory behind a temporary server that listens on nothing. A
+    /// release task run in that gap fails the deployment with "connection refused" for nothing, which is
+    /// how a real Laravel project's migration first met its database.
+    ///
+    /// <para>
+    /// A probe that cannot be asked is no claim either way, as in the checks: an engine with no shell
+    /// client, or a node that cannot run a one-off, goes on as it always did. Any other trouble is the
+    /// same as no answer yet, until the attempts run out, and then the database has not come up.
+    /// </para>
+    /// </summary>
+    private async Task WaitUntilItAnswersAsync(ManagedService svc, CancellationToken ct)
+    {
+        if (Networking.ConnectionProbe.WhyUnsupported(svc.Type) is not null) return;
+
+        var lastSaid = "";
+        for (var attempt = 0; attempt < _opt.ServiceAnswerAttempts; attempt++)
+        {
+            if (attempt > 0) await Task.Delay(_opt.ServiceAnswerPollInterval, ct);
+
+            try
+            {
+                if (await TestConnectionAsync(svc.Id, ct) is not { } said) return;
+                lastSaid = said;
+            }
+            catch (NotSupportedException)
+            {
+                return;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                lastSaid = ex.Message;
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Its container started, and the database inside it did not answer after {_opt.ServiceAnswerAttempts} tries. The last answer: {lastSaid}");
     }
 
     /// <summary>
@@ -442,7 +486,7 @@ public sealed class ManagedServiceEngine(
     public async Task<string?> TestConnectionAsync(Guid serviceId, CancellationToken ct)
     {
         var svc = await db.ManagedServices.FirstOrDefaultAsync(s => s.Id == serviceId, ct);
-        if (svc is null) return "That database no longer exists.";
+        if (svc is null) return Networking.ConnectionProbe.ServiceGone;
 
         if (Networking.ConnectionProbe.WhyUnsupported(svc.Type) is { } unsupported) return unsupported;
 

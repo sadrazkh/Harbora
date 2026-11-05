@@ -152,10 +152,10 @@ public static class ReadyAppCatalog
         port: 9001, healthPath: "/minio/health/live",
         volumes: ["/data"],
         env: [("MINIO_ROOT_USER", null, false), ("MINIO_ROOT_PASSWORD", null, true)],
-        repository: "quay.io/minio/minio",
+        repository: "ghcr.io/coollabsio/minio",
         versions:
         [
-            ("RELEASE.2024-10-13T13-34-11Z", "sha256:9535594ad4122b7a78c6632788a989b96d9199b483d3bd71a5ceae73a922cdfa",
+            ("RELEASE.2025-10-15T17-29-55Z", "sha256:69b55a1c1c5dc285ce04db96689f5b2102317fc77a50680a1874ca6efd1c87f9",
                 VersionLifecycle.Recommended, "amd64,arm64", null, null)
         ],
         licenseNote: "MinIO project mark from the Simple Icons set (CC0), used to identify the application.");

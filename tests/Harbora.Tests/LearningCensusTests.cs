@@ -65,6 +65,17 @@ public class LearningCensusTests
     }
 
     [Fact]
+    public void Every_screen_of_a_launch_opens_the_launch_chapter()
+    {
+        // The whole of this flow is one page on purpose: somebody stuck on their own launch's timeline
+        // is the person that page was written for, and they are not on the bare /launch.
+        var launchId = Guid.NewGuid();
+
+        HelpMap.ChapterFor("/launch").Should().Be("15-launch");
+        HelpMap.ChapterFor($"/launch/{launchId}").Should().Be("15-launch");
+    }
+
+    [Fact]
     public void A_screen_with_no_entry_answers_null_rather_than_a_guess()
     {
         // /workspaces has no dedicated section in any of the nine chapters (chapter 1 only mentions

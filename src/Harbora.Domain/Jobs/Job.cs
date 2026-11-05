@@ -59,7 +59,13 @@ public enum JobKind
     /// <c>IJobQueue.EnqueueExclusiveAsync</c> is called with the database's own id. Appended, never
     /// renumbered.
     /// </summary>
-    DatabaseMaintenance = 13
+    DatabaseMaintenance = 13,
+
+    /// <summary>
+    /// Fetching a launch's source and reading it. The target is the <c>AppLaunch</c> row. Only this
+    /// first step of a launch is a job: the rest wait on other jobs, and waiting must not hold a worker.
+    /// </summary>
+    LaunchInspect = 14
 }
 
 public enum JobStatus

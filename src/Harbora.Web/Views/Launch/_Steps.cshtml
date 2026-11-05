@@ -1,0 +1,56 @@
+@model LaunchProgressModel
+@using Harbora.Infrastructure.Launch
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    var view = Model.View;
+}
+<ol class="mt-3 space-y-1" data-launch-steps>
+    @foreach (var step in view.Steps)
+    {
+        var isDeploy = step.Key == LaunchStepKeys.Deploy;
+        // The deployment page answers at /deployments/details/{id}; there is no shorter address for it.
+        var link = isDeploy && view.DeploymentId is { } deployment ? $"/deployments/details/{deployment}" : step.LinkPath;
+        // The deployment's page went with the app.
+        if (view.AppGone) link = null;
+        <li class="flex items-start gap-3 rounded-lg px-3 py-2" data-launch-step="@step.Key" data-launch-step-state="@step.State">
+            @switch (step.State)
+            {
+                case LaunchStepState.Done:
+                    <i data-lucide="circle-check" class="mt-0.5 h-4 w-4 shrink-0 text-ok"></i>
+                    break;
+                case LaunchStepState.Running:
+                    <i data-lucide="refresh-cw" class="mt-0.5 h-4 w-4 shrink-0 animate-spin text-accent-text"></i>
+                    break;
+                case LaunchStepState.Failed:
+                    <i data-lucide="circle-x" class="mt-0.5 h-4 w-4 shrink-0 text-danger"></i>
+                    break;
+                case LaunchStepState.Skipped:
+                    <i data-lucide="circle-minus" class="mt-0.5 h-4 w-4 shrink-0 text-ink-faint"></i>
+                    break;
+                default:
+                    <i data-lucide="circle" class="mt-0.5 h-4 w-4 shrink-0 text-ink-faint"></i>
+                    break;
+            }
+            <div class="min-w-0 flex-1 text-sm">
+                <div class="@(step.State is LaunchStepState.Waiting or LaunchStepState.Skipped ? "text-ink-muted" : "font-medium text-ink")">@(isFa ? step.TitleFa : step.Title)</div>
+                @if ((isFa ? step.DetailFa : step.Detail) is { Length: > 0 } detail)
+                {
+                    <div class="mt-0.5 break-words text-xs text-ink-muted">@detail</div>
+                }
+                @if (link is { Length: > 0 })
+                {
+                    <a href="@link" class="mt-0.5 inline-block text-xs text-accent-text hover:underline">
+                        @if (isDeploy)
+                        {
+                            @(step.State == LaunchStepState.Running ? (isFa ? "لاگ زنده" : "Live log") : (isFa ? "لاگ" : "Log"))
+                        }
+                        else
+                        {
+                            @(isFa ? "بیشتر" : "Look closer")
+                        }
+                    </a>
+                }
+            </div>
+        </li>
+    }
+</ol>

@@ -13,13 +13,16 @@ namespace Harbora.Infrastructure.Deployments;
 /// SaveChanges, the deployment could not even record that it had failed. It sat "in progress"
 /// forever, which is the worst way for something to break.
 ///
-/// Newlines and tabs survive, because output is read by people.
+/// Newlines and tabs survive, because output is read by people. A colour code goes whole: dropping only
+/// its escape character is what left <c>[91m</c> and <c>[0m</c> around everything a build wrote to stderr.
 /// </summary>
 public static class LogText
 {
     public static string Clean(string? text)
     {
         if (string.IsNullOrEmpty(text)) return "";
+
+        if (text.Contains('\u001b')) text = ColourCode.Replace(text, "");
 
         var offending = -1;
         for (var i = 0; i < text.Length; i++)
@@ -38,6 +41,10 @@ public static class LogText
         }
         return kept.ToString();
     }
+
+    private static readonly System.Text.RegularExpressions.Regex ColourCode = new(
+        @"\x1B\[[0-9;?]*[A-Za-z]",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.NonBacktracking);
 
     /// <summary>
     /// Control characters carry no meaning in a log line anyone reads, and the one that actually

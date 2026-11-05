@@ -523,7 +523,7 @@ public sealed class DeployCommand : AsyncCommand<DeployCommand.Settings>
     /// build with no useful error. This is always printed, one line per distinct rule that matched, so
     /// "why" is visible without asking; --verbose additionally names every file, for "which".
     /// </summary>
-    private static void ReportExcluded(IReadOnlyList<SourcePacker.ExcludedEntry> excluded, bool verbose)
+    internal static void ReportExcluded(IReadOnlyList<SourcePacker.ExcludedEntry> excluded, bool verbose)
     {
         if (excluded.Count == 0) return;
 
@@ -786,7 +786,7 @@ public sealed class InitCommand : AsyncCommand<InitCommand.Settings>
     private static string Slugify(string name)
     {
         var chars = name.Trim().ToLowerInvariant()
-            .Select(c => char.IsLetterOrDigit(c) ? c : '-').ToArray();
+            .Select(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' ? c : '-').ToArray();
         var slug = new string(chars).Trim('-');
         while (slug.Contains("--")) slug = slug.Replace("--", "-");
         return string.IsNullOrWhiteSpace(slug) ? "app" : slug;

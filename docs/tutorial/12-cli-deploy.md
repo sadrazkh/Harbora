@@ -65,10 +65,23 @@ Harbora بدون Dockerfile هم stack را حدس می‌زند: Node (`package
 (`go.mod`)، PHP (`composer.json`/`index.php`)، Python (`requirements.txt`/`pyproject.toml`/
 `Pipfile`)، استاتیک (`index.html`). در این حالت `ENV PORT` هم خودکار تنظیم می‌شود.
 
+یک `package.json` که نه اسکریپت `start` دارد و نه کنارش `server.js` هست، چیزی را اجرا نمی‌کند؛ پس اگر
+.NET، Go، PHP یا Python هم در پروژه باشد کنار می‌رود و همان stack انتخاب می‌شود، چون این فایل مال
+فرانت‌اند آن اپ است.
+
+اگر هیچ‌کدام از این‌ها نباشد و `package.json` اسکریپت `build` داشته باشد، پروژه یک فرانت‌اند است (مثلاً
+Vite): build اجرا می‌شود و خروجی‌اش را nginx روی پورت اپ سرو می‌کند. اگر build شکست بخورد یا
+`index.html` تولید نکند، deploy هم شکست می‌خورد. اپی از نوع Worker یا با start command خودش همان Node
+می‌ماند. متغیرهای `VITE_*`، `REACT_APP_*`، `NEXT_PUBLIC_*`، `PUBLIC_*`، `VUE_APP_*`، `GATSBY_*` و
+`NUXT_PUBLIC_*` هنگام build خوانده می‌شوند، روی Node هم؛ مقدارشان در فایل‌هایی می‌رود که هر بازدیدکننده‌ای
+می‌بیند، و برای عوض کردنشان deploy دوباره لازم است. اسکریپت `start` که دقیقاً dev server یک قالب باشد
+(مثل `react-scripts start` یا `vite`) وقتی `build` هم هست start حساب نمی‌شود، چون داخل container کار نمی‌کند.
+
 اما auto-detect فقط یک دستور می‌زند — برای .NET یعنی `dotnet publish`، برای Node یعنی `npm ci` و
 اجرای اسکریپت start. اگر پروژه‌تان **بیش از یک قدم** لازم دارد (مثلاً build فرانت‌اند جدا از publish
-بک‌اند)، auto-detect چیزی نیم‌ساخته تحویل می‌دهد — نه خطا، فقط یک اپ بدون CSS و بدون هیچ توضیحی در
-گزارش deploy دربارهٔ اینکه چرا. اینجا دقیقاً وقتی است که خودتان یک Dockerfile چندمرحله‌ای بنویسید.
+بک‌اند)، auto-detect چیزی نیم‌ساخته تحویل می‌دهد — نه خطا، فقط یک اپ بدون CSS. اگر `package.json`
+اسکریپت `build` داشته باشد، گزارش deploy یک هشدار دربارهٔ همین نشان می‌دهد. اینجا دقیقاً وقتی است که
+خودتان یک Dockerfile چندمرحله‌ای بنویسید.
 
 ## `$PORT`
 
@@ -200,6 +213,8 @@ Nginx سرو می‌شود — هیچ Dockerfile لازم نیست.
    باشد — `harbora doctor` را قبل از اولین deploy اجرا کنید تا مطمئن شوید.
 
 ## جمع‌بندی: قبل از اولین deploy یک اپ تازه
+
+هنوز اپی در پنل ندارید؟ `harbora launch` اپ و دیتابیسش را هم می‌سازد: [فصل ۱۵](15-launch.md). برای اپی که هست:
 
 ```bash
 harbora init      # اگر harbora.yml هنوز نیست

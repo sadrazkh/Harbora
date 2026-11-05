@@ -1,0 +1,130 @@
+namespace Harbora.Web.Infrastructure;
+
+/// <summary>
+/// A source archive a browser handed over: where it goes, and how it is written there.
+///
+/// <para>
+/// The CLI's route (<c>ApiV1Controller.DeployArchive</c>) reads a raw request body. A browser sends a
+/// form, so the two share a directory and a ceiling but not the copy. Written down here because two
+/// actions take a browser's archive — starting a launch and sending an uploaded app a new version —
+/// and both have to leave nothing half-written behind.
+/// </para>
+/// </summary>
+public static class UploadedArchive
+{
+    /// <summary>
+    /// The same ceiling <c>ApiV1Controller</c> uses for a pushed source tree.
+    ///
+    /// <para>
+    /// An action taking one needs this twice. <c>[RequestSizeLimit]</c> is the server's limit on the
+    /// body; <c>[RequestFormLimits]</c> is the form reader's limit on a multipart one, which is 128 MB
+    /// by default and knows nothing about the other. With only the first, anything between the two
+    /// ends on an error page that says nothing about size: a 500, on the in-process host.
+    /// </para>
+    /// </summary>
+    public const long MaxBytes = 512L * 1024 * 1024;
+
+    /// <summary>What the file input offers. The real test is <see cref="WhyNot"/>.</summary>
+    public const string Accept = ".zip";
+
+    private static string Directory(string workDir) => Path.Combine(workDir, "_uploads");
+
+    /// <summary>
+    /// Where a launch's archive goes: the person's own file name with a unique part.
+    ///
+    /// <para>
+    /// <c>LaunchStartRequest</c> carries only this path, and the path is all the launch has to name the
+    /// app and label the source with. <c>LaunchSource.LabelForArchive</c> strips the GUID, so the name
+    /// survives; and a flat file leaves nothing behind once the pipeline has consumed it.
+    /// </para>
+    /// </summary>
+    public static string PathForLaunch(string workDir, string? clientFileName) =>
+        Path.Combine(Directory(workDir), $"{SafeStem(clientFileName)}-{Guid.CreateVersion7():N}{Extension(clientFileName)}");
+
+    /// <summary>Where a new version of an app goes, named the way the CLI's route names one.</summary>
+    public static string PathForApp(string workDir, string appSlug, string? clientFileName) =>
+        Path.Combine(Directory(workDir), $"{appSlug}-{Guid.CreateVersion7():N}{Extension(clientFileName)}");
+
+    /// <summary>Copies it to disk. Never leaves a half-written archive for the pipeline to trip over.</summary>
+    public static async Task SaveAsync(IFormFile file, string path, CancellationToken ct)
+    {
+        System.IO.Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        try
+        {
+            await using var target = File.Create(path);
+            await file.CopyToAsync(target, ct);
+        }
+        catch (Exception)
+        {
+            Delete(path);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Why a browser's file will not do, or null when it is a zip. The first two bytes, the same way the
+    /// extractor tells the formats apart. Refusing here says so on the form; letting a Word document
+    /// through says so later, as a failed build.
+    ///
+    /// <para>
+    /// A zip and nothing else, though the extractor reads a gzipped tar too. <c>node_modules</c> and
+    /// <c>.env</c> are left out of a zip as it is extracted, and that is what the upload form promises.
+    /// A tar is the CLI's format, and it arrives already filtered by the CLI's packer, on a route of
+    /// its own; from a browser it would keep them.
+    /// </para>
+    /// </summary>
+    public static string? WhyNot(IFormFile file, bool isFa)
+    {
+        using var stream = file.OpenReadStream();
+        Span<byte> head = stackalloc byte[2];
+        var read = stream.ReadAtLeast(head, 2, throwOnEndOfStream: false);
+
+        if (read == 2 && head[0] == 0x50 && head[1] == 0x4B) return null;
+
+        return read == 2 && head[0] == 0x1F && head[1] == 0x8B
+            ? isFa
+                ? "از مرورگر فقط zip می‌گیرم. پوشه‌ی پروژه را zip کن و همان را بفرست."
+                : "A browser can only send me a zip. Zip your project folder and send that."
+            : isFa
+                ? "این فایل zip نیست. پوشه‌ی پروژه را zip کن و همان را بفرست."
+                : "That file isn't a zip. Zip your project folder and send that.";
+    }
+
+    /// <summary>Removes an archive nothing is going to read.</summary>
+    public static void Delete(string path)
+    {
+        try
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+        catch (IOException) { /* best effort */ }
+        catch (UnauthorizedAccessException) { /* best effort */ }
+    }
+
+    /// <summary>
+    /// A file name as a browser reports it is whatever the sender says, separators and all, so only
+    /// letters, digits and a few marks survive. Letters of any script, because a Persian project name
+    /// is as good a name as any.
+    /// </summary>
+    private static string SafeStem(string? clientFileName)
+    {
+        var extension = Extension(clientFileName);
+        var name = clientFileName ?? "";
+        name = name[(name.LastIndexOfAny(['/', '\\']) + 1)..];
+        if (name.EndsWith(extension, StringComparison.OrdinalIgnoreCase)) name = name[..^extension.Length];
+
+        var safe = new string(name.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' or '.' ? c : '-').ToArray())
+            .Trim('-', '.', '_');
+        if (safe.Length > 80) safe = safe[..80].Trim('-', '.', '_');
+
+        return safe.Length == 0 ? "source" : safe;
+    }
+
+    private static string Extension(string? clientFileName)
+    {
+        var name = clientFileName ?? "";
+        if (name.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase)) return ".tar.gz";
+        if (name.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase)) return ".tgz";
+        return ".zip";
+    }
+}

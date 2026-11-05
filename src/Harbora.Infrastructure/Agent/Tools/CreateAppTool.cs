@@ -327,7 +327,8 @@ public sealed partial class CreateAppTool(
     }
 
     /// <summary>The slug rule DNS needs, the same one projects use: lowercase Latin letters, digits and
-    /// single hyphens. The app service's own rule would let Persian letters through into a container name.</summary>
+    /// single hyphens. Unlike the app service's own rule it has no fallback, because an agent asked to name
+    /// something can be told to choose again rather than given a plain <c>app</c>.</summary>
     internal static string Slugify(string value)
     {
         var slug = NonSlug().Replace(value.Trim().ToLowerInvariant(), "-").Trim('-');

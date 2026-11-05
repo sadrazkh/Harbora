@@ -291,7 +291,9 @@ public sealed partial class AppsController(
     /// push notification came from the provider, and this page is one an operator has every reason
     /// to be showing somebody while they set a repository up.
     /// </param>
-    public async Task<IActionResult> Details(Guid id, [FromQuery] bool revealSecret, CancellationToken ct)
+    public async Task<IActionResult> Details(
+        Guid id, [FromQuery] bool revealSecret,
+        [FromServices] Harbora.Infrastructure.Verification.IAppVerifier verifier, CancellationToken ct)
     {
         ViewBag.RevealWebhookSecret = revealSecret;
 
@@ -612,7 +614,8 @@ public sealed partial class AppsController(
             UptimeCheck = uptimeCheck,
             RecentUptimeResults = recentUptimeResults,
             BackupVolumes = backupVolumes,
-            HasBackupRepository = hasBackupRepository
+            HasBackupRepository = hasBackupRepository,
+            Verification = await verifier.GetLatestAsync(app.Id, ct)
         });
     }
 
@@ -1074,6 +1077,35 @@ public sealed partial class AppsController(
         TempData["Message"] = IsFa
             ? "دستور راه‌اندازی ذخیره شد. با استقرار بعدی اعمال می‌شود."
             : "Start command saved. It applies on the next deployment.";
+
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    /// <summary>
+    /// What runs once before each new version takes traffic, usually a migration. It could only be set
+    /// when the app was created, which left a launched app with an empty database nothing to do about
+    /// it, while its own check told it to set one. Written to the row and nothing more, like
+    /// <see cref="SetStartCommand"/>: the next deployment reads it.
+    /// </summary>
+    [HttpPost("/apps/{id:guid}/release-command")]
+    [ValidateAntiForgeryToken]
+    [Authorize(Policy = Capabilities.AppsEnv)]
+    public async Task<IActionResult> SetReleaseCommand(Guid id, string? releaseCommand, CancellationToken ct)
+    {
+        if (!await access.CanTouchAppAsync(id, Capabilities.AppsEnv, ct)) return Forbid();
+
+        var app = await db.Apps.FirstOrDefaultAsync(a => a.Id == id && a.WorkspaceId == WorkspaceId, ct);
+        if (app is null) return NotFound();
+
+        app.ReleaseCommand = string.IsNullOrWhiteSpace(releaseCommand) ? null : releaseCommand.Trim();
+        await db.SaveChangesAsync(ct);
+
+        await audit.LogAsync("app.release-command-set", "app",
+            $"{app.Name}={app.ReleaseCommand ?? "(cleared)"}", ClientIp, workspaceId: WorkspaceId, ct: ct);
+
+        TempData["Message"] = IsFa
+            ? "دستور پیش از انتشار ذخیره شد. با استقرار بعدی اجرا می‌شود."
+            : "Release task saved. It runs on the next deployment.";
 
         return RedirectToAction(nameof(Details), new { id });
     }

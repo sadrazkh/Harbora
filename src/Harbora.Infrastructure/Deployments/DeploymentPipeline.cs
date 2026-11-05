@@ -50,6 +50,9 @@ public sealed class DeploymentPipeline(
     // AppOperationsService): a fixture that has never heard of log retention should not have to learn
     // about it just to keep constructing this.
     ILogIngestionEngine? logIngestion,
+    // Only to say truthfully why a wait for a database is not getting anywhere; see
+    // WaitForServicesBesideItAsync.
+    IOptions<Jobs.JobQueueOptions> jobQueue,
     ILogger<DeploymentPipeline> logger)
 {
     private readonly HarboraRuntimeOptions _opt = options.Value;
@@ -394,6 +397,11 @@ public sealed class DeploymentPipeline(
                 return;
             }
 
+            // Here rather than at the container itself, because the first thing that needs the database
+            // can be the release task below, or a Compose stack, and a migration run against a database
+            // that is still starting fails the deployment for nothing.
+            await WaitForServicesBesideItAsync(app, Log, ct);
+
             // Zero-downtime cutover (ADR-007): every replica gets a versioned name and starts
             // ALONGSIDE whatever is currently serving. We only retire the old container(s) AFTER
             // every new replica is healthy and traffic has been switched — so a failed deploy never
@@ -434,6 +442,12 @@ public sealed class DeploymentPipeline(
             }
 
             var env = BuildEnv(app, server.IsLocal);
+            // The port traffic is sent to, told to the app. The tutorial and `harbora doctor` have always
+            // said this happens, and only the Node and Python templates did it, so an app with its own
+            // Dockerfile reading $PORT got nothing. An app's own PORT wins: this is a default.
+            if (ServicePlan.HasPublicTraffic(app.Kind))
+                env.TryAdd("PORT", app.ContainerPort.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
             var labels = new Dictionary<string, string>
             {
                 ["harbora.managed"] = "true",
@@ -1114,10 +1128,15 @@ public sealed class DeploymentPipeline(
             {
                 image = $"{_opt.ImagePrefix}/{app.Slug}-{service.Name}:build-{deployment.Number}";
                 var dockerfile = service.Dockerfile ?? "Dockerfile";
+                var serviceBuildArgs = BuildArgsFor(app);
                 if (!File.Exists(Path.Combine(service.Build, dockerfile)))
                 {
                     var serviceKind = service.IsWeb ? ServiceKind.Web : ServiceKind.Worker;
-                    var pack = Buildpacks.Detect(service.Build, service.Port ?? app.ContainerPort, serviceKind);
+                    var servicePublicArgs = PublicBuildArgsFor(app);
+                    var pack = Buildpacks.Detect(
+                        service.Build, service.Port ?? app.ContainerPort, serviceKind,
+                        service.Command.Count > 0 ? string.Join(' ', service.Command) : null,
+                        servicePublicArgs.Keys, serviceBuildArgs.Keys);
                     if (pack is null)
                     {
                         var hint = Buildpacks.DetectionHint(service.Build);
@@ -1129,6 +1148,9 @@ public sealed class DeploymentPipeline(
                     await File.WriteAllTextAsync(Path.Combine(service.Build, dockerfile), pack.Value.Dockerfile, ct);
                     var serviceEntrySuffix = pack.Value.Entry is { } serviceEntry ? $" (entry: {serviceEntry})" : "";
                     await log(LogStream.System, $"Service '{service.Name}': detected {pack.Value.Stack}{serviceEntrySuffix}.");
+                    if (pack.Value.Warning is { } serviceWarning)
+                        await log(LogStream.System, $"⚠ Service '{service.Name}': {serviceWarning}");
+                    serviceBuildArgs = GeneratedBuildArgs(pack.Value, servicePublicArgs, serviceBuildArgs);
                 }
 
                 await log(LogStream.System, $"Building {service.Name} → {image} …");
@@ -1143,7 +1165,7 @@ public sealed class DeploymentPipeline(
                 // ForceRebuild still applies, though: "no cache" from the deploy UI means no cache
                 // anywhere this deployment builds, not just on the single-container path.
                 image = await docker.BuildImageAsync(
-                    new DockerBuildRequest(service.Build, dockerfile, image, BuildArgsFor(app),
+                    new DockerBuildRequest(service.Build, dockerfile, image, serviceBuildArgs,
                         CacheFrom: null, NoCache: deployment.ForceRebuild),
                     buildLog, ct);
             }
@@ -1436,6 +1458,7 @@ public sealed class DeploymentPipeline(
             throw new InvalidOperationException(rootError);
 
         string dockerfile;
+        var buildArgs = BuildArgsFor(app);
         if (forceStatic)
         {
             dockerfile = "Dockerfile.harbora";
@@ -1456,7 +1479,8 @@ public sealed class DeploymentPipeline(
             }
             else if (!File.Exists(Path.Combine(contextPath, dockerfile)))
             {
-                var pack = Buildpacks.Detect(contextPath, app.ContainerPort, app.Kind);
+                var publicArgs = PublicBuildArgsFor(app);
+                var pack = Buildpacks.Detect(contextPath, app.ContainerPort, app.Kind, app.StartCommand, publicArgs.Keys, buildArgs.Keys);
                 if (pack is null)
                 {
                     var hint = Buildpacks.DetectionHint(contextPath);
@@ -1469,6 +1493,8 @@ public sealed class DeploymentPipeline(
                 await File.WriteAllTextAsync(Path.Combine(contextPath, dockerfile), pack.Value.Dockerfile, ct);
                 var entrySuffix = pack.Value.Entry is { } entry ? $" (entry: {entry})" : "";
                 await log(LogStream.System, $"No Dockerfile — auto-detected {pack.Value.Stack}{entrySuffix}; using a generated build.");
+                if (pack.Value.Warning is { } warning) await log(LogStream.System, $"⚠ {warning}");
+                buildArgs = GeneratedBuildArgs(pack.Value, publicArgs, buildArgs);
             }
         }
 
@@ -1481,7 +1507,7 @@ public sealed class DeploymentPipeline(
         await log(LogStream.System, $"Build cache: {cachePlan.Reason}");
 
         await log(LogStream.System, $"Building image {imageTag} …");
-        var request = new DockerBuildRequest(contextPath, dockerfile, imageTag, BuildArgsFor(app),
+        var request = new DockerBuildRequest(contextPath, dockerfile, imageTag, buildArgs,
             cachePlan.CacheFrom, NoCache: deployment.ForceRebuild);
 
         try
@@ -1517,6 +1543,28 @@ public sealed class DeploymentPipeline(
         app.EnvironmentVariables
             .Where(e => e.AvailableAtBuild)
             .ToDictionary(e => e.Key, e => e.IsSecret ? SafeUnprotect(e.Value) : e.Value);
+
+    /// <summary>
+    /// The variables the Node and frontend images read at build with nobody having ticked anything: see
+    /// <see cref="Harbora.Shared.Inspection.PublicBuildVariables"/>. Wherever they came from, a config
+    /// group included, which <see cref="BuildArgsFor"/> cannot see, because a client bundle is written
+    /// at build and the running container is no use to it. A secret with a public name is decrypted
+    /// like any other: the prefix is the person saying it is public, and it could not work otherwise.
+    /// </summary>
+    private Dictionary<string, string> PublicBuildArgsFor(App app) =>
+        Harbora.Infrastructure.Apps.EffectiveEnvironmentBuilder.Compute(app, protector, _storageOpt.CustomerEndpoint)
+            .Where(e => Harbora.Shared.Inspection.PublicBuildVariables.IsPublic(e.Key))
+            .ToDictionary(e => e.Key, e => e.IsSecret ? SafeUnprotect(e.Value) : e.Value);
+
+    /// <summary>
+    /// What a generated image is handed: the names it declared, and no others. A hand-written
+    /// Dockerfile declares its own, and keeps getting exactly <see cref="BuildArgsFor"/>.
+    /// </summary>
+    private static Dictionary<string, string> GeneratedBuildArgs(
+        BuildpackResult pack, Dictionary<string, string> publicArgs, Dictionary<string, string> markedArgs) =>
+        (pack.BuildArgNames ?? [])
+            .Where(name => publicArgs.ContainsKey(name) || markedArgs.ContainsKey(name))
+            .ToDictionary(name => name, name => publicArgs.TryGetValue(name, out var value) ? value : markedArgs[name]);
 
     /// <summary>
     /// The env-assembly point (Sub-project 9, 2026-08-20 platform-options plan; buckets added by F5,
@@ -1882,6 +1930,90 @@ public sealed class DeploymentPipeline(
             return await FailedAsync(docker, lateCrash, current, ct);
 
         return await FailedAsync(docker, HealthFailure.NoHealthyResponse, current, ct, url);
+    }
+
+    /// <summary>
+    /// Holds this deployment back while a database in the app's environment is still being set up. The
+    /// queue is first-in-first-out, which only ever promised that a provision STARTS before the
+    /// deployment queued after it. Once the queue became concurrent that stopped meaning it had
+    /// finished, and an app started beside a database that was not there yet dies on its first query.
+    ///
+    /// <para>
+    /// Nothing provisioning is no wait and no line, which is every ordinary deployment. And this never
+    /// fails anything: a database that ends Failed, or the bound running out, is a line in the log and
+    /// the deployment carrying on, because the app might not need that database, and refusing here would
+    /// be a new way for a deployment to fail that it did not have before.
+    /// </para>
+    /// </summary>
+    private async Task WaitForServicesBesideItAsync(App app, Func<LogStream, string, Task> log, CancellationToken ct)
+    {
+        // Sessionless, so pinned by hand. AsNoTracking because this is watching a row another job is
+        // writing: a tracked read would keep handing back what this context first saw.
+        IQueryable<Domain.Services.ManagedService> Beside() => db.ManagedServices.IgnoreQueryFilters().AsNoTracking()
+            .Where(s => s.WorkspaceId == app.WorkspaceId && s.EnvironmentId == app.EnvironmentId);
+
+        // A replica still seeding is left out. Copying a large database can outlast the whole bound, and it
+        // is only ever a second, read-only address: the app boots on its primary, and gets REPLICA_URL on the
+        // deployment after the replica is ready, exactly as it did before this wait existed.
+        var awaited = await Beside()
+            .Where(s => s.Status == ServiceStatus.Provisioning && s.PrimaryManagedServiceId == null)
+            .Select(s => new { s.Id, s.Name })
+            .ToListAsync(ct);
+        if (awaited.Count == 0) return;
+
+        var ids = awaited.Select(s => s.Id).ToList();
+        var minutes = _opt.ServiceWait.TotalMinutes.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
+
+        await log(LogStream.System,
+            $"Waiting for {Names(awaited.Select(s => s.Name))} to finish being set up before starting this app, " +
+            $"for up to {minutes} minutes.{await NoFreeWorkerNoteAsync(ids, ct)}");
+
+        var giveUpAt = clock.UtcNow + _opt.ServiceWait;
+        do
+        {
+            await Task.Delay(_opt.ServiceWaitPollInterval, ct);
+        }
+        while (clock.UtcNow < giveUpAt
+               && await Beside().AnyAsync(s => ids.Contains(s.Id) && s.Status == ServiceStatus.Provisioning, ct));
+
+        var settled = await Beside().Where(s => ids.Contains(s.Id)).Select(s => new { s.Id, s.Name, s.Status }).ToListAsync(ct);
+
+        var said = new List<string>();
+        if (settled.Where(s => s.Status == ServiceStatus.Running).Select(s => s.Name).ToList() is { Count: > 0 } ready)
+            said.Add($"{Names(ready)} ready.");
+        if (settled.Where(s => s.Status is ServiceStatus.Failed or ServiceStatus.Stopped).ToList() is { Count: > 0 } ended)
+            said.Add($"⚠ {string.Join(", ", ended.Select(s => $"'{s.Name}' ended {s.Status}"))}; starting this app anyway, because it might not need it.");
+        if (settled.Where(s => s.Status == ServiceStatus.Provisioning).Select(s => s.Id).ToList() is { Count: > 0 } unfinished)
+            said.Add($"⚠ {Names(settled.Where(s => unfinished.Contains(s.Id)).Select(s => s.Name))} still being set up after {minutes} minutes; " +
+                     $"starting this app anyway.{await NoFreeWorkerNoteAsync(unfinished, ct)}");
+        if (awaited.Where(s => settled.All(found => found.Id != s.Id)).Select(s => s.Name).ToList() is { Count: > 0 } gone)
+            said.Add($"{Names(gone)} no longer there.");
+
+        await log(LogStream.System, string.Join(" ", said));
+
+        static string Names(IEnumerable<string> names) => string.Join(", ", names.Select(n => $"'{n}'"));
+    }
+
+    /// <summary>
+    /// What to add when a provision is queued and has nothing to run it. Worth saying because this
+    /// deployment is one of the jobs in the way, and with <c>Jobs:MaxConcurrency</c> at 1 it is the only
+    /// one: otherwise ten minutes of waiting reads as a database taking ten minutes. Counted from the job
+    /// table, which is the only place a slot can be seen from outside the worker, and asked only when
+    /// something is already being waited for.
+    /// </summary>
+    private async Task<string> NoFreeWorkerNoteAsync(IReadOnlyCollection<Guid> serviceIds, CancellationToken ct)
+    {
+        var jobs = db.Jobs.IgnoreQueryFilters().AsNoTracking();
+
+        var queued = await jobs.AnyAsync(j => j.Kind == Domain.Jobs.JobKind.ServiceProvision
+                                              && serviceIds.Contains(j.TargetId)
+                                              && j.Status == Domain.Jobs.JobStatus.Pending, ct);
+        if (!queued) return "";
+
+        var running = await jobs.CountAsync(j => j.Status == Domain.Jobs.JobStatus.Running, ct);
+        return running >= jobQueue.Value.EffectiveMaxConcurrency
+            ? " Its setup job is still queued and no worker is free, because this deployment and others hold them all, so it may not start until one of them finishes."
+            : "";
     }
 
     /// <summary>

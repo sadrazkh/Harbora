@@ -111,7 +111,13 @@ public class EffectiveEnvironmentBuilderParityTests
         var merged = EffectiveEnvironmentBuilder.Compute(app, h.Protector, h.StorageOptions.CustomerEndpoint);
         var pulled = merged.ToDictionary(e => e.Key, e => e.IsSecret ? h.Protector.Unprotect(e.Value) : e.Value);
 
-        pulled.Should().BeEquivalentTo(containerEnv,
+        // PORT is the one thing added past the merge, and on purpose: a pulled file is for running on a
+        // laptop, where the developer's own port is the right one and the container's is not.
+        containerEnv["PORT"].Should().Be(h.App.ContainerPort.ToString());
+        pulled.Should().NotContainKey("PORT");
+        var fromConfiguration = containerEnv.Where(e => e.Key != "PORT").ToDictionary(e => e.Key, e => e.Value);
+
+        pulled.Should().BeEquivalentTo(fromConfiguration,
             "harbora env pull must hand back exactly what this deployment actually injected — not a " +
             "second implementation of the same idea that happens to look similar");
 

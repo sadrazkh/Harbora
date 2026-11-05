@@ -273,6 +273,13 @@ public sealed class TraefikProxyEngine(
                           "validation and would not have served:");
             foreach (var note in excluded) sb.AppendLine($"#   {note}");
         }
+
+        // Traefik refuses a file whose `http:` holds nothing ("http cannot be a standalone element"), and
+        // it refuses it for the whole directory, so every other file there goes with it. On a fresh install
+        // that is the node channel's router, whose host then answers 404 until the first app is routed. A
+        // file of comments is a valid file with nothing in it.
+        if (routes.Count == 0) return sb.ToString();
+
         sb.AppendLine("http:");
         sb.AppendLine("  routers:");
         foreach (var r in routes.OrderByDescending(r => r.Priority))

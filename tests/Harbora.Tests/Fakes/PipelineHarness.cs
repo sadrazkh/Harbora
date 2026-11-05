@@ -60,6 +60,15 @@ public sealed class PipelineHarness : IDisposable
 
     private readonly string _workDir;
 
+    private readonly DbContextOptions<HarboraDbContext> _dbOptions =
+        new DbContextOptionsBuilder<HarboraDbContext>().UseInMemoryDatabase("pipeline-" + Guid.NewGuid()).Options;
+
+    /// <summary>The same store through another context: what another job does while the pipeline is running.</summary>
+    public HarboraDbContext OpenAnotherContext() => new(_dbOptions);
+
+    /// <summary>How many jobs the install is said to run at once, which only the pipeline's wait for a database reads.</summary>
+    public Harbora.Infrastructure.Jobs.JobQueueOptions JobQueue { get; } = new() { MaxConcurrency = 4 };
+
     public PipelineHarness(bool localServer = true, AppSourceType sourceType = AppSourceType.PrebuiltImage)
     {
         _workDir = Path.Combine(Path.GetTempPath(), "harbora-tests", Guid.NewGuid().ToString("N"));
@@ -77,8 +86,7 @@ public sealed class PipelineHarness : IDisposable
             HealthHttpAttempts = 3
         };
 
-        Db = new HarboraDbContext(new DbContextOptionsBuilder<HarboraDbContext>()
-            .UseInMemoryDatabase("pipeline-" + Guid.NewGuid()).Options);
+        Db = new HarboraDbContext(_dbOptions);
         // Reads the platform's stored routes, unfiltered, exactly as the real engine does — a test
         // asserting on Applications is then looking at the config that would have been published.
         Proxy = new RecordingProxyEngine(() => Db.Routes.IgnoreQueryFilters().AsNoTracking().ToList());
@@ -386,6 +394,7 @@ public sealed class PipelineHarness : IDisposable
         // retention, and RetireOldContainersAsync's own flush is guarded to skip cleanly when this is
         // null.
         LogIngestion,
+        Microsoft.Extensions.Options.Options.Create(JobQueue),
         NullLogger<DeploymentPipeline>.Instance);
 
     /// <summary>See <see cref="BuildPipeline"/>'s own remark on this parameter.</summary>

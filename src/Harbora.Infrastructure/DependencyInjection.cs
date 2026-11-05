@@ -480,6 +480,14 @@ public static class DependencyInjection
             Functions.RabbitMqBrokerConnectionFactory>();
         services.AddHostedService<Functions.QueueFunctionConsumerHost>();
 
+        // Launch: "here is my code, make it work". Only reading the source is a job; everything after
+        // the confirm screen is moved by the ticker, because a job waiting on a provision would occupy
+        // the worker that provision needs. IAppVerifier is deliberately not a constructor dependency.
+        services.AddSingleton<Launch.ILaunchSourceReader, Launch.SourceInspectorReader>();
+        services.AddScoped<Launch.ILaunchService, Launch.LaunchService>();
+        services.AddScoped<IJobHandler, Launch.LaunchInspectJobHandler>();
+        services.AddHostedService<Launch.LaunchTicker>();
+
         // Tenancy quotas + node capacity (PaaS).
         services.AddScoped<IQuotaService, Tenancy.QuotaService>();
         services.AddScoped<INodeCapacityService, Tenancy.NodeCapacityService>();
@@ -563,6 +571,12 @@ public static class DependencyInjection
         // see UptimeCheck's own doc for why that vantage point is the panel and not each node.
         services.AddScoped<Application.Abstractions.IUptimeProbe, Monitoring.HttpUptimeProbe>();
         services.AddHostedService<Monitoring.UptimeChecker>();
+
+        // Round eight: "does this app really work", the question a green deployment does not answer.
+        // Scoped, because it shares the request's or the launch tick's database context.
+        services.AddScoped<Verification.IAppVerifier, Verification.AppVerifier>();
+        services.AddHttpClient(Verification.AppVerifier.DirectClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
 
         // N5 (2026-08-16 notification-system spec, "noise control"): per-user preferences, the digest
         // job and the weekly report. The service reads/writes NotificationPreference directly; the

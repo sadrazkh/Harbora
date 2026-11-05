@@ -8,6 +8,7 @@ using Harbora.Domain.Common;
 using Harbora.Domain.Deployments;
 using Harbora.Web.Controllers.Api;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace Harbora.Tests;
@@ -99,6 +100,32 @@ public class ApiV1ContractHttpTests(HarboraHttpFixture fixture)
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         (await response.DocumentedErrorAsync())
             .Should().Be("Send the project as a gzipped tar in the request body.");
+    }
+
+    [Fact]
+    public async Task A_push_during_a_build_says_it_was_not_used_and_leaves_no_file()
+    {
+        var (token, slug, appId) = GivenOwnerWithApp("push-during-build");
+        var inFlight = Guid.CreateVersion7();
+        Panel.Seed(db => db.Deployments.Add(new Deployment
+        {
+            Id = inFlight, AppId = appId, WorkspaceId = fixture.WorkspaceId, Number = 1, Status = DeploymentStatus.Building,
+            Trigger = DeploymentTrigger.Cli
+        }));
+        Panel.Deployments.CoalesceOnto = inFlight;
+        var client = Panel.BearerClientFrom("203.0.113.26", token);
+
+        var body = new ByteArrayContent([0x1F, 0x8B, 0x08, 0x00]);
+        body.Headers.ContentType = new MediaTypeHeaderValue("application/gzip");
+        HttpResponseMessage response;
+        try { response = await client.PostAsync($"/api/v1/apps/{slug}/deploy/archive", body); }
+        finally { Panel.Deployments.CoalesceOnto = null; }
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await response.DocumentedErrorAsync()).Should().Contain("was not used");
+        var workDir = Panel.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<Harbora.Infrastructure.Deployments.HarboraRuntimeOptions>>().Value.WorkDir;
+        var uploads = Path.Combine(workDir, "_uploads");
+        (Directory.Exists(uploads) ? Directory.GetFiles(uploads, $"{slug}-*") : []).Should().BeEmpty();
     }
 
     [Fact]

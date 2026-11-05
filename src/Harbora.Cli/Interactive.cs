@@ -104,7 +104,7 @@ public static class Interactive
         var path = Path.Combine(dir, ProjectConfig.DefaultFileName);
         var body =
             $"""
-            # Written by `harbora deploy`. Full schema: docs/cli-deploy.md
+            # Written by the harbora CLI. Full schema: docs/cli-deploy.md
             app: {slug}
             {(string.IsNullOrWhiteSpace(server) ? "# server: https://panel.example.com" : $"server: {server}")}
 

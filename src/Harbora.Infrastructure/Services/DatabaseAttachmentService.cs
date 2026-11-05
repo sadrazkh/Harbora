@@ -36,8 +36,11 @@ public interface IDatabaseAttachmentService
     /// </summary>
     /// <param name="alias">Null derives one from the database's name; a taken alias gets a suffix.</param>
     /// <param name="databaseId">Null uses the instance's own default logical database, when it has one.</param>
+    /// <param name="envAliases">Other names the app reads this service's values under, computed with the
+    /// rest of the attach variables. Null is the ordinary case.</param>
     Task<ServiceOutcome<DatabaseAttachResult>> AttachAsync(
-        Guid serviceId, Guid appId, string? alias, Guid? databaseId, string? ipAddress, CancellationToken ct);
+        Guid serviceId, Guid appId, string? alias, Guid? databaseId, string? ipAddress, CancellationToken ct,
+        IReadOnlyList<AttachEnvAlias>? envAliases = null);
 
     /// <summary>The refusals <see cref="DetachAsync"/> would give right now; changes nothing.</summary>
     Task<IReadOnlyList<ServiceRefusal>> ValidateDetachAsync(
@@ -62,7 +65,8 @@ public sealed class DatabaseAttachmentService(
         (await PlanAttachAsync(serviceId, appId, alias, databaseId, ct)).Refusals;
 
     public async Task<ServiceOutcome<DatabaseAttachResult>> AttachAsync(
-        Guid serviceId, Guid appId, string? alias, Guid? databaseId, string? ipAddress, CancellationToken ct)
+        Guid serviceId, Guid appId, string? alias, Guid? databaseId, string? ipAddress, CancellationToken ct,
+        IReadOnlyList<AttachEnvAlias>? envAliases = null)
     {
         var (plan, refusals) = await PlanAttachAsync(serviceId, appId, alias, databaseId, ct);
         if (plan is null) return ServiceOutcome<DatabaseAttachResult>.Refused(refusals);
@@ -73,7 +77,8 @@ public sealed class DatabaseAttachmentService(
         db.AppManagedServices.Add(new AppManagedService
         {
             AppId = appId, ManagedServiceId = serviceId, ManagedServiceDatabaseId = plan.DatabaseId,
-            Alias = plan.Alias, AttachOrder = maxOrder + 1, HasUnpublishedChanges = true
+            Alias = plan.Alias, AttachOrder = maxOrder + 1, HasUnpublishedChanges = true,
+            EnvAliasesJson = ManagedServiceAttachEnv.WriteAliases(envAliases)
         });
         await db.SaveChangesAsync(ct);
         await audit.LogAsync("database.attached", "service", $"{serviceId}:{appId}", ipAddress,

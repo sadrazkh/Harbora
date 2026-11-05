@@ -30,11 +30,32 @@ public sealed record CreatedBillableResource(
     Guid? ServerId,
     long? DirectRatePerHourMinor = null);
 
+/// <summary>What creating some resources would cost, worked out without creating them.</summary>
+/// <param name="Lines">Each resource with its hourly rate, null where nobody priced it.</param>
+/// <param name="FirstHourMinor">What leaves the balance on creation; zero when <paramref name="Exempt"/>.</param>
+/// <param name="BalanceMinor">The workspace's balance, or null when it has no wallet.</param>
+/// <param name="Exempt">Billing is off, or this is the provider's own workspace: nothing is charged.</param>
+/// <param name="Refusal">Why the creation would be refused, or null when it would be paid for.</param>
+/// <param name="MoreCreditWouldHelp">True only when the refusal is a balance too small to pay. See <see cref="CreationPaymentRequiredException.MoreCreditWouldHelp"/>.</param>
+public sealed record CreationQuote(
+    IReadOnlyList<(CreatedBillableResource Resource, long? HourlyMinor)> Lines,
+    long FirstHourMinor,
+    long? BalanceMinor,
+    string Currency,
+    bool Exempt,
+    ServiceRefusal? Refusal,
+    bool MoreCreditWouldHelp = false);
+
 /// <summary>A customer-facing refusal raised before a billable resource is persisted.</summary>
-public sealed class CreationPaymentRequiredException(string reason, string reasonFa)
+/// <param name="moreCreditWouldHelp">
+/// Whether topping up is the answer. Not for a tier nobody priced, a suspended workspace, or a spend limit
+/// its owner set on purpose: sending somebody to the billing page for those sends them nowhere.
+/// </param>
+public sealed class CreationPaymentRequiredException(string reason, string reasonFa, bool moreCreditWouldHelp = false)
     : InvalidOperationException(reason)
 {
     public string ReasonFa { get; } = reasonFa;
+    public bool MoreCreditWouldHelp { get; } = moreCreditWouldHelp;
 }
 
 /// <summary>
@@ -64,9 +85,7 @@ public sealed class ResourceCreationBilling(
 
         var workspace = await db.Workspaces.IgnoreQueryFilters().AsNoTracking()
             .FirstOrDefaultAsync(w => w.Id == workspaceId, ct)
-            ?? throw new CreationPaymentRequiredException(
-                "The workspace no longer exists.",
-                "این فضای کاری دیگر وجود ندارد.");
+            ?? throw WorkspaceGone();
 
         // The provider workspace keeps the existing break-glass exemption: billing the control
         // plane out of its own ability to create a repair workload would lock the operator out.
@@ -77,83 +96,29 @@ public sealed class ResourceCreationBilling(
         }
 
         if (workspace.IsSuspended)
-            throw new CreationPaymentRequiredException(
-                "This workspace is suspended. No resource was created.",
-                "این فضای کاری معلق است؛ هیچ منبعی ساخته نشد.");
+            throw Suspended();
 
-        var keys = resources.Select(r => r.InstanceSizeKey)
-            .Where(k => !string.IsNullOrWhiteSpace(k)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        var sizes = await db.InstanceSizes.IgnoreQueryFilters().AsNoTracking()
-            .Where(s => keys.Contains(s.Key)).ToDictionaryAsync(s => s.Key, StringComparer.OrdinalIgnoreCase, ct);
-
-        // What the hosts these resources landed on charge for those tiers. Read for the same reason
-        // the hourly pass reads it: a price belongs to a (server, tier) pair, and prepaying the first
-        // hour at the global rate while every hour after it is charged the server's rate would leave
-        // a bill that does not reconcile against its own first line.
-        var serverIds = resources.Select(r => r.ServerId).OfType<Guid>().Distinct().ToList();
-        var offers = await db.ServerInstanceOffers.IgnoreQueryFilters().AsNoTracking()
-            .Where(o => serverIds.Contains(o.ServerId) && keys.Contains(o.InstanceSizeKey))
-            .ToDictionaryAsync(o => (o.ServerId, o.InstanceSizeKey), ct);
+        var rates = await RatesAsync(resources, ct);
 
         var priced = new List<(CreatedBillableResource Resource, long Rate)>(resources.Count);
         var total = 0L;
         foreach (var resource in resources)
         {
-            if (resource.Type is BilledResourceType.MailDomain or BilledResourceType.Mailbox)
-            {
-                if (resource.DirectRatePerHourMinor is not { } direct || direct < 0)
-                    throw Unpriced(resource.Name);
-                try { total = checked(total + direct); }
-                catch (OverflowException)
-                {
-                    throw new CreationPaymentRequiredException(
-                        "The first-hour price is too large to charge safely. No resource was created.",
-                        "هزینه ساعت اول بیش از حد مجاز است و با اطمینان قابل کسر نیست؛ هیچ منبعی ساخته نشد.");
-                }
-                priced.Add((resource, direct));
-                continue;
-            }
-
-            if (resource.Type is not (BilledResourceType.App or BilledResourceType.Service))
+            if (resource.Type is not (BilledResourceType.MailDomain or BilledResourceType.Mailbox
+                or BilledResourceType.App or BilledResourceType.Service))
                 throw new ArgumentException("This resource type cannot be prepaid.", nameof(resources));
 
-            if (string.IsNullOrWhiteSpace(resource.InstanceSizeKey)
-                || !sizes.TryGetValue(resource.InstanceSizeKey, out var size))
+            if (rates[resource] is not { } rate)
                 throw Unpriced(resource.Name);
 
-            // Resolved through the host, exactly as the hourly pass resolves it: the server's rate if
-            // it set one, otherwise the tier's. That is also what lets a provider sell a tier they
-            // priced only on one box — which the tier-only lookup used to refuse as unpriced while
-            // the meter went on charging it happily.
-            ServerInstanceOffer? offer = null;
-            if (resource.ServerId is { } serverId)
-                offers.TryGetValue((serverId, size.Key), out offer);
-
-            if (ServerRates.ForWorkload(size, offer, BilledRunState.Running) is not { } rate || rate < 0)
-                throw Unpriced(resource.Name);
-
-            try { total = checked(total + rate); }
-            catch (OverflowException)
-            {
-                throw new CreationPaymentRequiredException(
-                    "The first-hour price is too large to charge safely. No resource was created.",
-                    "هزینه ساعت اول بیش از حد مجاز است و با اطمینان قابل کسر نیست؛ هیچ منبعی ساخته نشد.");
-            }
+            total = AddToTotal(total, rate);
             priced.Add((resource, rate));
         }
 
         var wallet = await db.Wallets.IgnoreQueryFilters()
             .FirstOrDefaultAsync(w => w.WorkspaceId == workspaceId, ct);
         EnsureAffordable(wallet, total, options.Value.CurrencyOrDefault);
-
-        var budget = budgets ?? new WorkspaceBudgetService(db);
-        if (!await budget.CanSpendAsync(workspaceId, total, clock.UtcNow, ct))
-        {
-            var state = await budget.GetAsync(workspaceId, clock.UtcNow, ct);
-            throw new CreationPaymentRequiredException(
-                $"This would exceed the workspace monthly spend limit of {Money(state.SpendLimitMinor!.Value)} {Currency}. No resource was created.",
-                $"این ساخت از سقف هزینه ماهانهٔ {Money(state.SpendLimitMinor!.Value)} {Currency} عبور می‌کند؛ هیچ منبعی ساخته نشد.");
-        }
+        await EnsureWithinBudgetAsync(workspaceId, total, ct);
 
         var hour = TopOfHour(clock.UtcNow);
         foreach (var (resource, rate) in priced.Where(x => x.Rate > 0))
@@ -194,6 +159,138 @@ public sealed class ResourceCreationBilling(
         }
     }
 
+    /// <summary>
+    /// What <see cref="SaveAsync"/> would do with these resources, saying instead of doing: the rate it
+    /// would charge each, the total it would take, and the refusal it would give. Read through the same
+    /// rate resolution and the same gates rather than a second copy of them, because a quote that can
+    /// disagree with the charge is a bill that surprises somebody. Changes nothing.
+    /// </summary>
+    public async Task<CreationQuote> QuoteAsync(
+        Guid workspaceId, IReadOnlyCollection<CreatedBillableResource> resources, CancellationToken ct)
+    {
+        var rates = await RatesAsync(resources, ct);
+        var lines = resources.Select(r => (Resource: r, HourlyMinor: rates[r])).ToList();
+        var wallet = await db.Wallets.IgnoreQueryFilters().AsNoTracking()
+            .FirstOrDefaultAsync(w => w.WorkspaceId == workspaceId, ct);
+        var balance = wallet?.BalanceMinor;
+        var currency = wallet?.Currency ?? options.Value.CurrencyOrDefault;
+
+        // In SaveAsync's own order, so the refusal named here is the one it would give.
+        if (resources.Count == 0 || !options.Value.Enabled)
+            return new CreationQuote(lines, 0, balance, currency, Exempt: true, null);
+
+        var workspace = await db.Workspaces.IgnoreQueryFilters().AsNoTracking()
+            .FirstOrDefaultAsync(w => w.Id == workspaceId, ct);
+        if (workspace is { IsDefault: true })
+            return new CreationQuote(lines, 0, balance, currency, Exempt: true, null);
+
+        var total = 0L;
+        try
+        {
+            if (workspace is null) throw WorkspaceGone();
+            if (workspace.IsSuspended) throw Suspended();
+
+            foreach (var line in lines)
+            {
+                if (line.HourlyMinor is not { } rate) throw Unpriced(line.Resource.Name);
+                total = AddToTotal(total, rate);
+            }
+
+            EnsureAffordable(wallet, total, options.Value.CurrencyOrDefault);
+            await EnsureWithinBudgetAsync(workspaceId, total, ct);
+            return new CreationQuote(lines, total, balance, currency, Exempt: false, null);
+        }
+        catch (CreationPaymentRequiredException ex)
+        {
+            return new CreationQuote(lines, total, balance, currency, Exempt: false,
+                new ServiceRefusal(ex.Message, ex.ReasonFa), ex.MoreCreditWouldHelp);
+        }
+    }
+
+    /// <summary>
+    /// What one running hour of each resource costs, null where nobody priced it. The one resolution
+    /// of a first-hour rate: <see cref="SaveAsync"/> charges from this and <see cref="QuoteAsync"/>
+    /// reports from it.
+    /// </summary>
+    private async Task<Dictionary<CreatedBillableResource, long?>> RatesAsync(
+        IReadOnlyCollection<CreatedBillableResource> resources, CancellationToken ct)
+    {
+        var keys = resources.Select(r => r.InstanceSizeKey)
+            .Where(k => !string.IsNullOrWhiteSpace(k)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var sizes = await db.InstanceSizes.IgnoreQueryFilters().AsNoTracking()
+            .Where(s => keys.Contains(s.Key)).ToDictionaryAsync(s => s.Key, StringComparer.OrdinalIgnoreCase, ct);
+
+        // What the hosts these resources landed on charge for those tiers. Read for the same reason
+        // the hourly pass reads it: a price belongs to a (server, tier) pair, and prepaying the first
+        // hour at the global rate while every hour after it is charged the server's rate would leave
+        // a bill that does not reconcile against its own first line.
+        var serverIds = resources.Select(r => r.ServerId).OfType<Guid>().Distinct().ToList();
+        var offers = await db.ServerInstanceOffers.IgnoreQueryFilters().AsNoTracking()
+            .Where(o => serverIds.Contains(o.ServerId) && keys.Contains(o.InstanceSizeKey))
+            .ToDictionaryAsync(o => (o.ServerId, o.InstanceSizeKey), ct);
+
+        var rates = new Dictionary<CreatedBillableResource, long?>(resources.Count);
+        foreach (var resource in resources)
+        {
+            if (resource.Type is BilledResourceType.MailDomain or BilledResourceType.Mailbox)
+            {
+                rates[resource] = resource.DirectRatePerHourMinor is { } direct && direct >= 0 ? direct : null;
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(resource.InstanceSizeKey)
+                || !sizes.TryGetValue(resource.InstanceSizeKey, out var size))
+            {
+                rates[resource] = null;
+                continue;
+            }
+
+            // Resolved through the host, exactly as the hourly pass resolves it: the server's rate if
+            // it set one, otherwise the tier's. That is also what lets a provider sell a tier they
+            // priced only on one box — which the tier-only lookup used to refuse as unpriced while
+            // the meter went on charging it happily.
+            ServerInstanceOffer? offer = null;
+            if (resource.ServerId is { } serverId)
+                offers.TryGetValue((serverId, size.Key), out offer);
+
+            rates[resource] = ServerRates.ForWorkload(size, offer, BilledRunState.Running) is { } rate && rate >= 0
+                ? rate
+                : null;
+        }
+
+        return rates;
+    }
+
+    private static long AddToTotal(long total, long rate)
+    {
+        try { return checked(total + rate); }
+        catch (OverflowException)
+        {
+            throw new CreationPaymentRequiredException(
+                "The first-hour price is too large to charge safely. No resource was created.",
+                "هزینه ساعت اول بیش از حد مجاز است و با اطمینان قابل کسر نیست؛ هیچ منبعی ساخته نشد.");
+        }
+    }
+
+    private async Task EnsureWithinBudgetAsync(Guid workspaceId, long total, CancellationToken ct)
+    {
+        var budget = budgets ?? new WorkspaceBudgetService(db);
+        if (await budget.CanSpendAsync(workspaceId, total, clock.UtcNow, ct)) return;
+
+        var state = await budget.GetAsync(workspaceId, clock.UtcNow, ct);
+        throw new CreationPaymentRequiredException(
+            $"This would exceed the workspace monthly spend limit of {Money(state.SpendLimitMinor!.Value)} {Currency}. No resource was created.",
+            $"این ساخت از سقف هزینه ماهانهٔ {Money(state.SpendLimitMinor!.Value)} {Currency} عبور می‌کند؛ هیچ منبعی ساخته نشد.");
+    }
+
+    private static CreationPaymentRequiredException WorkspaceGone() => new(
+        "The workspace no longer exists.",
+        "این فضای کاری دیگر وجود ندارد.");
+
+    private static CreationPaymentRequiredException Suspended() => new(
+        "This workspace is suspended. No resource was created.",
+        "این فضای کاری معلق است؛ هیچ منبعی ساخته نشد.");
+
     private static CreationPaymentRequiredException Unpriced(string name) => new(
         $"'{name}' has no running hourly price. Ask the provider to price its instance size; no resource was created.",
         $"برای «{name}» قیمت ساعتیِ حالت اجرا تنظیم نشده است؛ از مدیر بخواهید پلن آن را قیمت‌گذاری کند. هیچ منبعی ساخته نشد.");
@@ -210,7 +307,8 @@ public sealed class ResourceCreationBilling(
 
         throw new CreationPaymentRequiredException(
             $"The balance is {Money(balance)} {currency}, but {Money(required)} {currency} is required for the first hour. Top up the workspace; no resource was created.",
-            $"موجودی حساب {Money(balance)} {currency} است، اما برای ساعت اول {Money(required)} {currency} لازم است. ابتدا حساب فضای کاری را شارژ کنید؛ هیچ منبعی ساخته نشد.");
+            $"موجودی حساب {Money(balance)} {currency} است، اما برای ساعت اول {Money(required)} {currency} لازم است. ابتدا حساب فضای کاری را شارژ کنید؛ هیچ منبعی ساخته نشد.",
+            moreCreditWouldHelp: true);
     }
 
     private static void Apply(Wallet wallet, long amount)

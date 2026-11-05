@@ -70,4 +70,17 @@ public class AppManagedService : BaseEntity
     /// and assembles the container's environment from the service's current credentials.
     /// </summary>
     public bool HasUnpublishedChanges { get; set; } = true;
+
+    /// <summary>
+    /// A JSON array of <see cref="AttachEnvAlias"/>: other names this app reads this service's values
+    /// under, because its own example env file spells them differently (<c>MONGO_URI</c>,
+    /// <c>DB_HOST</c>). Computed at the same moment as every other attach variable rather than copied
+    /// onto the app, so a password rotation reaches these too. Null is the ordinary case.
+    /// </summary>
+    public string? EnvAliasesJson { get; set; }
 }
+
+/// <summary>One extra name for a value an attachment already provides.</summary>
+/// <param name="Name">The variable the app reads.</param>
+/// <param name="SourceKey">The attach variable it takes its value from (<c>MONGODB_URI</c>, <c>PGHOST</c>).</param>
+public sealed record AttachEnvAlias(string Name, string SourceKey);

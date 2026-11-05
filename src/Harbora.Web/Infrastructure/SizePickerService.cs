@@ -45,6 +45,13 @@ public sealed class SizePickerService(
     {
         var plan = await PlanForAsync(workspaceId, ct);
 
+        // The provider's own workspace is never charged (ResourceCreationBilling and BillingGate both say
+        // so), so a tier with no price is not the unfinished job it is for a customer. Asking one of it
+        // anyway is what left a fresh install, with billing on by default and nothing priced yet, with
+        // nothing to choose and a launch refused for not having chosen.
+        var priceIsAGate = billing.Value.Enabled && !await db.Workspaces.IgnoreQueryFilters().AsNoTracking()
+            .Where(w => w.Id == workspaceId).Select(w => w.IsDefault).FirstOrDefaultAsync(ct);
+
         // Empty means every tier, which is what the quota check already reads it as. Split here once
         // rather than string-searching per tier, and case-insensitively because half a dozen places
         // compare these keys that way.
@@ -78,7 +85,7 @@ public sealed class SizePickerService(
         {
             var reading = capacities.FirstOrDefault(c => c.ServerId == server.Id);
 
-            var tiers = sizes.Select(size => Tier(size, server, reading, offers, allowedKeys)).ToList();
+            var tiers = sizes.Select(size => Tier(size, server, reading, offers, allowedKeys, priceIsAGate)).ToList();
 
             // Derived, never stored: a host badged "memory-optimised" in a column of its own could
             // contradict the tiers it actually offers, and nothing would report the disagreement.
@@ -147,7 +154,8 @@ public sealed class SizePickerService(
         Server server,
         NodeCapacity? reading,
         List<ServerInstanceOffer> offers,
-        HashSet<string> allowedKeys)
+        HashSet<string> allowedKeys,
+        bool priceIsAGate)
     {
         var offer = offers.FirstOrDefault(o =>
             o.ServerId == server.Id
@@ -165,7 +173,7 @@ public sealed class SizePickerService(
             size.DiskBytes,
             running,
             stopped,
-            TierUnavailable(size, offer, reading, allowedKeys, running));
+            TierUnavailable(size, offer, reading, allowedKeys, running, priceIsAGate));
     }
 
     /// <summary>
@@ -178,12 +186,13 @@ public sealed class SizePickerService(
     /// also applies would send somebody to ask about a price they were never going to be sold.
     /// </para>
     /// </summary>
-    private SizeUnavailable TierUnavailable(
+    private static SizeUnavailable TierUnavailable(
         InstanceSize size,
         ServerInstanceOffer? offer,
         NodeCapacity? reading,
         HashSet<string> allowedKeys,
-        long? runningRate)
+        long? runningRate,
+        bool priceIsAGate)
     {
         if (allowedKeys.Count > 0 && !allowedKeys.Contains(size.Key)) return SizeUnavailable.NotInPlan;
 
@@ -194,10 +203,11 @@ public sealed class SizePickerService(
         if (reading is not null && !reading.CanFit(size.MemoryBytes, size.CpuCores))
             return SizeUnavailable.NoCapacity;
 
-        // Only when billing is on. With it off, a price is not a gate anywhere else either — the
-        // creation charge is skipped entirely — and refusing every tier on a fresh install, where
-        // nothing is priced yet, would mean nobody could create anything at all.
-        if (billing.Value.Enabled && runningRate is null) return SizeUnavailable.NotPriced;
+        // Only when somebody would be charged. With billing off, or in the provider's own workspace, a
+        // price is not a gate anywhere else either — the creation charge is skipped entirely — and refusing
+        // every tier on a fresh install, where nothing is priced yet, would mean nobody could create
+        // anything at all.
+        if (priceIsAGate && runningRate is null) return SizeUnavailable.NotPriced;
 
         return SizeUnavailable.None;
     }

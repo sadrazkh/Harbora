@@ -145,14 +145,14 @@ internal sealed class ServiceFailureHarness : IDisposable
     private HarboraDbContext Read() => new(new DbContextOptionsBuilder<HarboraDbContext>()
         .UseInMemoryDatabase(_database).Options);
 
-    public ManagedServiceEngine Engine() => new(
+    public ManagedServiceEngine Engine(HarboraRuntimeOptions? runtime = null) => new(
         Db,
         new SingleEngineFactory(Docker),
         Protector,
         new NoopJobQueue(),
         new Harbora.Infrastructure.Billing.BillingGate(
             Db, Options.Create(new Harbora.Infrastructure.Billing.BillingOptions { Enabled = _billingEnabled })),
-        Options.Create(new HarboraRuntimeOptions()),
+        Options.Create(runtime ?? new HarboraRuntimeOptions()),
         Clock,
         NullLogger<ManagedServiceEngine>.Instance,
         new PassthroughRedactor(),

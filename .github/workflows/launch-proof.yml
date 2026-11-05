@@ -1,0 +1,92 @@
+name: Launch proof
+
+# A real launch, on real Docker, on a runner nobody will miss. This is the TRIGGER: the proof itself is
+# deploy/launch-proof.sh, which runs by hand on any throwaway Linux host with no GitHub involved.
+#
+# It is deliberately not part of ci.yml's `complete` gate. It builds the panel from nothing and launches
+# a dozen apps, so it takes much longer than the suite, and its job is to answer a question about one
+# ref, not to block every push.
+#
+# The answer can be read with no login: every failure is an annotation (`::error title=step N::…`) and a
+# pass ends on a `::notice`, and GET /repos/{owner}/{repo}/check-runs/{job}/annotations returns both.
+
+on:
+  push:
+    # Every push to a proof branch is a question. `on.push.paths` cannot say "any path here, these paths
+    # there", so master's filter is the `decide` job below.
+    branches: [master, 'proof/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# On a proof branch only the newest push is the question being asked. Each run has a host to itself, so
+# stopping one half-way leaves nothing behind.
+concurrency:
+  group: launch-proof-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  decide:
+    name: Does this push concern a launch?
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.paths.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: paths
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT" != "push" ] || [ "$REF_NAME" != "master" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # A first push or a rewritten history has no usable "before". Running is the honest answer:
+          # the cost of a needless run is half an hour, and of a missing one is finding out in production.
+          if ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          changed="$(git diff --name-only "$BEFORE" "$GITHUB_SHA")"
+          echo "$changed"
+          pattern='^(deploy/launch-proof\.sh|deploy/proof-fixtures/|deploy/install\.sh|deploy/docker-compose\.yml|Dockerfile$|\.github/workflows/launch-proof\.yml'
+          pattern="$pattern|src/Harbora\.Cli/|src/Harbora\.Shared/Inspection/|src/Harbora\.Domain/Launch/"
+          pattern="$pattern|src/Harbora\.Infrastructure/(Launch|Verification|Deployments|Services|Docker)/"
+          pattern="$pattern|src/Harbora\.Data/Migrations/"
+          pattern="$pattern|src/Harbora\.Web/Controllers/(Api/)?Launch|src/Harbora\.Web/Views/Launch/)"
+          if printf '%s\n' "$changed" | grep -qE "$pattern"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Nothing a launch depends on changed."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  proof:
+    name: A launch, end to end
+    needs: decide
+    if: needs.decide.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The installer clones this same commit from GitHub, and LP_EXPECT_SHA refuses anything else, so a
+      # branch that moved during the run cannot pass for the commit this run is named after.
+      - name: Install, launch and check, on this runner
+        env:
+          LP_REF: ${{ github.ref_name }}
+          LP_EXPECT_SHA: ${{ github.sha }}
+          LP_REPO_URL: https://github.com/${{ github.repository }}
+          LP_REPO_RAW: https://raw.githubusercontent.com/${{ github.repository }}
+        run: sudo -E bash deploy/launch-proof.sh

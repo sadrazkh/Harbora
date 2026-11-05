@@ -232,6 +232,20 @@ public class LearnHttpTests(HarboraHttpFixture fixture)
     }
 
     [Fact]
+    public async Task The_launch_page_offers_the_help_control_for_the_launch_chapter()
+    {
+        Panel.GivenUser(fixture.WorkspaceId, "learn-help-launch@example.com", SystemRole.Owner);
+        var client = await Panel.SignedInAs("203.0.113.219", "learn-help-launch@example.com");
+
+        var html = await (await client.GetAsync("/launch")).Content.ReadAsStringAsync();
+
+        html.Should().Contain("data-help-state=\"chapter\"",
+            "the launch question is mapped, so its Help control must say so");
+        html.Should().Contain("href=\"/learn/15-launch\"",
+            "the Help control on /launch must open the page that explains it");
+    }
+
+    [Fact]
     public async Task A_screen_with_no_mapped_chapter_opens_the_index_and_says_so()
     {
         Panel.GivenUser(fixture.WorkspaceId, "learn-help-unmapped@example.com", SystemRole.Owner);

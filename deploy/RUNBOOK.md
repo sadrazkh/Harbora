@@ -219,7 +219,7 @@ Apps live in an **environment**, which belongs to a **project** — that is the 
 network the app and its databases share. You do not have to create one first: leave the selector
 alone and Harbora makes a default project and environment on the spot.
 
-1. **Apps → New App** → source *Prebuilt image* → image `nginx:alpine`, port `80`,
+1. **Apps → Full form** → source *Prebuilt image* → image `nginx:alpine`, port `80`,
    domain `test.apps.example.com`, size `nano`. Leave **Project environment** as it is → **Save**.
 2. On the app page → **Deploy**. Watch live logs; it should pull, run, health-check, wire Traefik.
 3. Open `https://test.apps.example.com` → the nginx welcome page (with a valid cert).

@@ -19,6 +19,30 @@ public sealed record ProbePlan(IReadOnlyList<string> Command, IReadOnlyDictionar
 /// </summary>
 public static class ConnectionProbe
 {
+    /// <summary>What <c>TestConnectionAsync</c> answers for a row it cannot find.</summary>
+    public const string ServiceGone = "That database no longer exists.";
+
+    private const string MongoShellChanged =
+        "MongoDB's shell changed name between the versions Harbora offers, so its connection is " +
+        "not tested automatically yet.";
+
+    private const string BrokerHasNoShell =
+        "A message broker speaks its own protocol rather than answering a shell client, so " +
+        "Harbora does not test its connection automatically.";
+
+    private const string NameDoesNotResolve =
+        "The database's name does not resolve from this service, which means they are not " +
+        "on the same private network. Redeploy the service.";
+
+    private const string PasswordRefused =
+        "The database refused the password. If it was rotated, redeploy the services that " +
+        "use it so they pick up the new one.";
+
+    private const string NothingListening =
+        "Nothing is listening on that address. The database container is most likely stopped.";
+
+    private const string ConnectionFailedPrefix = "The connection failed.";
+
     public static ProbePlan? For(ManagedServiceType type, ServiceCreds creds) => type switch
     {
         ManagedServiceType.PostgreSql => new ProbePlan(
@@ -59,16 +83,12 @@ public static class ConnectionProbe
     /// <summary>Why an engine cannot be probed, for the screen that would otherwise show nothing.</summary>
     public static string? WhyUnsupported(ManagedServiceType type) => type switch
     {
-        ManagedServiceType.MongoDb =>
-            "MongoDB's shell changed name between the versions Harbora offers, so its connection is " +
-            "not tested automatically yet.",
+        ManagedServiceType.MongoDb => MongoShellChanged,
 
         // A broker's clients speak AMQP and NATS, not a shell. Probing one means opening a real
         // protocol connection, which is a client library rather than a command — said plainly here
         // rather than left as a button that returns nothing.
-        ManagedServiceType.RabbitMq or ManagedServiceType.Nats =>
-            "A message broker speaks its own protocol rather than answering a shell client, so " +
-            "Harbora does not test its connection automatically.",
+        ManagedServiceType.RabbitMq or ManagedServiceType.Nats => BrokerHasNoShell,
         _ => null
     };
 
@@ -83,30 +103,51 @@ public static class ConnectionProbe
         if (text.Contains("could not translate host name", StringComparison.OrdinalIgnoreCase)
             || text.Contains("Name or service not known", StringComparison.OrdinalIgnoreCase)
             || text.Contains("Unknown MySQL server host", StringComparison.OrdinalIgnoreCase))
-            return "The database's name does not resolve from this service, which means they are not " +
-                   "on the same private network. Redeploy the service.";
+            return NameDoesNotResolve;
 
         if (text.Contains("password authentication failed", StringComparison.OrdinalIgnoreCase)
             || text.Contains("Access denied", StringComparison.OrdinalIgnoreCase)
             || text.Contains("WRONGPASS", StringComparison.OrdinalIgnoreCase))
-            return "The database refused the password. If it was rotated, redeploy the services that " +
-                   "use it so they pick up the new one.";
+            return PasswordRefused;
 
         if (text.Contains("Connection refused", StringComparison.OrdinalIgnoreCase))
-            return "Nothing is listening on that address. The database container is most likely stopped.";
+            return NothingListening;
 
         // The Meilisearch probe above reports its own outcome as "HTTP $code" rather than through a
         // client's own wording, since curl -f discards the response body a real message would come
         // from. 000 is curl's own code for "no HTTP response arrived at all" (DNS failure, refused
         // connection, timeout) — not a status Meilisearch itself ever sends.
         if (text.Contains("HTTP 401", StringComparison.Ordinal))
-            return "The database refused the password. If it was rotated, redeploy the services that " +
-                   "use it so they pick up the new one.";
+            return PasswordRefused;
         if (text.Contains("HTTP 000", StringComparison.Ordinal))
-            return "Nothing is listening on that address. The database container is most likely stopped.";
+            return NothingListening;
 
-        return $"The connection failed. {text}".Trim();
+        return $"{ConnectionFailedPrefix} {text}".Trim();
     }
+
+    /// <summary>
+    /// The Persian of a sentence <see cref="WhyUnsupported"/> or <see cref="Explain"/> wrote.
+    ///
+    /// <para>
+    /// A lookup over the sentence, not a second return value, because
+    /// <c>IManagedServiceEngine.TestConnectionAsync</c> hands back one string and by then the reason it
+    /// was chosen is gone. It lives here, beside the English, so the two are changed together. Text
+    /// nobody wrote here (a client's own output, after the prefix) stays as it arrived: inventing a
+    /// translation of a message we did not write would be worse than showing it.
+    /// </para>
+    /// </summary>
+    public static string InPersian(string sentence) => sentence switch
+    {
+        MongoShellChanged => "پوستهٔ MongoDB بین نسخه‌هایی که هاربورا ارائه می‌دهد نامش عوض شده، پس اتصالش هنوز خودکار آزمایش نمی‌شود.",
+        BrokerHasNoShell => "صف پیام با پروتکل خودش حرف می‌زند و به کلاینت خط فرمان جواب نمی‌دهد، پس هاربورا اتصالش را خودکار آزمایش نمی‌کند.",
+        NameDoesNotResolve => "نام دیتابیس از اینجا پیدا نمی‌شود، یعنی این دو روی یک شبکهٔ خصوصی نیستند. سرویس را دوباره مستقر کن.",
+        PasswordRefused => "دیتابیس رمز را نپذیرفت. اگر رمز عوض شده، سرویس‌هایی را که از آن استفاده می‌کنند دوباره مستقر کن تا رمز جدید را بگیرند.",
+        NothingListening => "چیزی روی این آدرس گوش نمی‌دهد. به احتمال زیاد کانتینر دیتابیس خاموش است.",
+        ServiceGone => "این دیتابیس دیگر وجود ندارد.",
+        _ when sentence.StartsWith(ConnectionFailedPrefix, StringComparison.Ordinal) =>
+            $"اتصال برقرار نشد.{sentence[ConnectionFailedPrefix.Length..]}",
+        _ => sentence
+    };
 
     private static string Shell(string value) => "'" + value.Replace("'", "'\\''") + "'";
 }

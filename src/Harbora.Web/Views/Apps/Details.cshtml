@@ -253,6 +253,69 @@
             </div>
         </section>
 
+        @* ---- Is it working? ----
+           What a green deployment does not say: whether it stayed up, whether its databases answer,
+           whether its address works from outside. The last answer is stored, so reading this page
+           starts nothing; the button is what starts a container per database. Never checked is a
+           sentence and the button rather than an empty box, which would read as "nothing wrong". *@
+        @{
+            var verification = Model.Verification;
+            var verificationState = verification switch
+            {
+                null => "never",
+                { IsComplete: false } => "waiting",
+                { HasFailures: true } => "problems",
+                _ => "done"
+            };
+        }
+        <section id="app-checks" class="rounded-xl border border-line bg-surface p-4 scroll-mt-20" data-verification-state="@verificationState">
+            <div class="mb-3 flex flex-wrap items-start justify-between gap-2">
+                <div class="min-w-0">
+                    <div class="font-semibold">@(isFa ? "سالم کار می‌کند؟" : "Is it working?")</div>
+                    @if (verification is not null)
+                    {
+                        <div class="mt-0.5 text-xs text-ink-faint" data-verification-ran>
+                            @(isFa ? "آخرین بررسی:" : "Last checked:")
+                            @Harbora.Web.Infrastructure.Dates.Ago(verification.CompletedAt ?? verification.StartedAt, DateTimeOffset.UtcNow, isFa)
+                        </div>
+                    }
+                </div>
+                @* It waits for the answer, which can be a while with databases to ask, and each press
+                   starts containers. So the button says it is busy and cannot be pressed twice. *@
+                @if (NavigationCapabilities.For(User)(Harbora.Domain.Authorization.Capabilities.AppsOperate))
+                {
+                    <form asp-controller="Apps" asp-action="Verify" asp-route-id="@app.Id" method="post"
+                          onsubmit="var b=this.querySelector('[data-verify-now]');b.disabled=true;b.querySelector('span').textContent='@(isFa ? "در حال بررسی…" : "Checking…")';">
+                        <button type="submit" class="btn-secondary py-2 px-3 text-sm" data-verify-now>
+                            <i data-lucide="shield-check" class="h-4 w-4"></i><span>@(isFa ? "بررسی کن" : "Check now")</span>
+                        </button>
+                    </form>
+                }
+            </div>
+            @if (verification is null)
+            {
+                <p class="text-xs text-ink-muted" data-verification-never>
+                    @(isFa
+                        ? "هنوز بررسی نشده. هاربورا نگاه می‌کند اپ روشن است و بالا مانده یا نه، دیتابیس‌هایش از شبکهٔ اپ جواب می‌دهند یا نه، آدرسش از بیرون کار می‌کند یا نه، و لاگش از چیزی شکایت دارد یا نه."
+                        : "It has not been checked yet. Harbora looks at whether it is running and has stayed up, whether its databases answer on its network, whether its address works from outside, and whether its log is complaining.")
+                </p>
+            }
+            else
+            {
+                <partial name="Design/_AppChecks" model="verification.Checks" />
+                @if (!verification.IsComplete)
+                {
+                    @* A press only reads what is true now, so a wait does not end by itself on this page.
+                       Pressing again after the wait is what turns it into a verdict, so the page says so. *@
+                    <p class="mt-2 text-xs text-ink-muted" data-verification-waiting>
+                        @(isFa
+                            ? "بعضی بررسی‌ها هنوز منتظرند. نیم دقیقهٔ دیگر دوباره بررسی کنید تا نتیجهٔ نهایی را ببینید."
+                            : "Some checks are still waiting. Check again in half a minute for the final answer.")
+                    </p>
+                }
+            }
+        </section>
+
         @* ---- Specifics ----
            What the panel already stored about this app, read out loud instead of left for someone
            to piece together from the resize form, the deployment list and the domains table: its
@@ -870,7 +933,7 @@
                 <div class="text-xs text-ink-muted mb-2">
                     @(isFa ? "با هر push به" : "On push to") <code class="text-ink">@(app.GitRef ?? app.GitRepository.DefaultBranch)</code>
                     @(app.AutoDeployOnPush
-                        ? (isFa ? "خودکار دیپلوی می‌شود ✓" : "auto-deploys ✓")
+                        ? (isFa ? "خودکار دیپلوی می‌شود، وقتی Webhook زیر را در مخزن گذاشته باشید" : "auto-deploys, once the webhook below is in your repository")
                         : (isFa ? "غیرفعال است" : "is off"))
                 </div>
                 <div class="text-xs text-ink-muted">@(isFa ? "آدرس Webhook (در تنظیمات مخزن قرار دهید):" : "Webhook URL (add it in your repo settings):")</div>
@@ -1265,6 +1328,23 @@
     </div>
 
     <aside class="space-y-6">
+        @* ---- a new version ----
+           An app made from a zip has no repository to pull from, and somebody who gave us a zip has no
+           CLI, so without this it could never be updated. *@
+        @if (app.SourceType == AppSourceType.Upload
+             && NavigationCapabilities.For(User)(Harbora.Domain.Authorization.Capabilities.AppsDeploy))
+        {
+            <section class="rounded-xl border border-line bg-surface p-4" data-app-upload>
+                <div class="font-semibold">@(isFa ? "نسخه‌ی تازه" : "A new version")</div>
+                <p class="mt-1 text-xs text-ink-muted">@(isFa ? "پوشه‌ی پروژه را دوباره zip کن و اینجا بفرست؛ همین اپ با آن از نو ساخته و اجرا می‌شود." : "Zip your project folder again and send it here: this app is rebuilt from it and started.")</p>
+                <form method="post" action="/apps/@app.Id/upload" enctype="multipart/form-data" class="mt-3 space-y-2">
+                    @Html.AntiForgeryToken()
+                    <input name="file" type="file" accept="@UploadedArchive.Accept" required class="block w-full min-w-0 text-xs text-ink-muted file:me-3 file:cursor-pointer file:rounded-lg file:border-0 file:bg-surface-2 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-ink" />
+                    <button type="submit" class="btn-primary w-full justify-center"><i data-lucide="cloud-upload" class="h-4 w-4"></i>@(isFa ? "بفرست و اجرا کن" : "Send and run it")</button>
+                </form>
+            </section>
+        }
+
         @* ---- databases ----
            The page said nothing about them at all: the only way to attach one was to know to open
            each database in turn, and nothing here listed what this application was already using.
@@ -1616,17 +1696,24 @@
         }
 
         @* ---- Release task ----
-           Shown because it runs on every deploy and can fail one. Set at create time and then
-           invisible, it is a command nobody remembers is there until it breaks a release. *@
-        @if (!string.IsNullOrWhiteSpace(app.ReleaseCommand))
+           Shown because it runs on every deploy and can fail one. It is also the fix the checks name for
+           an empty database, so it can be set here and not only when the app is created. *@
+        @if ((Harbora.Infrastructure.Deployments.ServicePlan.IsLongRunning(app.Kind) || !string.IsNullOrWhiteSpace(app.ReleaseCommand))
+             && NavigationCapabilities.For(User)(Harbora.Domain.Authorization.Capabilities.AppsEnv))
         {
-            <section class="rounded-xl border border-line bg-surface p-4">
-                <div class="font-semibold mb-2">@(isFa ? "دستور پیش از انتشار" : "Release task")</div>
-                <code dir="ltr" class="block break-all rounded bg-code text-code-ink px-2 py-1 text-xs">@app.ReleaseCommand</code>
-                <p class="text-[11px] text-ink-faint mt-2">
+            <section class="rounded-xl border border-line bg-surface p-4" data-app-release-task>
+                <div class="mb-3 font-semibold">@(isFa ? "دستور پیش از انتشار" : "Release task")</div>
+                <form asp-controller="Apps" asp-action="SetReleaseCommand" asp-route-id="@app.Id" method="post" class="space-y-2">
+                    @Html.AntiForgeryToken()
+                    <input type="text" name="releaseCommand" value="@app.ReleaseCommand" dir="ltr"
+                           class="form-control text-sm" data-release-command-input
+                           placeholder="@(isFa ? "مثلاً npm run migrate" : "e.g. npm run migrate")" />
+                    <button class="btn-secondary w-full justify-center py-2 text-sm">@(isFa ? "ذخیره" : "Save")</button>
+                </form>
+                <p class="mt-2 text-[11px] leading-4 text-ink-faint">
                     @(isFa
-                        ? "پیش از راه‌اندازی نسخهٔ جدید اجرا می‌شود. اگر شکست بخورد، نسخهٔ فعلی همچنان سرویس می‌دهد."
-                        : "Runs before the new version starts. If it fails, the current version keeps serving.")
+                        ? "پیش از راه‌اندازی هر نسخهٔ جدید اجرا می‌شود، معمولاً برای ساختن جدول‌های دیتابیس. اگر شکست بخورد، نسخهٔ فعلی به کارش ادامه می‌دهد. خالی یعنی چیزی اجرا نمی‌شود."
+                        : "Runs before each new version starts, usually to create the database's tables. If it fails, the current version keeps serving. Empty runs nothing.")
                 </p>
             </section>
         }

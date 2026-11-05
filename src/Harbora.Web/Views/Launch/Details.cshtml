@@ -1,0 +1,32 @@
+@model LaunchProgressModel
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    ViewData["Title"] = isFa ? "راه انداختن اپ" : "Launch";
+    var view = Model.View;
+    var error = TempData["Error"] as string;
+}
+<div class="mx-auto max-w-2xl py-2 md:py-8">
+    @if (error is not null)
+    {
+        <div class="alert-danger mb-5 break-words" data-launch-error>@error</div>
+    }
+
+    @* The script swaps this region's contents every couple of seconds while the launch is moving. Every
+       state the region can draw stands on its own, so a person with no script loses only the
+       automatic part: the refresh link below is the same request by hand. *@
+    <div data-launch-poll="/launch/@view.Id/progress" aria-live="polite">
+        <partial name="_Progress" model="Model" />
+    </div>
+
+    @if (!view.IsTerminal)
+    {
+        <noscript>
+            <p class="mt-4 text-center text-xs" data-launch-refresh><a href="/launch/@view.Id" class="text-accent-text hover:underline">@(isFa ? "تازه کن تا ببینی کجاست" : "Refresh to see how far it has got")</a></p>
+        </noscript>
+        @* Outside the region, so a swap cannot take it away. The script shows it when the poll stops with no answer: a session that ended, or a launch that is gone. *@
+        <p class="mt-4 hidden text-center text-sm text-ink-muted" data-launch-poll-stopped role="status">
+            @(isFa ? "دیگر نمی‌توانم ببینم کار به کجا رسید؛ شاید از حسابت بیرون آمده‌ای یا این راه‌اندازی دیگر نیست. " : "I can't see how far it has got any more: you may have been signed out, or this launch is gone. ")
+            <a href="/launch/@view.Id" class="text-accent-text hover:underline">@(isFa ? "صفحه را تازه کن" : "Refresh the page")</a>
+        </p>
+    }
+</div>

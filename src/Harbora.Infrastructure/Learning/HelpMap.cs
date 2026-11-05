@@ -47,6 +47,9 @@ public static class HelpMap
         ("/apps/{id}/volumes", "05-storage"),
         ("/apps/{id}/data", "05-storage"),
 
+        // The question, the confirm screen and a launch's own timeline at /launch/{id}: one flow, one page.
+        ("/launch", "15-launch"),
+
         ("/apps", "03-applications"),
         // Ready-made stacks are documented as part of the applications chapter ("## قالب‌ها" in
         // 03-applications.md), not as a doc-site page of their own.

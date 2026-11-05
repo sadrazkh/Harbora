@@ -1,0 +1,57 @@
+@model IReadOnlyList<Harbora.Infrastructure.Verification.AppCheck>
+@using Harbora.Infrastructure.Verification
+@{
+    var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
+    string Icon(AppCheckStatus s) => s switch
+    {
+        AppCheckStatus.Passed => "check-circle-2",
+        AppCheckStatus.Failed => "triangle-alert",
+        AppCheckStatus.Warning => "alert-triangle",
+        AppCheckStatus.Pending => "refresh-cw",
+        _ => "info"
+    };
+    string Tone(AppCheckStatus s) => s switch
+    {
+        AppCheckStatus.Passed => "text-ok",
+        AppCheckStatus.Failed => "text-danger",
+        AppCheckStatus.Warning => "text-warn",
+        _ => "text-ink-faint"
+    };
+    string Word(AppCheckStatus s) => s switch
+    {
+        AppCheckStatus.Passed => isFa ? "تأیید شد" : "Passed",
+        AppCheckStatus.Failed => isFa ? "مشکل دارد" : "Failed",
+        AppCheckStatus.Warning => isFa ? "هشدار" : "Warning",
+        AppCheckStatus.Pending => isFa ? "در انتظار" : "Waiting",
+        _ => isFa ? "بررسی نشد" : "Not checked"
+    };
+}
+@* The one way a check is drawn, on the launch page and on an app's own page, so "skipped" cannot read
+   as a pass on one of them. *@
+<ul class="space-y-2">
+    @foreach (var check in Model)
+    {
+        <li class="flex items-start gap-2.5 rounded-lg border border-line bg-surface-2 px-3 py-2.5" data-check="@check.Key" data-check-status="@check.Status">
+            <i data-lucide="@Icon(check.Status)" class="mt-0.5 h-4 w-4 shrink-0 @Tone(check.Status)"></i>
+            <div class="min-w-0 text-sm">
+                <div class="flex flex-wrap items-baseline gap-x-2">
+                    <span class="font-medium text-ink">@(isFa ? check.TitleFa : check.Title)</span>
+                    @* In words as well as colour: "not checked" must not be left to a grey icon. *@
+                    <span class="text-[11px] @Tone(check.Status)">@Word(check.Status)</span>
+                </div>
+                @if ((isFa ? check.DetailFa : check.Detail) is { Length: > 0 } detail)
+                {
+                    <div class="mt-0.5 whitespace-pre-line break-words text-xs text-ink-muted">@detail</div>
+                }
+                @if ((isFa ? check.FixFa : check.Fix) is { Length: > 0 } fix)
+                {
+                    <div class="mt-1 break-words text-xs text-ink">@fix</div>
+                }
+                @if (check.LinkPath is { Length: > 0 } link)
+                {
+                    <a href="@link" class="mt-1 inline-block text-xs text-accent-text hover:underline">@(isFa ? "بررسی" : "Look closer")</a>
+                }
+            </div>
+        </li>
+    }
+</ul>
