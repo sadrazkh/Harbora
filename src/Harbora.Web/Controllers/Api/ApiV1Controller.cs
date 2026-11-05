@@ -73,6 +73,16 @@ public sealed class ApiV1Controller(
             var id = await deployEngine.QueueDeploymentAsync(
                 new DeploymentRequest(app.Id, DeploymentTrigger.Cli, currentUser.UserId ?? Guid.Empty,
                     SourceArchivePath: archivePath), ct);
+
+            // A deployment already in flight is not a refusal: the engine coalesces onto it and answers
+            // with its id. That one will never read this file, so answering 200 would tell somebody their
+            // fix is building while the old code is.
+            if (await db.Deployments.IgnoreQueryFilters().AsNoTracking().AnyAsync(d => d.Id == id && d.SourceArchivePath != archivePath, ct))
+            {
+                TryDelete(archivePath);
+                return Conflict(new { error = "A build of this app is still running, so this upload was not used. Run harbora deploy again when it finishes." });
+            }
+
             return Ok(new { deploymentId = id });
         }
         catch (InvalidOperationException ex)

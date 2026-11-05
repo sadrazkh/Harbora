@@ -655,7 +655,7 @@ public sealed class AppVerifier(
                 $"{url} answered {NotFound}, but the app itself answers {status} when asked directly at {upstream!.Value.Host}:{upstream.Value.Port}. So that {NotFound} comes from the proxy, which has no working route to this app.",
                 $"{url} با کد {NotFound} جواب داد، ولی خود اپ وقتی مستقیم از {upstream!.Value.Host}:{upstream.Value.Port} پرسیده می‌شود با کد {status} جواب می‌دهد. پس این {NotFound} از پروکسی می‌آید که راه درستی به این اپ ندارد.",
                 "Deploy it again, which writes its route again. If that does not help, look at this address on the Routes page.",
-                "دوباره مستقرش کنید تا مسیرش دوباره نوشته شود. اگر نشد، این آدرس را در صفحهٔ مسیرها بررسی کنید.",
+                "دوباره مستقرش کن تا مسیرش دوباره نوشته شود. اگر نشد، این آدرس را در صفحهٔ مسیرها بررسی کن.",
                 run.DeploymentsPath);
 
         return new AppCheck(UrlKey, AppCheckStatus.Warning,
@@ -663,7 +663,7 @@ public sealed class AppVerifier(
             $"{url} answered {NotFound}. That is either the app's own answer or the proxy having no route to it, and the app could not be asked directly to tell which.",
             $"{url} با کد {NotFound} جواب داد. این یا جواب خود اپ است یا یعنی پروکسی راهی به آن ندارد، و نشد مستقیم از اپ پرسید تا معلوم شود کدام است.",
             "Open the address and see whether that page is the app's own. If it is not, deploy it again, which writes its route again.",
-            "آدرس را باز کنید و ببینید آن صفحه مال خود اپ است یا نه. اگر نیست، دوباره مستقرش کنید تا مسیرش دوباره نوشته شود.",
+            "آدرس را باز کن و ببین آن صفحه مال خود اپ است یا نه. اگر نیست، دوباره مستقرش کن تا مسیرش دوباره نوشته شود.",
             run.DeploymentsPath);
     }
 

@@ -786,7 +786,7 @@ public sealed class InitCommand : AsyncCommand<InitCommand.Settings>
     private static string Slugify(string name)
     {
         var chars = name.Trim().ToLowerInvariant()
-            .Select(c => char.IsLetterOrDigit(c) ? c : '-').ToArray();
+            .Select(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' ? c : '-').ToArray();
         var slug = new string(chars).Trim('-');
         while (slug.Contains("--")) slug = slug.Replace("--", "-");
         return string.IsNullOrWhiteSpace(slug) ? "app" : slug;
