@@ -126,6 +126,22 @@ public class PipelineWaitsForServicesTests
     }
 
     [Fact]
+    public async Task A_replica_still_seeding_holds_nothing_back_because_the_app_boots_on_its_primary()
+    {
+        using var h = Harness();
+        h.Options.ServiceWaitPollSeconds = 600;
+        var primary = GivenService(h, ServiceStatus.Running);
+        var replica = GivenService(h, ServiceStatus.Provisioning, "orders-standby");
+        replica.PrimaryManagedServiceId = primary.Id;
+        await h.Db.SaveChangesAsync();
+
+        var deployment = await h.RunAsync(h.QueueDeployment()).WaitAsync(Patience);
+
+        deployment.Status.Should().Be(DeploymentStatus.Succeeded);
+        WaitingLine(h).Should().BeNull();
+    }
+
+    [Fact]
     public async Task A_scheduled_job_starts_nothing_so_it_waits_for_nothing()
     {
         using var h = Harness();

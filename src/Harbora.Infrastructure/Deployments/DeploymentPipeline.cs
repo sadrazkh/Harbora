@@ -1952,8 +1952,11 @@ public sealed class DeploymentPipeline(
         IQueryable<Domain.Services.ManagedService> Beside() => db.ManagedServices.IgnoreQueryFilters().AsNoTracking()
             .Where(s => s.WorkspaceId == app.WorkspaceId && s.EnvironmentId == app.EnvironmentId);
 
+        // A replica still seeding is left out. Copying a large database can outlast the whole bound, and it
+        // is only ever a second, read-only address: the app boots on its primary, and gets REPLICA_URL on the
+        // deployment after the replica is ready, exactly as it did before this wait existed.
         var awaited = await Beside()
-            .Where(s => s.Status == ServiceStatus.Provisioning)
+            .Where(s => s.Status == ServiceStatus.Provisioning && s.PrimaryManagedServiceId == null)
             .Select(s => new { s.Id, s.Name })
             .ToListAsync(ct);
         if (awaited.Count == 0) return;
