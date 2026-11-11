@@ -1585,12 +1585,11 @@ public sealed class DeploymentPipeline(
         // duplicated here and in AppsController.Details, kept in step only by a matching comment at
         // each site. Harbora.Infrastructure.Apps.EffectiveEnvironmentBuilder is now the one place —
         // also called by ApiV1Controller.Env (`harbora env pull`), so ciphertext stays ciphertext
-        // (ConfigGroupMerge's own contract); decrypted exactly once, below, where every other
-        // IsSecret entry in the merge is (SafeUnprotect(e.Value)).
-        var merged = Harbora.Infrastructure.Apps.EffectiveEnvironmentBuilder.Compute(
+        // (ConfigGroupMerge's own contract); decrypted exactly once, by Decrypted, for every
+        // IsSecret entry in the merge. That half is shared with CronJobRunner, so a scheduled run is
+        // handed what a container of the same app is.
+        var env = Harbora.Infrastructure.Apps.EffectiveEnvironmentBuilder.Decrypted(
             app, protector, _storageOpt.CustomerEndpoint);
-
-        var env = merged.ToDictionary(e => e.Key, e => e.IsSecret ? SafeUnprotect(e.Value) : e.Value);
 
         // A function host refuses an unsigned invocation, so the secret has to reach the container —
         // and it is injected here rather than stored as an ordinary variable so nobody can rename,
