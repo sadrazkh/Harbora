@@ -70,6 +70,9 @@ internal sealed class LaunchHarness : IDisposable
     public FakeDockerEngine Docker { get; } = new();
     public CapturingLogger Logs { get; } = new();
 
+    /// <summary>What every service built here protects with. A test that has to see ciphertext is not plaintext swaps in a real one.</summary>
+    public ISecretProtector Protector { get; set; } = new PassthroughProtector();
+
     /// <summary>Thrown by the next queue of a deployment, then forgotten.</summary>
     public Exception? RefuseNextDeployment { get; set; }
     public int DeploymentsQueued { get; set; }
@@ -147,7 +150,7 @@ internal sealed class LaunchHarness : IDisposable
     private LaunchService Build(HarboraDbContext db, ICurrentUser user)
     {
         var billing = Options.Create(Billing);
-        var protector = new PassthroughProtector();
+        var protector = Protector;
         var quota = new QuotaService(db, billing);
         var projects = new ProjectService(db, Clock, quota, Audit);
         var access = new ProjectAccessService(db, user);

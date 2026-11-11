@@ -383,7 +383,7 @@ public sealed partial class LaunchService(
         return true;
     }
 
-    /// <summary>Clears the token and deletes the archive, whatever else the launch is doing.</summary>
+    /// <summary>Clears the token and what was typed, and deletes the archive, whatever else the launch is doing.</summary>
     private async Task DropLeftoversAsync(Guid launchId, CancellationToken ct, Action<AppLaunch>? also = null)
     {
         string? archive = null;
@@ -393,6 +393,7 @@ public sealed partial class LaunchService(
             archive = l.ArchivePath;
             l.ArchivePath = null;
             l.EncryptedGitToken = null;
+            l.ChoicesJson = LaunchJson.WithoutAnswers(l.ChoicesJson);
         }, ct);
         DeleteArchive(archive);
     }

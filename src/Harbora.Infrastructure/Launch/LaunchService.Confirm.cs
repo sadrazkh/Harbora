@@ -67,12 +67,15 @@ public sealed partial class LaunchService
             return ServiceOutcome<LaunchView>.Success(await ViewAsync(launchId, ct));
 
         // From here on the work is not abandoned because the browser went away: half of a launch
-        // cancelled by a closed tab would be the worst of both outcomes.
-        await UpdateAsync(launchId, l => l.ChoicesJson = LaunchJson.WriteChoices(settled), CancellationToken.None);
-
+        // cancelled by a closed tab would be the worst of both outcomes. What was typed goes onto the
+        // row sealed, because a step can fail before the variables reach the app, and a retry that
+        // could not recall them used to leave somebody's payment key unset with a sentence about it.
         var answers = choices.EnvVars
             .GroupBy(v => v.Key, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.Last().Value, StringComparer.Ordinal);
+        var sealedAnswers = Seal(answers);
+        await UpdateAsync(launchId, l => l.ChoicesJson = LaunchJson.WriteChoices(settled, sealedAnswers), CancellationToken.None);
+
         await CreateWhatIsMissingAsync(launchId, settled, answers, clientIp);
 
         return ServiceOutcome<LaunchView>.Success(await ViewAsync(launchId, CancellationToken.None));
@@ -121,9 +124,10 @@ public sealed partial class LaunchService
         {
             await ProvisionFailedServicesAgainAsync(launch, CancellationToken.None);
 
-            // What was typed on the confirm screen was not kept (see LaunchJson.WriteChoices), so a
-            // retry works from the example file and the generator, and names what it could not set.
-            await CreateWhatIsMissingAsync(launchId, choices!, new Dictionary<string, string?>(), clientIp, retrying: true);
+            // The same answers the confirm was given, from the row (see LaunchJson.WriteChoices). Only
+            // when they cannot be read does a retry work from the example file and the generator, and
+            // then the timeline names what it could not set.
+            await CreateWhatIsMissingAsync(launchId, choices!, OpenAnswers(launch), clientIp, retrying: true);
         }
 
         return ServiceOutcome<LaunchView>.Success(await ViewAsync(launchId, CancellationToken.None));
@@ -189,7 +193,7 @@ public sealed partial class LaunchService
                 var created = await databases.CreateAsync(DatabaseRequest(launch, choices, i, name, serverId, clientIp), ct);
                 if (!created.Ok)
                 {
-                    await FailCreatingAsync(launchId, step, created.Refusals[0].Message, created.Refusals[0].MessageFa, answers, ct);
+                    await FailCreatingAsync(launchId, step, created.Refusals[0].Message, created.Refusals[0].MessageFa, ct);
                     return;
                 }
 
@@ -207,7 +211,7 @@ public sealed partial class LaunchService
                 var created = await apps.CreateAsync(AppRequest(launch, choices, inspection, serverId, token, clientIp), ct);
                 if (!created.Ok)
                 {
-                    await FailCreatingAsync(launchId, step, created.Refusals[0].Message, created.Refusals[0].MessageFa, answers, ct);
+                    await FailCreatingAsync(launchId, step, created.Refusals[0].Message, created.Refusals[0].MessageFa, ct);
                     return;
                 }
 
@@ -235,7 +239,7 @@ public sealed partial class LaunchService
                     serviceIds[i], appId.Value, null, null, clientIp, ct, choices.Services[i].Aliases);
                 if (!outcome.Ok)
                 {
-                    await FailCreatingAsync(launchId, step, outcome.Refusals[0].Message, outcome.Refusals[0].MessageFa, answers, ct);
+                    await FailCreatingAsync(launchId, step, outcome.Refusals[0].Message, outcome.Refusals[0].MessageFa, ct);
                     return;
                 }
             }
@@ -243,7 +247,7 @@ public sealed partial class LaunchService
             // 4. The variables.
             if (await SetVariablesAsync(launch.WorkspaceId, appId.Value, choices, answers, inspection, clientIp, ct) is { } refusal)
             {
-                await FailCreatingAsync(launchId, step, refusal.Message, refusal.MessageFa, answers, ct);
+                await FailCreatingAsync(launchId, step, refusal.Message, refusal.MessageFa, ct);
                 return;
             }
 
@@ -251,10 +255,13 @@ public sealed partial class LaunchService
                 metadataJson: JsonSerializer.Serialize(new { appId, services = serviceIds, serverId }),
                 workspaceId: launch.WorkspaceId, ct: ct);
 
+            // The variables are on the app now, encrypted where they are secret, so the row lets go of
+            // what was typed with the same write that moves it on.
             var next = serviceIds.Count > 0 ? LaunchStatus.WaitingForServices : LaunchStatus.Deploying;
             await UpdateAsync(launchId, l =>
             {
                 l.EncryptedGitToken = null;
+                l.ChoicesJson = LaunchJson.WithoutAnswers(l.ChoicesJson);
                 l.Status = next;
                 l.StatusChangedAt = clock.UtcNow;
             }, ct);
@@ -267,7 +274,7 @@ public sealed partial class LaunchService
             db.ChangeTracker.Clear();
             var reason = Scrub(ex.Message, token);
             logger.LogError("Launch {LaunchId} failed at {Step}: {Reason}", launchId, step, reason);
-            await FailCreatingAsync(launchId, step, reason, (ex as QuotaRefusedException)?.ReasonFa ?? $"ساختن متوقف شد: {reason}", answers, ct);
+            await FailCreatingAsync(launchId, step, reason, (ex as QuotaRefusedException)?.ReasonFa ?? $"ساختن متوقف شد: {reason}", ct);
         }
     }
 
@@ -312,8 +319,9 @@ public sealed partial class LaunchService
     /// <summary>
     /// Sets what is not set yet, as one call. A generated secret is made here and nowhere else; an
     /// answer left blank is not written, because an empty variable and an unset one are different to
-    /// an app that checks. On a retry nothing is in <paramref name="answers"/>, so an example file's
-    /// value is read again and a person's answer stays unset, named on the timeline.
+    /// an app that checks. A retry is handed the answers the confirm was. Only when those could not be
+    /// read is <paramref name="answers"/> empty, and then an example file's value is read again and a
+    /// person's answer stays unset, named on the timeline.
     /// </summary>
     private async Task<ServiceRefusal?> SetVariablesAsync(
         Guid workspaceId, Guid appId, LaunchChoices choices, IReadOnlyDictionary<string, string?> answers,
@@ -362,11 +370,10 @@ public sealed partial class LaunchService
 
     /// <summary>
     /// Stops the launch at this step, and names what is already there, because that is what a person is
-    /// paying for while they read this. The token stays only while no app has it: a retry still needs it.
+    /// paying for while they read this. The token stays only while no app has it, and what was typed
+    /// stays sealed until the variables are on the app: a retry still needs both.
     /// </summary>
-    private async Task FailCreatingAsync(
-        Guid launchId, string step, string reason, string reasonFa,
-        IReadOnlyDictionary<string, string?> answers, CancellationToken ct)
+    private async Task FailCreatingAsync(Guid launchId, string step, string reason, string reasonFa, CancellationToken ct)
     {
         var launch = await db.AppLaunches.IgnoreQueryFilters().AsNoTracking().FirstAsync(l => l.Id == launchId, ct);
 
@@ -384,21 +391,6 @@ public sealed partial class LaunchService
             messageFa += $" این‌ها ساخته شده‌اند و می‌مانند: {string.Join("، ", created)}.";
         }
 
-        // Answers are not stored anywhere that survives this, and a person should hear that now rather
-        // than find a variable missing after the next try. Only what a retry cannot read again: a value
-        // left as the example file has it comes back by itself. Names only, never a value.
-        var inspection = LaunchJson.ReadInspection(launch.InspectionJson);
-        var lost = answers
-            .Where(a => !string.IsNullOrEmpty(a.Value)
-                        && inspection.EnvVars.FirstOrDefault(v => v.Name == a.Key)?.ExampleValue != a.Value)
-            .Select(a => a.Key)
-            .ToList();
-        if (lost.Count > 0)
-        {
-            message += $" What you typed for {string.Join(", ", lost)} was not kept: after trying again, set it on the app's page.";
-            messageFa += $" آنچه برای {string.Join("، ", lost)} وارد کرده بودی نگه داشته نشد: بعد از تلاش دوباره، آن را در صفحهٔ اپ تنظیم کن.";
-        }
-
         await UpdateAsync(launchId, l =>
         {
             l.Status = LaunchStatus.Failed;
@@ -407,5 +399,35 @@ public sealed partial class LaunchService
             l.FailureMessage = Clip(message);
             l.FailureMessageFa = Clip(messageFa);
         }, ct);
+    }
+
+    /// <summary>
+    /// Every answer as one protected value, with the names beside it in the open. Null when the screen
+    /// asked nothing, so a launch with no variables holds nothing to sweep.
+    /// </summary>
+    private SealedAnswers? Seal(IReadOnlyDictionary<string, string?> answers) => answers.Count == 0
+        ? null
+        : new SealedAnswers(
+            answers.Where(a => !string.IsNullOrEmpty(a.Value)).Select(a => a.Key).ToList(),
+            protector.Protect(JsonSerializer.Serialize(answers)));
+
+    /// <summary>
+    /// What <see cref="Seal"/> kept, or nothing. A key rotated since the confirm reads as nothing, and the
+    /// retry then names what it could not set. The reason is logged by kind only: whatever failed to
+    /// parse was somebody's keys.
+    /// </summary>
+    private IReadOnlyDictionary<string, string?> OpenAnswers(AppLaunch launch)
+    {
+        if (LaunchJson.ReadAnswers(launch.ChoicesJson) is not { } kept) return new Dictionary<string, string?>();
+        try
+        {
+            return JsonSerializer.Deserialize<Dictionary<string, string?>>(protector.Unprotect(kept.Sealed))
+                   ?? new Dictionary<string, string?>();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning("The answers kept on launch {LaunchId} could not be read ({Kind}).", launch.Id, ex.GetType().Name);
+            return new Dictionary<string, string?>();
+        }
     }
 }

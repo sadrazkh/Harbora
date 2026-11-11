@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Harbora.Application.Abstractions;
@@ -131,6 +132,24 @@ public sealed record StoredInspection(
 }
 
 /// <summary>
+/// What a person typed on the confirm screen, kept on the launch for as long as a failed step might
+/// still need it and no longer. A launch row is no place for somebody's API key in the open, so every
+/// answer goes through <c>ISecretProtector</c> as one value; only the names are readable, because they
+/// are what a sentence has to say when the answers are dropped before anything used them.
+/// </summary>
+/// <param name="Names">The variables a value was typed for. Never a value.</param>
+/// <param name="Sealed">Every answer, blank ones included, as protected JSON: a retry is handed exactly what the confirm was.</param>
+public sealed record SealedAnswers(IReadOnlyList<string> Names, string Sealed)
+{
+    /// <summary>A record prints every property by default, and this one is ciphertext of somebody's keys.</summary>
+    private bool PrintMembers(System.Text.StringBuilder builder)
+    {
+        builder.Append($"Names = [{string.Join(", ", Names)}]");
+        return true;
+    }
+}
+
+/// <summary>
 /// How a launch's JSON columns are written: enums as names, so a stored row still reads the same after
 /// an enum grows. Reads are tolerant, because a row that cannot be parsed must not take a page down.
 /// </summary>
@@ -158,13 +177,51 @@ public static class LaunchJson
     public static LaunchChoices? ReadChoices(string? json) => Read<LaunchChoices>(json);
 
     /// <summary>
-    /// What is kept of the confirm screen: every choice, and no variable's value. A value lives on the
-    /// app's own environment rows once it is set, encrypted if it is a secret, and nowhere else.
+    /// What is kept of the confirm screen: every choice, and no variable's value in the open. A value
+    /// lives on the app's own environment rows once it is set, encrypted if it is a secret. Until then,
+    /// which can be a failed step and a retry later, what was typed rides along as one sealed value
+    /// (<paramref name="answers"/>), taken off again by <see cref="WithoutAnswers"/> the moment the
+    /// variables are on the app.
     /// </summary>
-    public static string WriteChoices(LaunchChoices choices) => Write(choices with
+    public static string WriteChoices(LaunchChoices choices, SealedAnswers? answers = null)
     {
-        EnvVars = choices.EnvVars.Select(v => v with { Value = null }).ToList()
-    });
+        var node = JsonSerializer.SerializeToNode(choices with
+        {
+            EnvVars = choices.EnvVars.Select(v => v with { Value = null }).ToList()
+        }, Options)!.AsObject();
+        if (answers is not null) node[AnswersProperty] = JsonSerializer.SerializeToNode(answers, Options);
+        return node.ToJsonString(Options);
+    }
+
+    /// <summary>
+    /// The property <see cref="WriteChoices"/> puts the sealed answers under. A reader of
+    /// <see cref="LaunchChoices"/> skips it, and the tick looks for it by name to find a failed launch
+    /// still holding some.
+    /// </summary>
+    public const string AnswersProperty = "sealedAnswers";
+
+    /// <summary>The marker a query can look for in the column without parsing it.</summary>
+    public const string AnswersMarker = "\"" + AnswersProperty + "\"";
+
+    public static SealedAnswers? ReadAnswers(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json) || !json.Contains(AnswersMarker, StringComparison.Ordinal)) return null;
+        try
+        {
+            var answers = JsonNode.Parse(json)?[AnswersProperty]?.Deserialize<SealedAnswers>(Options);
+            return answers is { Sealed.Length: > 0 } ? answers with { Names = answers.Names ?? [] } : null;
+        }
+        catch (JsonException) { return null; }
+    }
+
+    /// <summary>The same choices with the sealed answers taken off, or the column as it was when it holds none.</summary>
+    public static string? WithoutAnswers(string? json)
+    {
+        if (ReadAnswers(json) is null) return json;
+        var node = JsonNode.Parse(json!)!.AsObject();
+        node.Remove(AnswersProperty);
+        return node.ToJsonString(Options);
+    }
 
     public static List<Guid> ReadIds(string? json) => Read<List<Guid>>(json) ?? [];
 
