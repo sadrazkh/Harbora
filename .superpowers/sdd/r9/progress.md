@@ -29,3 +29,24 @@ Decided by the coordinator on the owner's behalf, to be confirmed in the final r
 - Item 14: settled jobs are kept 30 days.
 - Item 17: no schema change this round; pinning a token to one workspace is left as a next step.
 - No migration and no new job kind for anyone but E.
+
+## Paused by the owner, 2026-11-11 (resume from here)
+
+All seven agents were cut off by a network error (the API could not be reached) part-way through, and the
+owner then asked to hold everything where it is and continue later. Nothing was resumed. Nothing was pushed:
+the remote has no proof/r9 branch. No agent wrote a report yet.
+
+Each worktree is left exactly as its agent left it, including uncommitted work. Do not clean them.
+
+| Agent | Committed over the base (e84a288) | Uncommitted files | Where it was |
+|---|---|---|---|
+| A | nothing | 16 | env-file rule written in the CLI, the archive filter and the shared list; about to write the shared-rule tests |
+| B | nothing | 13 | backup-on-create and the reconciler in progress, guides touched; about to write the tests for item 1 |
+| C | 209e536 retry keeps typed answers | 11 | picker and webhook in progress in the Git client, provisioning and Launch |
+| D | 01f5d5b cron gets the effective environment | 7 | Jobs retention written; about to write its rule tests; build directories not started |
+| E | nothing | 30 | job kind, pipeline hook, planner and views in progress; was on the deployment page |
+| F | 48643ed readiness and connection checks for MongoDB, RabbitMQ, NATS | 8 | seven new fixtures on disk, no run pushed yet |
+| G | b59ad32 the panel honours a named workspace and checks membership | 6 | CLI side in progress |
+
+To resume: send each agent a message to continue from its worktree, or start a fresh agent on the same
+worktree and brief, telling it to read git status and git diff first because half of the work is there.
