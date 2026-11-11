@@ -347,10 +347,27 @@ public class AppVerifierTests
         h.Services.Tested.Should().BeEmpty();
     }
 
+    /// <summary>No engine in the catalogue is without a probe now, so this is the next one that arrives without.</summary>
+    private const ManagedServiceType NoProbeForThis = (ManagedServiceType)999;
+
     [Theory]
     [InlineData(ManagedServiceType.MongoDb)]
     [InlineData(ManagedServiceType.RabbitMq)]
     [InlineData(ManagedServiceType.Nats)]
+    public async Task The_engines_that_used_to_be_skipped_are_asked_like_any_other(ManagedServiceType type)
+    {
+        var h = new VerifierHarness();
+        var app = h.GivenDeployedApp();
+        var svc = h.GivenService(app, type: type);
+
+        var check = Check(await RunAsync(h, app), ServiceKey(svc));
+
+        check.Status.Should().Be(AppCheckStatus.Passed);
+        h.Services.Tested.Should().Equal(svc.Id);
+    }
+
+    [Theory]
+    [InlineData(NoProbeForThis)]
     public async Task An_engine_with_no_probe_is_skipped_with_the_reason_translated_and_is_not_a_pass(ManagedServiceType type)
     {
         var h = new VerifierHarness();
@@ -611,12 +628,12 @@ public class AppVerifierTests
     {
         var h = new VerifierHarness();
         var app = h.GivenDeployedApp();
-        var svc = h.GivenService(app, type: ManagedServiceType.MongoDb, unpublished: true);
+        var svc = h.GivenService(app, type: NoProbeForThis, unpublished: true);
 
         var check = Check(await RunAsync(h, app), ServiceKey(svc));
 
         check.Status.Should().Be(AppCheckStatus.Warning);
-        check.Detail.Should().Contain(ConnectionProbe.WhyUnsupported(ManagedServiceType.MongoDb));
+        check.Detail.Should().Contain(ConnectionProbe.WhyUnsupported(NoProbeForThis));
     }
 
     // ---- previous ----
@@ -1441,8 +1458,7 @@ public class AppVerifierTests
     }
 
     [Theory]
-    [InlineData(ManagedServiceType.MongoDb)]
-    [InlineData(ManagedServiceType.RabbitMq)]
+    [InlineData(NoProbeForThis)]
     public void Every_reason_a_probe_is_missing_has_its_persian(ManagedServiceType type)
     {
         var sentence = ConnectionProbe.WhyUnsupported(type)!;

@@ -142,8 +142,19 @@ public class ServiceCatalogBrokerTests
     {
         // A button that appears to work and does nothing is worse than one that is not offered —
         // and a control that is simply absent with no reason reads as a bug.
-        Harbora.Infrastructure.Networking.ConnectionProbe.WhyUnsupported(type)
-            .Should().NotBeNullOrWhiteSpace();
         CredentialRotationPlan.WhyUnsupported(type).Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Theory]
+    [InlineData(ManagedServiceType.RabbitMq)]
+    [InlineData(ManagedServiceType.Nats)]
+    public void A_brokers_connection_is_tested_over_its_own_protocol(ManagedServiceType type)
+    {
+        // It used to be explained away instead: "a broker speaks its own protocol". Its image can
+        // speak that protocol, so the Test connection button and a launch's check now ask it.
+        Harbora.Infrastructure.Networking.ConnectionProbe.WhyUnsupported(type).Should().BeNull();
+        Harbora.Infrastructure.Networking.ConnectionProbe
+            .For(type, new ServiceCreds("harbora-svc-queue", ServiceCatalog.All[type].Port, "app", "pw", ""))
+            .Should().NotBeNull();
     }
 }

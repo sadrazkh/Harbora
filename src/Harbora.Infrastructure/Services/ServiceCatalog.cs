@@ -187,7 +187,7 @@ public static class ServiceCatalog
             // exactly the gap this entry closes. Verified against the real image, not paraphrased from
             // memory: the Meilisearch Dockerfile's final stage (getmeili/meilisearch, checked at
             // v1.15.0) is `FROM alpine:3.20` with curl installed, which is what makes the connection
-            // probe below possible rather than a declined "speaks its own protocol" like the brokers.
+            // probe possible with nothing but the image itself, as every engine here now has.
             //
             // One secret, not a pair: MEILI_MASTER_KEY gates every route, and there is no separate
             // username the way even Redis has an (unused) one. See AttachEnv below for what an

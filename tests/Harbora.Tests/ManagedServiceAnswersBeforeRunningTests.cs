@@ -95,19 +95,62 @@ public class ManagedServiceAnswersBeforeRunningTests
         h.Docker.OneOffRequests.Should().ContainSingle();
     }
 
-    [Fact]
-    public async Task An_engine_with_no_shell_client_is_not_asked()
+    /// <summary>
+    /// MongoDB, RabbitMQ and NATS had no probe, so they read Running the moment their container started:
+    /// a MongoDB still creating its root user behind a server bound to localhost, a RabbitMQ still
+    /// booting. Each is held like the others now, and asked with a client its own image has.
+    /// </summary>
+    [Theory]
+    [InlineData(ManagedServiceType.MongoDb, "7", 27017, "mongosh")]
+    [InlineData(ManagedServiceType.RabbitMq, "4-management-alpine", 5672, "erl")]
+    [InlineData(ManagedServiceType.Nats, "2.10-alpine", 4222, "nc")]
+    public async Task The_engines_that_had_no_probe_stay_provisioning_until_they_answer_too(
+        ManagedServiceType type, string version, int port, string client)
     {
         using var h = new ServiceFailureHarness();
         var svc = await SeedMySqlAsync(h);
-        svc.Type = ManagedServiceType.RabbitMq;
-        svc.Version = "3";
+        svc.Type = type;
+        svc.Version = version;
+        svc.InternalPort = port;
         await h.Db.SaveChangesAsync();
+
+        // Not yet, then answered.
+        h.Docker.OneOffExitCodes.Enqueue(1);
+        h.Docker.OneOffExitCodes.Enqueue(0);
+
+        var whileAsking = new List<ServiceStatus>();
+        h.Docker.OnOneOff = _ => whileAsking.Add(h.Db.ManagedServices.IgnoreQueryFilters().AsNoTracking().Single(s => s.Id == svc.Id).Status);
 
         await h.Engine(NoPause).ProvisionAsync(svc.Id, default);
 
+        whileAsking.Should().Equal(ServiceStatus.Provisioning, ServiceStatus.Provisioning);
+        h.Docker.OneOffRequests.Should().AllSatisfy(asked =>
+        {
+            asked.Image.Should().Be($"{Harbora.Infrastructure.Services.ServiceCatalog.All[type].ImageRepo}:{version}", "the client is the engine's own");
+            string.Join(' ', asked.Command).Should().Contain(client);
+            asked.NetworkMode.Should().Be(h.Docker.RunRequests.Single().NetworkName);
+        });
         (await h.ReadServiceAsync(svc.Id)).Status.Should().Be(ServiceStatus.Running);
-        h.Docker.OneOffRequests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(ManagedServiceType.MongoDb, "7")]
+    [InlineData(ManagedServiceType.RabbitMq, "4-management-alpine")]
+    [InlineData(ManagedServiceType.Nats, "2.10-alpine")]
+    public async Task One_of_them_that_never_answers_has_not_come_up(ManagedServiceType type, string version)
+    {
+        using var h = new ServiceFailureHarness();
+        var svc = await SeedMySqlAsync(h);
+        svc.Type = type;
+        svc.Version = version;
+        await h.Db.SaveChangesAsync();
+        h.Docker.OneOffExitCode = 1;
+
+        await h.Engine(NoPause).ProvisionAsync(svc.Id, default);
+
+        var reloaded = await h.ReadServiceAsync(svc.Id);
+        reloaded.Status.Should().Be(ServiceStatus.Failed, "it used to read Running without being asked anything");
+        reloaded.ErrorMessage.Should().Contain("did not answer");
     }
 
     [Fact]
