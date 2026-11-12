@@ -925,33 +925,81 @@
             </div>
         </section>
 
-        @* ---- Git auto-deploy ---- *@
+        @* ---- Git auto-deploy ----
+           A repository of a connected Git account has its push webhook set up by Harbora through the
+           provider (IGitHookService), and this says pushes deploy only when the provider has just listed
+           Harbora's hook, turned on. Anything else keeps the paste, with the reason above it. *@
         @if (app.GitRepository is not null)
         {
-            <section class="rounded-xl border border-line bg-surface p-4">
+            var hooks = (Harbora.Infrastructure.Git.IGitHookService)Context.RequestServices.GetService(typeof(Harbora.Infrastructure.Git.IGitHookService))!;
+            var hook = await hooks.StatusAsync(app.GitRepository.Id, Context.RequestAborted);
+            var mayManageGit = NavigationCapabilities.For(User)(Harbora.Domain.Authorization.Capabilities.GitManage);
+            var canAsk = hook.State is not Harbora.Infrastructure.Git.GitHookState.NotPossible;
+            <section class="rounded-xl border border-line bg-surface p-4" data-app-webhook="@hook.State">
                 <div class="font-semibold mb-2">@(isFa ? "استقرار خودکار (Git)" : "Auto-deploy (Git)")</div>
-                <div class="text-xs text-ink-muted mb-2">
-                    @(isFa ? "با هر push به" : "On push to") <code class="text-ink">@(app.GitRef ?? app.GitRepository.DefaultBranch)</code>
-                    @(app.AutoDeployOnPush
-                        ? (isFa ? "خودکار دیپلوی می‌شود، وقتی Webhook زیر را در مخزن گذاشته باشید" : "auto-deploys, once the webhook below is in your repository")
-                        : (isFa ? "غیرفعال است" : "is off"))
-                </div>
-                <div class="text-xs text-ink-muted">@(isFa ? "آدرس Webhook (در تنظیمات مخزن قرار دهید):" : "Webhook URL (add it in your repo settings):")</div>
-                <code class="block break-all rounded bg-code text-code-ink px-2 py-1 text-xs mt-1">@Context.Request.Scheme://@Context.Request.Host/webhooks/git/@app.GitRepository.Id</code>
-                <div class="text-xs text-ink-muted mt-2">
-                    @(isFa ? "سکرت:" : "Secret:")
-                    @if (ViewBag.RevealWebhookSecret == true)
+                @if (hook.IsConfirmed)
+                {
+                    <div class="text-xs text-ink-muted mb-2">
+                        @(isFa ? "با هر push به" : "On push to") <code class="text-ink">@(app.GitRef ?? app.GitRepository.DefaultBranch)</code>
+                        @(app.AutoDeployOnPush ? (isFa ? "خودکار دیپلوی می‌شود" : "auto-deploys") : (isFa ? "غیرفعال است" : "is off"))
+                    </div>
+                    <p class="flex items-start gap-2 text-sm text-ink" data-app-webhook-confirmed>
+                        <i data-lucide="check-circle-2" class="mt-0.5 h-4 w-4 shrink-0 text-ok"></i>
+                        <span>@(app.AutoDeployOnPush
+                            ? (isFa ? hook.MessageFa : hook.Message)
+                            : (isFa ? "وب‌هوک Harbora روی مخزن هست، ولی استقرار با push برای این اپ خاموش است." : "Harbora's webhook is on the repository, but deploying on push is off for this app."))</span>
+                    </p>
+                    @if (mayManageGit)
                     {
-                        <code class="text-ink break-all">@app.GitRepository.WebhookSecret</code>
+                        <form method="post" action="/git/repos/@app.GitRepository.Id/webhook" class="mt-2">
+                            @Html.AntiForgeryToken()
+                            <input type="hidden" name="back" value="/apps/details/@app.Id" />
+                            <button type="submit" class="text-xs text-accent-text hover:underline">@(isFa ? "دوباره بگذارش" : "Set it up again")</button>
+                        </form>
                     }
-                    else
+                    <details class="mt-2 text-xs text-ink-muted">
+                        <summary class="cursor-pointer select-none hover:text-ink">@(isFa ? "آدرس و سکرت وب‌هوک" : "The webhook's address and secret")</summary>
+                        <code class="block break-all rounded bg-code text-code-ink px-2 py-1 text-xs mt-2" dir="ltr">@hooks.AddressFor(app.GitRepository.Id)</code>
+                        <p class="mt-1">@(isFa ? "سکرت همان است که Harbora روی وب‌هوک گذاشته؛ لازم نیست جایی بنویسیدش." : "The secret is the one Harbora put on the hook; there is nothing to copy.")</p>
+                    </details>
+                }
+                else
+                {
+                    <div class="text-xs text-ink-muted mb-2">
+                        @(isFa ? "با هر push به" : "On push to") <code class="text-ink">@(app.GitRef ?? app.GitRepository.DefaultBranch)</code>
+                        @(app.AutoDeployOnPush
+                            ? (isFa ? "خودکار دیپلوی می‌شود، وقتی Webhook زیر را در مخزن گذاشته باشید" : "auto-deploys, once the webhook below is in your repository")
+                            : (isFa ? "غیرفعال است" : "is off"))
+                    </div>
+                    <p class="flex items-start gap-2 text-xs text-ink mb-2" data-app-webhook-reason>
+                        <i data-lucide="info" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink-muted"></i>
+                        <span>@(isFa ? hook.MessageFa : hook.Message)</span>
+                    </p>
+                    @if (canAsk && mayManageGit)
                     {
-                        @* Only on a click, like the Git page and the storage keys. *@
-                        <code class="text-ink-faint">••••••••</code>
-                        <a href="/apps/details/@app.Id?revealSecret=true" class="text-accent-text hover:underline">@(isFa ? "نمایش" : "Reveal")</a>
+                        <form method="post" action="/git/repos/@app.GitRepository.Id/webhook" class="mb-2">
+                            @Html.AntiForgeryToken()
+                            <input type="hidden" name="back" value="/apps/details/@app.Id" />
+                            <button type="submit" class="rounded-lg bg-surface-2 px-3 py-1.5 text-xs font-semibold text-ink hover:bg-surface-2">@(isFa ? "وب‌هوک را بگذار" : "Add the webhook")</button>
+                        </form>
                     }
-                </div>
-                <p class="text-[11px] text-ink-faint mt-2">@(isFa ? "Content-Type را application/json بگذارید. GitHub/Gitea با امضای HMAC و GitLab با هدر توکن تأیید می‌شوند." : "Use Content-Type application/json. GitHub/Gitea verify by HMAC; GitLab by token header.")</p>
+                    <div class="text-xs text-ink-muted">@(isFa ? "آدرس Webhook (در تنظیمات مخزن قرار دهید):" : "Webhook URL (add it in your repo settings):")</div>
+                    <code class="block break-all rounded bg-code text-code-ink px-2 py-1 text-xs mt-1">@Context.Request.Scheme://@Context.Request.Host/webhooks/git/@app.GitRepository.Id</code>
+                    <div class="text-xs text-ink-muted mt-2">
+                        @(isFa ? "سکرت:" : "Secret:")
+                        @if (ViewBag.RevealWebhookSecret == true)
+                        {
+                            <code class="text-ink break-all">@app.GitRepository.WebhookSecret</code>
+                        }
+                        else
+                        {
+                            @* Only on a click, like the Git page and the storage keys. *@
+                            <code class="text-ink-faint">••••••••</code>
+                            <a href="/apps/details/@app.Id?revealSecret=true" class="text-accent-text hover:underline">@(isFa ? "نمایش" : "Reveal")</a>
+                        }
+                    </div>
+                    <p class="text-[11px] text-ink-faint mt-2">@(isFa ? "Content-Type را application/json بگذارید. GitHub/Gitea با امضای HMAC و GitLab با هدر توکن تأیید می‌شوند." : "Use Content-Type application/json. GitHub/Gitea verify by HMAC; GitLab by token header.")</p>
+                }
             </section>
 
             @* ---- Branch previews ----

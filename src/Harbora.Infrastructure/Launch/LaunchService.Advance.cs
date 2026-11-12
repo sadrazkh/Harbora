@@ -28,7 +28,8 @@ public sealed partial class LaunchService
     {
         var ids = await db.AppLaunches.IgnoreQueryFilters().AsNoTracking()
             .Where(l => InFlight.Contains(l.Status)
-                        || (l.Status == LaunchStatus.Failed && (l.EncryptedGitToken != null || l.ArchivePath != null)))
+                        || (l.Status == LaunchStatus.Failed && (l.EncryptedGitToken != null || l.ArchivePath != null
+                            || (l.ChoicesJson != null && l.ChoicesJson.Contains(LaunchJson.AnswersMarker)))))
             .OrderBy(l => l.StatusChangedAt)
             .Select(l => l.Id)
             .ToListAsync(ct);
@@ -96,7 +97,8 @@ public sealed partial class LaunchService
             launch.Status, launch.SourceKind, clock.UtcNow, launch.StatusChangedAt, launch.UpdatedAt, launch.VerifyStartedAt,
             launch.AppId, LaunchJson.ReadChoices(launch.ChoicesJson)?.Services.Count ?? serviceIds.Count, states,
             launch.DeploymentId, deployment,
-            HoldsLeftovers: launch.EncryptedGitToken is not null || launch.ArchivePath is not null);
+            HoldsLeftovers: launch.EncryptedGitToken is not null || launch.ArchivePath is not null
+                            || LaunchJson.ReadAnswers(launch.ChoicesJson) is not null);
     }
 
     /// <summary>Does what was decided. True when the launch moved, so it may be able to move again.</summary>
@@ -148,11 +150,21 @@ public sealed partial class LaunchService
                     {
                         l.FailureMessage = Clip($"{l.FailureMessage} This launch has closed: start a new one.");
                         l.FailureMessageFa = Clip($"{l.FailureMessageFa} این راه‌اندازی بسته شد: یکی تازه شروع کن.");
+                        return;
                     }
-                    else if (l.ArchivePath is not null)
+
+                    if (l.ArchivePath is not null)
                     {
                         l.FailureMessage = Clip($"{l.FailureMessage} The uploaded code has been removed: upload a new version from the app's page.");
                         l.FailureMessageFa = Clip($"{l.FailureMessageFa} کد آپلودشده پاک شد: نسخهٔ تازه را از صفحهٔ اپ آپلود کن.");
+                    }
+
+                    // A retry is still open to a launch with an app, but it will no longer have what was
+                    // typed, so the names are said now rather than found missing after it. Never a value.
+                    if (LaunchJson.ReadAnswers(l.ChoicesJson) is { Names.Count: > 0 } kept)
+                    {
+                        l.FailureMessage = Clip($"{l.FailureMessage} What you typed for {string.Join(", ", kept.Names)} was not kept past a day: set it on the app's page.");
+                        l.FailureMessageFa = Clip($"{l.FailureMessageFa} آنچه برای {string.Join("، ", kept.Names)} نوشته بودی بیش از یک روز نگه داشته نشد: آن را در صفحهٔ اپ تنظیم کن.");
                     }
                 });
                 return false;

@@ -124,6 +124,24 @@ as zero: a machine behind a v1 node manages its own images, and an inbound agent
 existed answers 404 to the request, so it says *this agent is too old to be swept* — update the agent
 on that server to include it.
 
+Each build also checks out or unpacks its source into `Runtime:WorkDir/<app>/<deployment number>`
+on the `harbora_builds` volume. The pipeline now removes that directory when the deployment ends,
+whether it succeeded or failed; before this, every build ever made stayed there. What an older
+version left behind is swept by the panel itself about ten minutes after it starts and then once a
+day, and **Clean up disk** runs the same sweep and says how many it removed. A directory that a
+deployment still in progress or waiting for approval owns is never touched, and neither is anything
+the sweep does not recognise as a build (`_uploads`, `_launch`, a folder whose name is not a
+deployment number). Every pass logs one line starting `Build directory sweep:`. There is no setting.
+
+The durable job queue (the `Jobs` table) is bounded the same way the other history tables are: the
+nightly retention sweep deletes jobs that finished more than `Retention:JobDays` days ago (default
+`30`, `0` keeps them all; it sits with the other retention settings, described in the `Retention`
+section of `src/Harbora.Web/appsettings.json`), never one still queued or running, and in batches of ten thousand rows so
+that the first pass on an old install — production held 4.2 million — is not one enormous statement.
+PostgreSQL reuses the space those rows held but does not hand it back to the disk on its own; to
+shrink the table file afterwards, run `VACUUM (FULL) "Jobs";` in a quiet moment. It locks the table
+while it runs, so no job is claimed until it finishes.
+
 And one you should not normally touch:
 
 | Variable | Default | What it is |

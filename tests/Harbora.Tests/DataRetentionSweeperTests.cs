@@ -6,6 +6,7 @@ using Harbora.Domain.Auditing;
 using Harbora.Domain.Common;
 using Harbora.Domain.Deployments;
 using Harbora.Domain.Identity;
+using Harbora.Domain.Jobs;
 using Harbora.Domain.Nodes;
 using Harbora.Infrastructure.Maintenance;
 using Harbora.NodeAgent.Contracts;
@@ -100,7 +101,8 @@ public class DataRetentionSweeperTests
 
     private static DataRetentionSweeper NewSweeper(
         HarboraDbContext db, RetentionOptions? options = null, DateTimeOffset? now = null,
-        ILogger<DataRetentionSweeper>? logger = null)
+        ILogger<DataRetentionSweeper>? logger = null,
+        int jobBatchSize = DataRetentionSweeper.DefaultJobDeleteBatchSize)
     {
         // Registered as a singleton instance so the scope the sweeper opens does not dispose the
         // context the test is still holding. The sweeper resolves it exactly as it does in
@@ -113,7 +115,28 @@ public class DataRetentionSweeperTests
             provider.GetRequiredService<IServiceScopeFactory>(),
             Options.Create(options ?? new RetentionOptions()),
             new FixedClock(now ?? Now),
-            logger ?? NullLogger<DataRetentionSweeper>.Instance);
+            logger ?? NullLogger<DataRetentionSweeper>.Instance)
+        {
+            JobDeleteBatchSize = jobBatchSize
+        };
+    }
+
+    /// <summary>
+    /// How many rows each SaveChanges removed, in order. On the in-memory provider one batch of the
+    /// job sweep is one SaveChanges, so this is what "a batch at a time" looks like from outside.
+    /// </summary>
+    private sealed class DeletedPerSave : Microsoft.EntityFrameworkCore.Diagnostics.SaveChangesInterceptor
+    {
+        public List<int> Counted { get; } = [];
+
+        public override ValueTask<Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int>> SavingChangesAsync(
+            Microsoft.EntityFrameworkCore.Diagnostics.DbContextEventData eventData,
+            Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            Counted.Add(eventData.Context!.ChangeTracker.Entries().Count(e => e.State == EntityState.Deleted));
+            return base.SavingChangesAsync(eventData, result, cancellationToken);
+        }
     }
 
     /// <summary>
@@ -242,6 +265,19 @@ public class DataRetentionSweeperTests
                 DeliveryId = Guid.NewGuid(), CreatedAt = Now.AddDays(-89)
             });
 
+        // JobDays defaults to 30. A settled job is aged by when it was queued and when it finished.
+        db.Jobs.AddRange(
+            new Job
+            {
+                Kind = JobKind.Deployment, TargetId = Guid.NewGuid(), Status = JobStatus.Succeeded,
+                CreatedAt = Now.AddDays(-31), FinishedAt = Now.AddDays(-31)
+            },
+            new Job
+            {
+                Kind = JobKind.Deployment, TargetId = Guid.NewGuid(), Status = JobStatus.Succeeded,
+                CreatedAt = Now.AddDays(-29), FinishedAt = Now.AddDays(-29)
+            });
+
         await db.SaveChangesAsync();
     }
 
@@ -272,15 +308,16 @@ public class DataRetentionSweeperTests
         db.AlertDedupMarks.Should().ContainSingle().Which.Key.Should().Be("dedup-new");
         db.UserNotifications.Should().ContainSingle().Which.Title.Should().Be("new");
         db.NotificationDigestEntries.Should().ContainSingle().Which.Title.Should().Be("new");
+        db.Jobs.Should().ContainSingle().Which.CreatedAt.Should().Be(Now.AddDays(-29));
 
-        // Fifteen tables with one row each, plus AppLogLines (2.2, 2026-09 log-retention plan) — always
+        // Sixteen tables with one row each, plus AppLogLines (2.2, 2026-09 log-retention plan) — always
         // reported even at zero, the same "no on/off knob, but still counted" shape IdempotencyRecords
         // already has, since nothing here opted an app into persisted retention.
-        result.Deleted.Should().HaveCount(16);
+        result.Deleted.Should().HaveCount(17);
         result.Deleted[RetentionTables.AppLogLines].Should().Be(0);
         result.Deleted.Where(d => d.Key != RetentionTables.AppLogLines)
             .Should().AllSatisfy(d => d.Value.Should().Be(1));
-        result.TotalDeleted.Should().Be(15);
+        result.TotalDeleted.Should().Be(16);
     }
 
     [Fact]
@@ -298,8 +335,8 @@ public class DataRetentionSweeperTests
         result.Failures.Should().ContainKey(RetentionTables.NodeEvents);
         result.Failures[RetentionTables.NodeEvents].Should().Contain("relation is locked");
 
-        // The other fourteen, plus AppLogLines (2.2, 2026-09 log-retention plan), still ran.
-        result.Deleted.Should().HaveCount(15);
+        // The other fifteen, plus AppLogLines (2.2, 2026-09 log-retention plan), still ran.
+        result.Deleted.Should().HaveCount(16);
         result.Deleted.Should().NotContainKey(RetentionTables.NodeEvents);
         db.DeploymentLogs.Should().ContainSingle();
         db.AuditLogs.Should().ContainSingle();
@@ -325,7 +362,7 @@ public class DataRetentionSweeperTests
         result.Failures.Should().BeEmpty();
         result.KeptForever.Should().Contain(RetentionTables.DeploymentLogs);
         db.DeploymentLogs.Should().HaveCount(2, "a span too long to be a date means keep, not delete");
-        result.Deleted.Should().HaveCount(15, "every other table, plus AppLogLines, was still swept");
+        result.Deleted.Should().HaveCount(16, "every other table, plus AppLogLines, was still swept");
     }
 
     [Fact]
@@ -609,6 +646,80 @@ public class DataRetentionSweeperTests
         parts[0].Should().Contain($"{RetentionTables.AppLogLines}=0").And.NotContain(RetentionTables.AuditLogs);
         parts[1].Should().Contain("kept-forever=1").And.Contain(RetentionTables.AuditLogs)
             .And.NotContain(RetentionTables.AppLogLines);
+    }
+
+    [Fact]
+    public async Task A_job_still_in_the_queue_survives_however_old_it_is()
+    {
+        // That row is the queue. A Pending one a year old can still be waiting out a backoff or behind
+        // another job of the same app; a Running one is a worker's, until JobReconciler settles it.
+        using var db = new HarboraDbContext(NewOptions());
+        db.Jobs.AddRange(
+            new Job { Kind = JobKind.Deployment, TargetId = Guid.NewGuid(), Status = JobStatus.Pending, CreatedAt = Now.AddDays(-400) },
+            new Job
+            {
+                Kind = JobKind.Backup, TargetId = Guid.NewGuid(), Status = JobStatus.Running,
+                CreatedAt = Now.AddDays(-400), StartedAt = Now.AddDays(-400)
+            },
+            new Job
+            {
+                Kind = JobKind.CronRun, TargetId = Guid.NewGuid(), Status = JobStatus.Failed,
+                CreatedAt = Now.AddDays(-400), FinishedAt = Now.AddDays(-400)
+            });
+        await db.SaveChangesAsync();
+
+        var result = await NewSweeper(db).SweepAsync(CancellationToken.None);
+
+        result.Deleted[RetentionTables.Jobs].Should().Be(1);
+        db.Jobs.Select(j => j.Status).Should().BeEquivalentTo([JobStatus.Pending, JobStatus.Running]);
+    }
+
+    [Fact]
+    public async Task Settled_jobs_go_a_batch_at_a_time_until_none_past_the_cutoff_are_left()
+    {
+        // Production held 4.2 million rows here, so the first pass must not be one statement. The
+        // in-memory provider writes each batch with one SaveChanges, so that is what is counted: none
+        // may remove more than the batch size, and between them they must remove everything due.
+        var saves = new DeletedPerSave();
+        using var db = new HarboraDbContext(new DbContextOptionsBuilder<HarboraDbContext>()
+            .UseInMemoryDatabase("retention-" + Guid.NewGuid())
+            .AddInterceptors(saves)
+            .Options);
+
+        Job Settled(JobStatus status, int daysAgo) => new()
+        {
+            Kind = JobKind.FunctionInvoke, TargetId = Guid.NewGuid(), Status = status,
+            CreatedAt = Now.AddDays(-daysAgo), FinishedAt = Now.AddDays(-daysAgo)
+        };
+        db.Jobs.AddRange(Enumerable.Range(40, 5).Select(d => Settled(JobStatus.Succeeded, d)));
+        db.Jobs.AddRange(Enumerable.Range(40, 3).Select(d => Settled(JobStatus.Failed, d)));
+        db.Jobs.Add(Settled(JobStatus.Cancelled, 40));
+        db.Jobs.Add(Settled(JobStatus.Succeeded, 3));
+        db.Jobs.Add(new Job { Kind = JobKind.FunctionInvoke, TargetId = Guid.NewGuid(), Status = JobStatus.Pending, CreatedAt = Now.AddDays(-40) });
+        await db.SaveChangesAsync();
+        saves.Counted.Clear();
+
+        var result = await NewSweeper(db, jobBatchSize: 2).SweepAsync(CancellationToken.None);
+
+        result.Deleted[RetentionTables.Jobs].Should().Be(9);
+        saves.Counted.Should().OnlyContain(n => n <= 2, "no batch removes more than the batch size");
+        // Succeeded 2+2+1, Failed 2+1, Cancelled 1: each status ends on the first short batch.
+        saves.Counted.Should().Equal(2, 2, 1, 2, 1, 1);
+        db.Jobs.Should().HaveCount(2, "the recent settled job and the pending one are not due");
+        db.Jobs.Should().Contain(j => j.Status == JobStatus.Pending);
+    }
+
+    [Fact]
+    public async Task Jobs_kept_for_ever_are_left_alone_and_said_to_be()
+    {
+        using var db = new HarboraDbContext(NewOptions());
+        await SeedBothSidesAsync(db, Guid.NewGuid());
+
+        var result = await NewSweeper(db, new RetentionOptions { JobDays = 0 }).SweepAsync(CancellationToken.None);
+
+        db.Jobs.Should().HaveCount(2);
+        result.Deleted.Should().NotContainKey(RetentionTables.Jobs);
+        result.KeptForever.Should().Contain(RetentionTables.Jobs);
     }
 
     [Fact]

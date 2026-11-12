@@ -25,7 +25,7 @@ namespace Harbora.Tests;
 /// </para>
 /// </summary>
 [Collection(HarboraHttpCollection.Name)]
-public class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
+public partial class LaunchHttpTests : IClassFixture<LaunchPanelFixture>
 {
     private readonly LaunchPanelFixture _fixture;
     private static int _nextUser;

@@ -32,6 +32,12 @@ public sealed class LaunchPanelFixture : IDisposable
 
     public WebApplicationFactory<Program> Panel { get; }
     public FakeLaunchService Launches { get; } = new();
+
+    /// <summary>
+    /// The connected accounts' provider API. Only a workspace a test connects an account in ever asks it,
+    /// so the shared workspace's pages are the paste field they always were.
+    /// </summary>
+    public Harbora.Tests.Fakes.FakeGitProviders GitProviders { get; } = new();
     public RecordingDeploymentEngine Deployments => _root.Deployments;
 
     public Guid WorkspaceId { get; } = Guid.CreateVersion7();
@@ -42,11 +48,14 @@ public sealed class LaunchPanelFixture : IDisposable
 
     public LaunchPanelFixture()
     {
-        Panel = _root.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
+        // A public address, so the app page's webhook block has somewhere to point a provider at.
+        Panel = _root.WithWebHostBuilder(builder => builder.UseSetting("PANEL_DOMAIN", "panel.example.com").ConfigureTestServices(services =>
         {
             services.RemoveAll<ILaunchService>();
             services.AddScoped<ILaunchService>(provider =>
                 new WorkspaceScopedLaunches(Launches, provider.GetRequiredService<ICurrentUser>()));
+            services.RemoveAll<IGitProviderClient>();
+            services.AddSingleton<IGitProviderClient>(GitProviders);
         }));
 
         Seed(db =>

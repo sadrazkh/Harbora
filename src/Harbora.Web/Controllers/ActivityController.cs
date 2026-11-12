@@ -4,6 +4,7 @@ using Harbora.Domain.Common;
 using Harbora.Domain.Jobs;
 using Harbora.Infrastructure.Deployments;
 using Harbora.Infrastructure.Jobs;
+using Harbora.Infrastructure.Maintenance;
 using Harbora.Web.ViewModels;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -43,6 +44,7 @@ public sealed class ActivityController(
     ICurrentUser currentUser,
     IJobQueue jobs,
     IOptions<JobQueueOptions> jobQueueOptions,
+    IOptions<RetentionOptions> retention,
     ISystemClock clock,
     IAuditLogger audit) : Controller
 {
@@ -77,7 +79,12 @@ public sealed class ActivityController(
             TotalCount = total,
             KindFilter = kind,
             StatusFilter = status,
-            QueueExplanations = await QueueExplanationsAsync(entries, ct)
+            QueueExplanations = await QueueExplanationsAsync(entries, ct),
+            // The nightly sweep removes a settled job after this many days, so the page says so
+            // rather than promising every job ever queued. Null when the setting keeps them all.
+            SettledKeptForDays = RetentionRule.CutoffFor(retention.Value.JobDays, clock.UtcNow) is null
+                ? null
+                : retention.Value.JobDays
         });
     }
 

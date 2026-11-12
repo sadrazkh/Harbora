@@ -38,6 +38,13 @@ public sealed record AppCreateRequest
     /// <summary>Stored encrypted on the Git provider row; never printed by <see cref="ToString"/>.</summary>
     public string? GitToken { get; init; }
 
+    /// <summary>
+    /// A connected Git account (GitHub, GitLab, Gitea) of this workspace to read <see cref="CloneUrl"/>
+    /// through, rather than a provider of the app's own. The app then shares that account's row for the
+    /// repository with any other app on it. Refused when the account is gone or the address is not on its host.
+    /// </summary>
+    public Guid? GitProviderId { get; init; }
+
     public string? DockerfilePath { get; init; } = "Dockerfile";
     public string? ComposeFilePath { get; init; }
 
@@ -102,6 +109,8 @@ public sealed record AppNotice(string Message, string MessageFa);
 /// <param name="DeploymentId">The first deployment, when one was queued.</param>
 /// <param name="DeployRefusal">Why the first deployment did not start although it was asked for. The app
 /// itself exists either way.</param>
+/// <param name="Webhook">For a repository of a connected Git account: whether Harbora set its push webhook
+/// up through the provider, and if not, why. Null for every other app, which keeps the manual one.</param>
 public sealed record AppCreateResult(
     Guid AppId,
     string Name,
@@ -110,7 +119,8 @@ public sealed record AppCreateResult(
     AppNotice? AddressNotice,
     string? TemplateAdvice,
     Guid? DeploymentId,
-    ServiceRefusal? DeployRefusal);
+    ServiceRefusal? DeployRefusal,
+    Harbora.Infrastructure.Git.GitHookOutcome? Webhook = null);
 
 /// <summary>
 /// Creating an app — the one path the app form, and the AI agent's "create app" tool after it, both go

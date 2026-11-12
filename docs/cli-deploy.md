@@ -96,7 +96,7 @@ Nothing is created and nothing is charged until you say yes.
 
 | Flag | Effect |
 |---|---|
-| `[PATH]` | The folder to upload. Default: the current one. The same excludes as `harbora deploy`: a real `.env` never leaves your machine |
+| `[PATH]` | The folder to upload. Default: the current one. The same excludes as `harbora deploy`: no env file holding real values leaves your machine |
 | `--git <URL>` | Read this repository instead of uploading a folder |
 | `--ref <BRANCH>` | With `--git`: a branch. Blank means its default branch |
 | `--git-token <TOKEN>` | With `--git`: for a private repository. Also read from `HARBORA_GIT_TOKEN` |
@@ -133,7 +133,7 @@ exists, the **Release task** card on its page in the panel is where to set or ch
 On success from a folder it writes `harbora.yml`, so `harbora deploy` works from then on. It never
 overwrites one that is already there.
 
-A browser takes a zip only, on `/launch` and on an uploaded app's page, because that is where `.env` and
+A browser takes a zip only, on `/launch` and on an uploaded app's page, because that is where env files and
 `node_modules` are left out. A `.tar.gz` sent there is told to send a zip. This command and
 `POST /launch/archive` still send a gzipped tar, which the CLI's packer has already filtered.
 
@@ -183,6 +183,10 @@ It checks, and says what it looked at either way:
   `node Scripts/build/copy-fonts.mjs` — an ordinary source file — and the upload excluded it because
   a folder in the path was named `build`, which broke the image build with no error anywhere in the
   deploy log. See *"Keeping a source folder named `build`"* below.
+- **Env files** *(standalone `harbora doctor` only)* — every env file holding real values that the
+  upload would keep on this machine, and any a `!` line sends instead. A warning when one other than
+  `.env` or `.env.local` stays, because a build may be reading it; see *What is never uploaded*. A
+  Dockerfile that `COPY`s one fails the upload check above, with what to do instead.
 - **Auth** *(standalone `harbora doctor` only, not the automatic deploy preflight)* — a session
   exists for the target server and `whoami` still accepts it.
 
@@ -248,16 +252,87 @@ the server's own explanation when it did not — most often because it had alrea
 Ctrl+C while the log is streaming stops *following*, not the deployment. The CLI says so and prints
 the `harbora cancel` line for it; the panel's deployment page has the same button.
 
-### CI, with no interactive login
+### CI: deploy on every push
 
-```bash
-harbora deploy my-app \
-  --server https://panel.example.com \
-  --token "$HARBORA_TOKEN" \
-  --push --no-follow
+Two files in [`examples/ci/`](../examples/ci/) are ready to copy, one for GitHub Actions and one for
+GitLab CI. Each needs two secrets and nothing else:
+
+1. **A token.** In the panel, open the account menu → **Settings** → **API Tokens**, give it a name
+   (`ci`, say) and press **Create**. It is shown once, so copy it then. It acts as your account, in
+   your personal workspace.
+2. **Two secrets in the repository:** `HARBORA_SERVER`, the panel's address
+   (`https://panel.example.com`), and `HARBORA_TOKEN`, the token. On GitHub they go under *Settings →
+   Secrets and variables → Actions*; on GitLab under *Settings → CI/CD → Variables*, with the token
+   masked.
+3. **Which app.** `harbora deploy` reads `app:` from `harbora.yml`, so commit that file
+   (`harbora init` writes it), or put the slug in the command: `harbora deploy my-app --push …`.
+4. **The file.** `examples/ci/github-actions.yml` becomes `.github/workflows/harbora.yml`;
+   `examples/ci/gitlab-ci.yml` becomes `.gitlab-ci.yml`.
+
+GitHub Actions, without its comments:
+
+```yaml
+name: Deploy to Harbora
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: harbora-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the Harbora CLI
+        run: curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install-cli.sh | bash
+
+      - name: Deploy
+        env:
+          HARBORA_SERVER: ${{ secrets.HARBORA_SERVER }}
+          HARBORA_TOKEN: ${{ secrets.HARBORA_TOKEN }}
+        run: harbora deploy --push --yes --server "$HARBORA_SERVER" --token "$HARBORA_TOKEN"
 ```
 
-Exit code is `0` on success and non-zero on failure, so it gates a pipeline directly.
+GitLab CI, without its comments:
+
+```yaml
+deploy:
+  stage: deploy
+  image: debian:bookworm-slim
+  resource_group: harbora
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates > /dev/null
+    - curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install-cli.sh | bash
+  script:
+    - harbora deploy --push --yes --server "$HARBORA_SERVER" --token "$HARBORA_TOKEN"
+```
+
+What the one command does there:
+
+- `--push` uploads the commit the job checked out, whether or not the app also has a Git remote, so
+  what is deployed is exactly what was pushed. Without it, an app with a Git remote is pulled by the
+  server from its default branch instead.
+- `--server` and `--token` take the place of `harbora login`, so no login is saved on the runner.
+  `--yes` is implied when there is no terminal; it is written out so the command never waits for an
+  answer.
+- It follows the build and exits `0` when the deployment succeeded and `1` when it failed, was
+  cancelled or was rolled back, so a failed deploy fails the job. `--no-follow` returns as soon as the
+  deployment is queued, with `0`, which says nothing about whether it worked.
+- `concurrency` on GitHub and `resource_group` on GitLab run one deploy at a time. Without them, an
+  upload sent while a build of the same app is running is refused with *"A build of this app is still
+  running"*.
+- A committed `.env.production` is in the checkout but is not uploaded (see *What is never uploaded*),
+  and the job's log names it. Put its values in the app's variables.
+
+An app connected to a Git repository can also deploy on every push with no CI at all, from the
+**Auto-deploy (Git)** block on its page.
 
 ### Databases: what your app should read
 
@@ -407,8 +482,33 @@ different rule. Two ways to avoid it:
   loudly if either references a path the upload would drop.
 - Scope your own ignore entries to the root when that is what you mean: `/build` instead of `build`.
 
-`.env` is excluded on purpose: it usually holds local database URLs and API keys. Put production
-values in the app's **Environment Variables**.
+**Env files.** Every env file that holds real values stays on your machine: `.env`, `.env.local`,
+`.env.production`, `.env.staging`, any `.env.<name>`, at any depth. The examples go, because Launch
+reads variable names from them: `.env.example`, `.env.sample`, `.env.template`, `.env.dist`,
+`env.example`, `example.env`, `sample.env`, and any `.env.<name>` ending in `.example`, `.sample`,
+`.template` or `.dist`, such as `.env.local.example`. `harbora deploy` and `harbora launch` name each
+one they kept back, and `harbora doctor` says so before either does. A zip sent from a browser follows
+the same rule, and the deployment's log names what it left out.
+
+Production values belong in the app's **Environment Variables**, and a build reads them from there
+too: on a generated build a public name such as `VITE_` or `NEXT_PUBLIC_` reaches it by itself (see
+*Build-time variables* below). That matters because Vite, Next.js and Create React App read
+`.env.production` while they build, so a project that relied on the file builds without those values
+until they are set on the app.
+
+When a file really has to go, a `!` line naming it lets it through: `!.env.production`, or a path such
+as `!apps/web/.env.production`. Put it in `.dockerignore` when the project has one, because Docker reads
+that file too, and a `.env*` line there would keep the file out of the build even after the CLI sent
+it. Otherwise put it under `ignore:` in `harbora.yml`, quoted: `- "!.env.production"`. Adding a
+`.dockerignore` just for this would replace the `.gitignore` the upload reads. In a zip the project's
+own `.dockerignore`, else its `.gitignore`, is read for it; `harbora.yml` is not. A `!` line naming an
+env file outranks the lines around it, so `.env*` followed by `!.env.example` sends the example. It
+brings back nothing that is not an env file, and never `.env` or `.env.local`. Whatever it sends,
+anybody who can read the build can read.
+
+A Git deploy clones the repository, so a committed `.env.production` is in that build whatever these
+rules say, and so is the committed content `--branch` uploads, which is `git archive` output rather
+than the folder. `--tar` uploads your own archive as it is.
 
 ### How the build is chosen, in order
 
@@ -607,7 +707,7 @@ TOKEN, BASE, APP = "hbr_cli_…", "https://panel.example.com/api/v1", "my-api"
 headers = {"Authorization": f"Bearer {TOKEN}"}
 
 tar = subprocess.run(
-    ["tar", "czf", "-", "--exclude=.git", "--exclude=node_modules", "--exclude=.env", "."],
+    ["tar", "czf", "-", "--exclude=.git", "--exclude=node_modules", "--exclude=.env", "--exclude=.env.*", "."],
     capture_output=True, check=True).stdout
 
 r = requests.post(f"{BASE}/apps/{APP}/deploy/archive", data=tar,
@@ -643,6 +743,7 @@ while True:
 | `409 Conflict` | Another deployment or a rollback is in flight | Wait for it, or cancel it in the panel |
 | Deploy succeeds but the app 502s | The app isn't listening on the configured container port | Bind to `process.env.PORT` (auto-detected builds set it) |
 | Upload is huge / slow | `node_modules` or build output is being packed | Add a `.dockerignore`, or `ignore:` entries |
+| The build is missing what `.env.production` holds | Env files holding real values are not uploaded, and Vite, Next.js and Create React App read that one at build time | Set the values as the app's variables, or let the file through with a `!` line: see *What is never uploaded* |
 | `--branch` deploys stale code | It archives **committed** content | Commit, or use `--push` for the working folder |
 | `Upload … was cut off by the server` | The server refused before reading the body — usually an app name it doesn't recognise, or a token that can't deploy | Run `harbora deploy` and pick from the list; check the token's permissions in the panel |
 | Build succeeds, health check times out, driver stack trace in the log | The app is reaching the database in `appsettings.json` (`localhost`), not the attached one | Attach the database, then read `ConnectionStrings__DefaultConnection` or copy `DATABASE_DSN` under your own key — see *Databases: what your app should read* |

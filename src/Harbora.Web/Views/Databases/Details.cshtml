@@ -450,7 +450,14 @@ else if (moving)
             }
         </p>
 
-        @if (Model.Backups.Count == 0)
+        @if (Model.Backups.Count == 0 && Model.BackupIntervalHours is not null)
+        {
+            @* Round nine: a new database is given its schedule at creation, so "set up backups" would
+               send somebody to make a second one for a backup that is simply not due yet. *@
+            <partial name="Design/_EmptyState" model="@(new EmptyStateModel("cloud-upload",
+                isFa ? "هنوز پشتیبانی گرفته نشده؛ اولی در زمان بالا گرفته می‌شود." : "No backup has been taken yet; the first runs at the time above."))" />
+        }
+        else if (Model.Backups.Count == 0)
         {
             <partial name="Design/_EmptyState" model="@(new EmptyStateModel("cloud-upload",
                 isFa ? "هنوز پشتیبانی گرفته نشده." : "No backup has been taken yet.",
@@ -545,8 +552,12 @@ else if (moving)
 
             @if (Model.CanImport)
             {
+                @* Round nine: the ceiling is stated, and a file over it is refused here before it is sent —
+                   a browser can give up on a large upload the server answered early. *@
                 <form asp-action="Import" asp-route-id="@db.Id" method="post" enctype="multipart/form-data"
-                      data-import-form class="space-y-2 border-t border-line pt-3">
+                      data-import-form class="space-y-2 border-t border-line pt-3"
+                      data-upload-limit data-max-bytes="@Harbora.Web.Controllers.DatabasesController.MaxImportBytes"
+                      data-too-big="@UploadLimit.TooLarge(Harbora.Web.Controllers.DatabasesController.MaxImportBytes, isFa)">
                     @Html.AntiForgeryToken()
                     <p class="text-xs leading-5 text-warn">
                         @(isFa
@@ -554,6 +565,8 @@ else if (moving)
                             : $"Importing overwrites \"{db.Name}\"'s current contents. A safety snapshot is taken automatically first.")
                     </p>
                     <input type="file" name="file" class="form-control text-sm" required />
+                    <p class="text-[11px] text-ink-faint">@UploadLimit.UpTo(Harbora.Web.Controllers.DatabasesController.MaxImportBytes, isFa)</p>
+                    <p class="field-error hidden" data-upload-limit-error></p>
                     <input type="text" name="confirmName" class="form-control text-sm" dir="ltr" autocomplete="off"
                            placeholder="@db.Name" data-import-confirm-name
                            aria-label="@(isFa ? "نام دیتابیس را برای تأیید بنویسید" : "Type the database name to confirm")" />
@@ -1096,7 +1109,7 @@ else if (moving)
                 {
                     <div class="rounded-lg border border-danger bg-danger-soft px-3 py-2 text-xs text-danger"
                          data-spec-service-error="@db.ErrorMessage">
-                        @(isFa ? "علت شکست راه‌اندازی: " : "Why provisioning failed: ")@db.ErrorMessage
+                        @(isFa ? "علت شکست راه‌اندازی: " : "Why provisioning failed: ")@StrandedProvision.InReadersLanguage(db.ErrorMessage, isFa)
                     </div>
                 }
                 <form asp-action="Reprovision" asp-route-id="@db.Id" method="post">

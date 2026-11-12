@@ -511,6 +511,7 @@ internal sealed class CronHarness : IDisposable
         new Harbora.Infrastructure.Billing.BillingGate(
             _db, Options.Create(new Harbora.Infrastructure.Billing.BillingOptions())),
         Options.Create(new HarboraRuntimeOptions()),
+        Options.Create(new Harbora.Infrastructure.Storage.ObjectStorageOptions()),
         Clock,
         NullLogger<CronJobRunner>.Instance);
 

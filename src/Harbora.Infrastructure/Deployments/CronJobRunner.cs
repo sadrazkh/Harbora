@@ -2,6 +2,7 @@ using Harbora.Application.Abstractions;
 using Harbora.Data;
 using Harbora.Domain.Apps;
 using Harbora.Domain.Common;
+using Harbora.Infrastructure.Apps;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -29,6 +30,7 @@ public sealed class CronJobRunner(
     ISecretProtector protector,
     IBillingGate billing,
     IOptions<HarboraRuntimeOptions> options,
+    IOptions<Storage.ObjectStorageOptions> storageOptions,
     ISystemClock clock,
     ILogger<CronJobRunner> logger)
 {
@@ -41,7 +43,9 @@ public sealed class CronJobRunner(
     /// <summary>Runs the job with this id — the path the "run now" button and the job queue take.</summary>
     public async Task RunAsync(Guid appId, CancellationToken ct)
     {
-        var job = await db.Apps.Include(a => a.EnvironmentVariables)
+        // Unfiltered: the queue has no session. Nothing is included here on purpose — what the run's
+        // environment needs is loaded in one place, below, whichever way the run was reached.
+        var job = await db.Apps.IgnoreQueryFilters()
             .FirstOrDefaultAsync(a => a.Id == appId, ct);
 
         // Checked here and not only where the button is: the queue is durable, so a request can be
@@ -145,9 +149,7 @@ public sealed class CronJobRunner(
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(MaxRunTime);
 
-            var env = job.EnvironmentVariables.ToDictionary(
-                v => v.Key,
-                v => v.IsSecret ? SafeUnprotect(protector, v.Value) : v.Value);
+            var env = await EnvironmentForAsync(job.Id, ct);
 
             var exit = await docker.RunOneOffAsync(new DockerOneOffRequest(
                 image!,
@@ -195,6 +197,35 @@ public sealed class CronJobRunner(
         Networking.EnvironmentNetworkResolver.ForAsync(db, job.EnvironmentId, ct);
 
     /// <summary>
+    /// What a deployed container of this app is handed (<c>DeploymentPipeline.BuildEnv</c>): its own
+    /// variables, and every attached config group, database and its read replica, bucket, email
+    /// provider and error tracker, merged and decrypted by the same code.
+    ///
+    /// <para>
+    /// This used to be the typed variables alone, so a job attached to a database never received
+    /// <c>DATABASE_URL</c>, although the job's own page listed it among its variables. Loaded here by
+    /// id, rather than read from whatever <see cref="App"/> the caller handed over, so the schedule and
+    /// the queue cannot load two different graphs: the scheduler's tick loads every job each minute and
+    /// needs none of this for the ones that are not due.
+    /// </para>
+    ///
+    /// <para>
+    /// No <c>PORT</c>. A deployed container is told one only when it takes traffic
+    /// (<see cref="ServicePlan.HasPublicTraffic"/>), and a scheduled job never does. Neither does it
+    /// get the function host's signing secret: that is injected for a generated function app, which is
+    /// a web service and never a scheduled one.
+    /// </para>
+    /// </summary>
+    private async Task<Dictionary<string, string>> EnvironmentForAsync(Guid appId, CancellationToken ct)
+    {
+        var sources = await db.Apps.IgnoreQueryFilters().AsNoTracking()
+            .IncludeEnvironmentSources()
+            .FirstAsync(a => a.Id == appId, ct);
+
+        return EffectiveEnvironmentBuilder.Decrypted(sources, protector, storageOptions.Value.CustomerEndpoint);
+    }
+
+    /// <summary>
     /// Settles runs that a restart interrupted. A row with no finish time is shown as still running,
     /// so without this a job killed mid-run is reported as running for ever — and the "one at a time"
     /// guard above would never let it start again.
@@ -213,11 +244,5 @@ public sealed class CronJobRunner(
         }
         await db.SaveChangesAsync(ct);
         logger.LogInformation("Settled {Count} cron run(s) interrupted by a restart.", stranded.Count);
-    }
-
-    private static string SafeUnprotect(ISecretProtector protector, string value)
-    {
-        try { return protector.Unprotect(value); }
-        catch { return ""; }
     }
 }

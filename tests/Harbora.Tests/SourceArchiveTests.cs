@@ -50,6 +50,20 @@ public class SourceArchiveTests : IDisposable
     }
 
     [Fact]
+    public async Task A_tar_is_the_clis_which_already_chose_its_env_files_so_nothing_is_taken_out_again()
+    {
+        // A .env.production in a push is one a ! line let through on the developer's machine, and
+        // taking it out here would make that line a lie.
+        await using var archive = Archive(("package.json", "{}"), (".env.production", "VITE_API_URL=https://api.example.com"));
+
+        var result = await SourceArchive.ExtractAsync(archive, Dest, default);
+
+        File.Exists(Path.Combine(Dest, ".env.production")).Should().BeTrue();
+        result.EnvFilesLeftOut.Should().BeEmpty();
+        SourceArchive.DescribeEnvFilesLeftOut(result).Should().BeNull();
+    }
+
+    [Fact]
     public async Task Leading_dot_slash_entries_are_handled()
     {
         // tar normally records "./package.json" for a directory-relative archive.

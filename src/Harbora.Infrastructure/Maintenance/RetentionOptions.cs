@@ -134,6 +134,26 @@ public sealed class RetentionOptions
     public int NotificationDigestEntryDays { get; set; } = 90;
 
     /// <summary>
+    /// Settled rows of the durable job queue — Succeeded, Failed or Cancelled. A job still Pending or
+    /// Running is never a candidate however old it is: that row <i>is</i> the queue.
+    ///
+    /// <para>
+    /// The table nothing bounded. On the production server it held 4.2 million rows and 942 MB of a
+    /// 1085 MB database on 2026-11-05, three months after its oldest row. Thirty days, because of who
+    /// reads a settled job: the claim, the queue position, the cancel button, the billing scheduler and
+    /// every reconciler look only for Pending or Running rows, so the one reader left is the Activity
+    /// page, which shows a person what ran. What a deployment, a backup or a billing hour did is kept on
+    /// its own row for as long as that row is kept; the job beside it only says when a worker ran it.
+    /// </para>
+    /// <para>
+    /// The first pass on a table that size is removed a batch at a time rather than in one statement
+    /// (<see cref="DataRetentionSweeper"/>), so it cannot hold one transaction open over millions of
+    /// rows while the worker is claiming from the same table.
+    /// </para>
+    /// </summary>
+    public int JobDays { get; set; } = 30;
+
+    /// <summary>
     /// The hour (UTC, 0–23) the nightly sweep runs at. Defaults to 03:00 UTC.
     ///
     /// <para>

@@ -4,6 +4,7 @@ using Harbora.Domain.Auditing;
 using Harbora.Domain.Common;
 using Harbora.Domain.Deployments;
 using Harbora.Domain.Identity;
+using Harbora.Domain.Jobs;
 using Harbora.Domain.Logging;
 using Harbora.Domain.Nodes;
 using Harbora.NodeAgent.Contracts;
@@ -356,4 +357,40 @@ public static class RetentionRule
     /// </summary>
     public static Expression<Func<AppLogLine, bool>> AppLogLinesToDelete(Guid appId, DateTimeOffset cutoff) =>
         line => line.AppId == appId && line.Timestamp < cutoff;
+
+    /// <summary>
+    /// The statuses a job never leaves — <see cref="Job.IsTerminal"/>'s three. The sweeper deletes one
+    /// of them at a time (see <c>DataRetentionSweeper.SweepJobsAsync</c>); the rule below holds all
+    /// three, so whatever the sweeper narrows it to stays inside them.
+    /// </summary>
+    public static readonly IReadOnlyList<JobStatus> SettledJobStatuses =
+        [JobStatus.Succeeded, JobStatus.Failed, JobStatus.Cancelled];
+
+    /// <summary>
+    /// Settled jobs queued and finished before the cutoff.
+    ///
+    /// <para>
+    /// <b>Safety.</b> A Pending or Running row is never a candidate, whatever its age: it is the queue
+    /// itself. The worker claims it, <c>JobReconciler</c> settles a Running one a restart left behind,
+    /// and a cancel finds the live row by its target. A Pending row can be old for a reason — waiting
+    /// out a retry backoff, or behind another job of the same app — and deleting it would drop the work
+    /// without a word. Status is spelled out rather than going through <see cref="Job.IsTerminal"/>,
+    /// which is C# and has to become SQL here; the two must agree. A settled row is never re-run (a
+    /// retry goes back to Pending before it settles, never after), so a row cannot become live again
+    /// between being selected and being deleted.
+    /// </para>
+    /// <para>
+    /// Age is the queue time, <c>CreatedAt</c>, because that is what the <c>(Status, CreatedAt)</c>
+    /// index the worker claims through is ordered by, and the finish has to be past the cutoff too, so
+    /// a job that waited weeks for a worker is not deleted the night it finished. Nothing that decides
+    /// anything reads a settled job: every reader of this table asks for Pending or Running rows, and
+    /// the one that does not, the Activity page, only shows them to a person.
+    /// </para>
+    /// </summary>
+    public static Expression<Func<Job, bool>> JobsToDelete(DateTimeOffset cutoff) =>
+        job => (job.Status == JobStatus.Succeeded
+                || job.Status == JobStatus.Failed
+                || job.Status == JobStatus.Cancelled)
+               && job.CreatedAt < cutoff
+               && (job.FinishedAt == null || job.FinishedAt < cutoff);
 }

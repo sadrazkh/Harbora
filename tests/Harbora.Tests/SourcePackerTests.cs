@@ -134,14 +134,121 @@ public class SourcePackerTests : IDisposable
     }
 
     [Fact]
-    public void Comments_blank_lines_and_negations_are_skipped()
+    public void Comments_and_blank_lines_are_skipped_and_a_negation_keeps_its_bang()
     {
         File.WriteAllText(Path.Combine(_root, ".gitignore"),
             "# a comment\n\n  \nbuild-output\n!keep-me\n/leading-slash/\n");
 
         var patterns = SourcePacker.LoadIgnorePatterns(_root);
 
-        patterns.Should().BeEquivalentTo(["build-output", "leading-slash"]);
+        // Kept so that one naming an env file can let it through; it excludes nothing.
+        patterns.Should().BeEquivalentTo(["build-output", "!keep-me", "leading-slash"]);
+        Excluded("keep-me", [.. patterns]).Should().BeFalse();
+    }
+
+    // ---- env files ---------------------------------------------------------------------------
+
+    [Theory]
+    [InlineData(".env.production")]
+    [InlineData(".env.staging")]
+    [InlineData("apps/web/.env.development")]
+    [InlineData(".env.production.local")]
+    public void Every_env_file_holding_real_values_stays_home_with_no_ignore_file(string path)
+    {
+        // A folder that was never in Git has no ignore file to name these, which is exactly when
+        // they used to go: only .env and .env.local were on the built-in list.
+        SourcePacker.DescribeExclusion(path, []).Should().Be(SourcePacker.EnvFileRule);
+    }
+
+    [Theory]
+    [InlineData(".env.example")]
+    [InlineData("apps/api/.env.sample")]
+    [InlineData(".env.local.example")]
+    [InlineData("example.env")]
+    [InlineData(".envrc")]
+    public void Example_env_files_are_still_packed_because_launch_reads_the_variable_names_in_them(string path)
+    {
+        Excluded(path).Should().BeFalse();
+    }
+
+    [Fact]
+    public void A_bang_line_lets_one_env_file_through_and_never_env_itself()
+    {
+        string[] ignore = ["!.env.production", "!.env", "!.env.local"];
+
+        Excluded(".env.production", ignore).Should().BeFalse();
+        Excluded(".env.staging", ignore).Should().BeTrue();
+        Excluded(".env", ignore).Should().BeTrue("the do-not-change list says .env is never uploaded");
+        Excluded(".env.local", ignore).Should().BeTrue("harbora env pull writes an app's decrypted secrets there");
+    }
+
+    [Fact]
+    public void A_bang_line_outranks_the_wildcard_above_it_as_git_and_docker_read_them()
+    {
+        File.WriteAllText(Path.Combine(_root, ".gitignore"), ".env*\n!.env.example\n");
+        var ignore = SourcePacker.LoadIgnorePatterns(_root);
+
+        // Until now the negation was dropped and .env* took the example with it, so Launch from a
+        // folder with this very common .gitignore had no variable names to read.
+        SourcePacker.DescribeExclusion(".env.example", ignore).Should().BeNull();
+        SourcePacker.DescribeExclusion(".env.production", ignore).Should().Be(SourcePacker.EnvFileRule);
+    }
+
+    [Fact]
+    public void A_negation_still_brings_back_nothing_but_an_env_file()
+    {
+        Excluded("debug.log", "*.log", "!debug.log").Should().BeTrue();
+    }
+
+    [Fact]
+    public void A_folder_called_env_is_still_left_out_as_the_virtualenv_it_usually_is()
+    {
+        SourcePacker.DescribeExclusion(".env/lib/python3.12/site.py", []).Should().Be("built-in rule '.env'");
+    }
+
+    [Fact]
+    public async Task Packing_names_each_env_file_it_kept_and_sends_one_harbora_yml_lets_through()
+    {
+        File.WriteAllText(Path.Combine(_root, "package.json"), "{}");
+        File.WriteAllText(Path.Combine(_root, ".env"), "SECRET=hunter2");
+        File.WriteAllText(Path.Combine(_root, ".env.production"), "STRIPE_SECRET_KEY=sk_live_real");
+        File.WriteAllText(Path.Combine(_root, ".env.staging"), "VITE_API_URL=https://staging.example.com");
+        File.WriteAllText(Path.Combine(_root, ".env.example"), "STRIPE_SECRET_KEY=");
+        Directory.CreateDirectory(Path.Combine(_root, "node_modules", "pkg"));
+        File.WriteAllText(Path.Combine(_root, "node_modules", "pkg", ".env.production"), "X=1");
+
+        var config = ProjectConfig.Parse(["ignore:", "  - \"!.env.staging\""]);
+        var packed = await SourcePacker.PackAsync(_root, config);
+        try
+        {
+            packed.Excluded.Where(e => e.EnvFile).Select(e => e.Path)
+                .Should().BeEquivalentTo([".env", ".env.production"]);
+            packed.Excluded.Single(e => e.Path == "node_modules/pkg/.env.production").EnvFile
+                .Should().BeFalse("it went with node_modules, and no build read it from there");
+
+            var sent = new List<string>();
+            await using (var file = File.OpenRead(packed.ArchivePath))
+            await using (var gz = new System.IO.Compression.GZipStream(file, System.IO.Compression.CompressionMode.Decompress))
+            await using (var tar = new System.Formats.Tar.TarReader(gz))
+                while (await tar.GetNextEntryAsync() is { } entry) sent.Add(entry.Name);
+
+            sent.Should().BeEquivalentTo(["package.json", ".env.staging", ".env.example"]);
+        }
+        finally { File.Delete(packed.ArchivePath); }
+    }
+
+    [Fact]
+    public void Doctor_is_told_which_env_files_go_and_which_stay_by_the_packers_own_decision()
+    {
+        File.WriteAllText(Path.Combine(_root, ".env"), "A=1");
+        File.WriteAllText(Path.Combine(_root, ".env.production"), "A=1");
+        File.WriteAllText(Path.Combine(_root, ".env.example"), "A=");
+        File.WriteAllText(Path.Combine(_root, ".dockerignore"), "!.env.production\n");
+        Directory.CreateDirectory(Path.Combine(_root, "node_modules"));
+        File.WriteAllText(Path.Combine(_root, "node_modules", ".env.staging"), "A=1");
+
+        SourcePacker.SurveyEnvFiles(_root, new ProjectConfig())
+            .Should().Equal((".env", false), (".env.production", true));
     }
 
     [Fact]

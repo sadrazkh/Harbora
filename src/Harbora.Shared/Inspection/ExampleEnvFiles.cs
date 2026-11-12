@@ -9,8 +9,8 @@ internal sealed record ExampleVar(string Name, string Value, string File);
 /// <summary>Reads the example env files, and only those: <c>.env</c> is not on this list and nothing else in the inspector reads env files.</summary>
 internal static class ExampleEnvFiles
 {
-    private static readonly string[] Names =
-        [".env.example", ".env.sample", ".env.template", ".env.dist", "env.example", "example.env", "sample.env"];
+    /// <summary>The same list the upload rule keeps sending (<see cref="EnvFiles"/>), or Launch would ask about nothing.</summary>
+    private static IReadOnlyList<string> Names => EnvFiles.ExampleNames;
 
     private static readonly Regex Assignment = new(
         @"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$", RegexOptions.CultureInvariant | RegexOptions.Singleline);

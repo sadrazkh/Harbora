@@ -529,6 +529,9 @@ public sealed partial class LaunchService
         // What the source was actually read from, so a repository on master does not get the form's main.
         GitRef = launch.SourceKind == LaunchSourceKind.Git ? launch.ResolvedBranch ?? launch.GitRef : null,
         GitToken = token,
+        // Read through a connected account, the app is that account's too: no provider of its own, and
+        // a repository row a second app on the same repository will share.
+        GitProviderId = launch.SourceKind == LaunchSourceKind.Git ? LaunchJson.ReadStored(launch.InspectionJson).GitProviderId : null,
         RootDirectory = choices.RootDirectory,
         ContainerPort = choices.ContainerPort,
         EnvironmentId = choices.EnvironmentId,

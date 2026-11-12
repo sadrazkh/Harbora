@@ -4,6 +4,7 @@ using Harbora.Domain.Backups;
 using Harbora.Domain.Common;
 using Harbora.Infrastructure.Backups;
 using Harbora.Infrastructure.Services;
+using Harbora.Web.Infrastructure;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -40,8 +41,9 @@ public sealed partial class DatabasesController
     /// Generous but bounded — a database dump can legitimately be large, but an unbounded upload is
     /// disk nobody asked to spend. Matches the shape of <c>VolumeFileService.MaxFileBytes</c>'s own
     /// refusal without borrowing its (much smaller) limit, which exists for arbitrary volume files.
+    /// Internal so the pages that state it and the tests that hold the attributes to it read this one.
     /// </summary>
-    private const long MaxImportBytes = 2L * 1024 * 1024 * 1024;
+    internal const long MaxImportBytes = 2L * 1024 * 1024 * 1024;
 
     /// <summary>
     /// Queues a self-serve export of this database's current contents.
@@ -139,7 +141,11 @@ public sealed partial class DatabasesController
     /// </summary>
     [HttpPost("{id:guid}/import")]
     [ValidateAntiForgeryToken]
-    [RequestSizeLimit(MaxImportBytes + 1024 * 1024)]
+    // All three, or the form reader's 128 MB default refuses first, inside the antiforgery check, as
+    // a bare 400 — see UploadLimit.
+    [RequestSizeLimit(MaxImportBytes + UploadLimit.FormOverheadBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = MaxImportBytes + UploadLimit.FormOverheadBytes)]
+    [RefuseOversizedUpload(MaxImportBytes, nameof(Details))]
     [Authorize(Policy = Capabilities.BackupsRestore)]
     public async Task<IActionResult> Import(Guid id, IFormFile? file, string? confirmName, CancellationToken ct)
     {
@@ -163,9 +169,7 @@ public sealed partial class DatabasesController
         }
         if (file.Length > MaxImportBytes)
         {
-            TempData["Error"] = IsFa
-                ? $"فایل بزرگ‌تر از {MaxImportBytes / 1024 / 1024 / 1024} گیگابایت است."
-                : $"The file is larger than {MaxImportBytes / 1024 / 1024 / 1024} GB.";
+            TempData["Error"] = UploadLimit.TooLarge(MaxImportBytes, IsFa);
             return RedirectToAction(nameof(Details), new { id });
         }
 

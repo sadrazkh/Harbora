@@ -110,6 +110,40 @@ public class DatabaseCreateHttpTests(HarboraHttpFixture fixture)
             "the page the create redirects to has to render");
     }
 
+    /// <summary>
+    /// Round nine: the booted panel's own wiring gives a database made on the form its daily backup,
+    /// and the page it lands on says so. Placed on this test's own server, because the shared panel
+    /// holds servers other tests seeded, and the scheduler's choice among them is not this test's.
+    /// </summary>
+    [Fact]
+    public async Task Creating_a_database_gives_it_a_daily_backup_and_its_page_says_so()
+    {
+        var (workspaceId, sizeKey) = GivenAWorkspaceThatCanCreate("backup");
+        var serverId = Panel.Read(db => db.Servers.AsNoTracking().Single(s => s.Name == "local-backup").Id);
+        var client = await OwnerOf(workspaceId, "db-create-backup@example.com", "203.0.113.184", english: true);
+        var token = await client.AntiforgeryTokenFrom("/databases/create");
+
+        var response = await client.PostFormAsync("/databases/create", token,
+            ("Name", "Ledger"), ("Type", nameof(ManagedServiceType.PostgreSql)), ("InstanceSizeKey", sizeKey),
+            ("ServerId", serverId.ToString()));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Found);
+        var service = Panel.Read(db => db.ManagedServices.IgnoreQueryFilters().AsNoTracking()
+            .Single(s => s.WorkspaceId == workspaceId));
+        var schedule = Panel.Read(db => db.BackupSchedules.IgnoreQueryFilters().AsNoTracking()
+            .Single(s => s.WorkspaceId == workspaceId));
+        schedule.TargetRef.Should().Be(service.Id.ToString());
+        schedule.IntervalHours.Should().Be(24);
+        schedule.RetentionCount.Should().Be(7);
+        schedule.NextRunAt.Should().NotBeNull("a schedule with none is due on the scheduler's next tick");
+        Panel.Read(db => db.BackupDestinations.IgnoreQueryFilters().AsNoTracking()
+            .Single(d => d.WorkspaceId == workspaceId).Id).Should().Be(schedule.DestinationId);
+
+        var page = await RenderedTextAsync(await client.GetAsync(response.RedirectPath()));
+        page.Should().Contain("Ledger is backed up every day and the last seven backups are kept")
+            .And.Contain("Every 24 hours");
+    }
+
     [Fact]
     public async Task A_name_already_taken_re_renders_the_form_with_the_refusal_and_creates_nothing()
     {

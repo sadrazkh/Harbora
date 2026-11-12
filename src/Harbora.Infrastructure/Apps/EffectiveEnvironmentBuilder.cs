@@ -1,5 +1,6 @@
 using Harbora.Application.Abstractions;
 using Harbora.Domain.Apps;
+using Microsoft.EntityFrameworkCore;
 
 namespace Harbora.Infrastructure.Apps;
 
@@ -114,5 +115,51 @@ public static class EffectiveEnvironmentBuilder
             attachedDatabases,
             attachedErrorTracking,
             attachedReplicas);
+    }
+
+    /// <summary>
+    /// What a container is handed: <see cref="Compute"/>, with every secret decrypted. A value this
+    /// panel cannot decrypt (an old key, a damaged row) becomes empty rather than failing the whole
+    /// environment over one entry, which is what <c>DeploymentPipeline.BuildEnv</c> has always done.
+    ///
+    /// <para>
+    /// Shared so that a deployed container and a scheduled run cannot be handed two different
+    /// environments. <c>CronJobRunner</c> used to build its own from the app's typed variables alone,
+    /// so a job attached to a database never received <c>DATABASE_URL</c> while its own page listed
+    /// it — and a backup script that cannot find its database looks like a script with a bug in it.
+    /// </para>
+    /// </summary>
+    public static Dictionary<string, string> Decrypted(
+        App app, ISecretProtector protector, string storageCustomerEndpoint) =>
+        Compute(app, protector, storageCustomerEndpoint)
+            .ToDictionary(e => e.Key, e => e.IsSecret ? SafeUnprotect(protector, e.Value) : e.Value);
+
+    /// <summary>
+    /// Everything <see cref="Compute"/> reads, loaded with the app: the attachments of every kind and
+    /// the rows behind them, to the depth each one needs (a database's logical database and its read
+    /// replicas, a group's entries).
+    ///
+    /// <para>
+    /// For a caller that has nothing else to load, so it cannot miss one. The scheduled-job runner
+    /// reaches an app two ways, the scheduler loading it and the queue loading it by id, and two
+    /// hand-written lists of Includes are how one of them came to give a job less than the other —
+    /// or than a deployment. An attachment kind added to <see cref="Compute"/> belongs here as well.
+    /// </para>
+    /// </summary>
+    public static IQueryable<App> IncludeEnvironmentSources(this IQueryable<App> apps) =>
+        apps
+            .Include(a => a.EnvironmentVariables)
+            .Include(a => a.ConfigGroups).ThenInclude(cg => cg.ConfigGroup!).ThenInclude(g => g.Entries)
+            .Include(a => a.StorageBuckets).ThenInclude(sb => sb.StorageBucket)
+            .Include(a => a.EmailProviders).ThenInclude(ep => ep.EmailProvider)
+            .Include(a => a.ManagedServices).ThenInclude(ms => ms.ManagedService)
+            .Include(a => a.ManagedServices).ThenInclude(ms => ms.Database)
+            .Include(a => a.ManagedServices).ThenInclude(ms => ms.ManagedService!).ThenInclude(m => m.Replicas)
+            .Include(a => a.ErrorTrackingProviders).ThenInclude(et => et.ErrorTrackingProvider);
+
+    private static string SafeUnprotect(ISecretProtector protector, string ciphertext)
+    {
+        try { return protector.Unprotect(ciphertext); }
+        catch { return string.Empty; }
     }
 }

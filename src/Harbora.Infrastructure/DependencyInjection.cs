@@ -81,6 +81,9 @@ public static class DependencyInjection
         services.AddScoped<IGitProviderClient, Git.GitProviderClient>();
         services.AddScoped<IGitWebhookProcessor, Git.GitWebhookProcessor>();
         services.AddScoped<IGitOAuthService, Git.GitOAuthService>();
+        services.AddScoped<Git.GitAccounts>();
+        services.AddSingleton<Git.GitHookStatusCache>();
+        services.AddScoped<Git.IGitHookService, Git.GitHookService>();
 
         // Security — resolve the master key fail-closed (ADR-009 / doc 10 §2.2): Production must
         // supply a key; only Development may fall back to the insecure dev key (with a loud warning).
@@ -163,6 +166,9 @@ public static class DependencyInjection
         // process), so it is settled as the panel starts — or its conversation could never be deleted. A
         // startup reconciler like the ones above, so it is registered above the gate, as the line below asks.
         services.AddHostedService<Agent.AgentPlanStartupReconciler>();
+        // Round nine: a database a restart left reading Provisioning is set going again or failed with
+        // a sentence, above the gate like the others, and swept again every few minutes after it.
+        services.AddHostedService<Services.StrandedProvisionReconciler>();
         // Lets the job worker start claiming. Hosted services start in registration order, so every
         // startup reconciler — including any added later — must be registered ABOVE this line; that
         // is the whole guarantee, and it is on the reconciler's registration, not on this one.
@@ -329,6 +335,8 @@ public static class DependencyInjection
         // Round six, phase 0b (in-panel agent): database creation, removal and attach/detach, moved out
         // of DatabasesController so the panel and the agent's tools run one set of checks and audits.
         services.AddScoped<Services.IDatabaseProvisioningService, Services.DatabaseProvisioningService>();
+        // Round nine: the daily backup every new database is given, after its creation has committed.
+        services.AddScoped<Services.AutomaticDatabaseBackup>();
         services.AddScoped<Services.IDatabaseAttachmentService, Services.DatabaseAttachmentService>();
         // Round six, wave B, agent G (in-panel agent): the assistant's project and database write tools,
         // each over the service the matching ProjectsController/DatabasesController action calls. Here,
@@ -373,6 +381,11 @@ public static class DependencyInjection
         // Below the gate opener for the same reason the retention sweeper is — a timer, not a startup
         // reconciler — and it never throws into the host, so it cannot stop the panel starting.
         services.AddHostedService<Maintenance.DanglingImageSweeper>();
+        // Build directories nothing owns any more — what older versions left on the harbora_builds
+        // volume, and whatever a crash leaves now that the pipeline removes its own. Daily, first pass
+        // ten minutes after start, and Clean up disk runs the same sweep on demand.
+        services.AddScoped<Maintenance.BuildDirectorySweep>();
+        services.AddHostedService<Maintenance.BuildDirectorySweeper>();
 
         // 2.2 (2026-09 log-retention plan): persisted per-app log retention, searchable by
         // LogsController after the container that wrote it is gone. The disk-budget half of
