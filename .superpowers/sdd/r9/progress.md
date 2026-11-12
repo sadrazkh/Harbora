@@ -55,3 +55,16 @@ worktree and brief, telling it to read git status and git diff first because hal
 
 The owner said to continue. All seven agents were resumed from their own transcripts, each told to read
 git status first and trust the disk. Worktrees were unchanged since the pause.
+
+## The three Fable agents held, 2026-11-12
+
+The owner said to commit the Fable tasks where they stand and do the rest later, and to keep the Opus tasks
+going until told otherwise. E, F and G were stopped and their work committed. Each worktree is clean.
+
+| Agent | Head | What is committed | What is left |
+|---|---|---|---|
+| E | a67abd9 | 81b7086 the checks after a deployment and the offer to go back; a67abd9 a checkpoint of refinements and a just-started HTTP test, not built or tested | finish the HTTP tests, full test run, report |
+| F | 3e8effb | 48643ed readiness and connection checks for MongoDB, RabbitMQ, NATS; 3e8effb the proof extended to the new stacks and engines | 3e8effb was pushed to proof/r9 and started a run nobody has read yet; read it, fix what it shows, repeat; report |
+| G | e059b1d | b59ad32 the panel side; 80f44b9 the CLI side; e059b1d a checkpoint of the guides and the token workspace lookup with tests in progress, not built or tested | finish those tests, full test run, report |
+
+The remote branch proof/r9 exists and is left there. A, B, C and D (Opus) keep running.
