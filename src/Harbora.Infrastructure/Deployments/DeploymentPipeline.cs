@@ -866,6 +866,40 @@ public sealed class DeploymentPipeline(
                     }, CancellationToken.None),
                 "event subscriptions");
         }
+        finally
+        {
+            // Every way out of the work above ends here: success, failure, cancellation, a deadline.
+            // The image is the build's only product (see Maintenance.BuildDirectories for what was
+            // checked), so its directory goes now; before this, every build ever made stayed on the
+            // harbora_builds volume. Nothing here can change what happened to the deployment.
+            RemoveBuildDirectory(app, deployment);
+        }
+    }
+
+    /// <summary>Where this deployment's source is put on disk, by every way of getting it there.</summary>
+    private string BuildDirectoryOf(App app, Deployment deployment) =>
+        Maintenance.BuildDirectories.For(_opt.WorkDir, app.Slug, deployment.Number);
+
+    /// <summary>
+    /// Removes this deployment's build directory, if it made one. Housekeeping, so a failure is a
+    /// warning in the host log and nothing more: the daily <see cref="Maintenance.BuildDirectorySweeper"/>
+    /// takes whatever is left.
+    /// </summary>
+    private void RemoveBuildDirectory(App app, Deployment deployment)
+    {
+        var directory = BuildDirectoryOf(app, deployment);
+        if (!Directory.Exists(directory)) return;
+
+        try
+        {
+            Maintenance.BuildDirectories.Remove(_opt.WorkDir, directory);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            logger.LogWarning(ex,
+                "Deployment #{Number} of {Slug} has finished, and its build directory could not be removed.",
+                deployment.Number, app.Slug);
+        }
     }
 
     /// <summary>
@@ -1042,7 +1076,7 @@ public sealed class DeploymentPipeline(
 
         var token = app.GitRepository.Provider?.EncryptedCredential is { } enc && enc.Length > 0
             ? SafeUnprotect(enc) : null;
-        var workDir = Path.Combine(_opt.WorkDir, app.Slug, deployment.Number.ToString());
+        var workDir = BuildDirectoryOf(app, deployment);
         var gitRef = deployment.GitRef ?? app.GitRepository.DefaultBranch;
 
         await log(LogStream.System, $"Checking out {app.GitRepository.FullName}@{gitRef} …");
@@ -1271,7 +1305,7 @@ public sealed class DeploymentPipeline(
         App app, Deployment deployment, IProgress<string> buildLog,
         Func<LogStream, string, Task> log, CancellationToken ct)
     {
-        var workDir = Path.Combine(_opt.WorkDir, app.Slug, deployment.Number.ToString());
+        var workDir = BuildDirectoryOf(app, deployment);
 
         if (!string.IsNullOrWhiteSpace(deployment.SourceArchivePath))
         {
@@ -1318,7 +1352,7 @@ public sealed class DeploymentPipeline(
                 "This app deploys from code pushed with `harbora deploy`, but no source archive was " +
                 "uploaded for this deployment. Run `harbora deploy` from your project folder.");
 
-        var workDir = Path.Combine(_opt.WorkDir, app.Slug, deployment.Number.ToString());
+        var workDir = BuildDirectoryOf(app, deployment);
         if (Directory.Exists(workDir)) Directory.Delete(workDir, recursive: true);
 
         await log(LogStream.System, "Unpacking uploaded source …");
@@ -1420,7 +1454,7 @@ public sealed class DeploymentPipeline(
             throw new InvalidOperationException(
                 "This function app has no functions yet. Add one on the app's Code tab, then publish.");
 
-        var workDir = Path.Combine(_opt.WorkDir, app.Slug, deployment.Number.ToString());
+        var workDir = BuildDirectoryOf(app, deployment);
         if (Directory.Exists(workDir)) Directory.Delete(workDir, recursive: true);
         Directory.CreateDirectory(workDir);
 
@@ -1587,12 +1621,11 @@ public sealed class DeploymentPipeline(
         // duplicated here and in AppsController.Details, kept in step only by a matching comment at
         // each site. Harbora.Infrastructure.Apps.EffectiveEnvironmentBuilder is now the one place —
         // also called by ApiV1Controller.Env (`harbora env pull`), so ciphertext stays ciphertext
-        // (ConfigGroupMerge's own contract); decrypted exactly once, below, where every other
-        // IsSecret entry in the merge is (SafeUnprotect(e.Value)).
-        var merged = Harbora.Infrastructure.Apps.EffectiveEnvironmentBuilder.Compute(
+        // (ConfigGroupMerge's own contract); decrypted exactly once, by Decrypted, for every
+        // IsSecret entry in the merge. That half is shared with CronJobRunner, so a scheduled run is
+        // handed what a container of the same app is.
+        var env = Harbora.Infrastructure.Apps.EffectiveEnvironmentBuilder.Decrypted(
             app, protector, _storageOpt.CustomerEndpoint);
-
-        var env = merged.ToDictionary(e => e.Key, e => e.IsSecret ? SafeUnprotect(e.Value) : e.Value);
 
         // A function host refuses an unsigned invocation, so the secret has to reach the container —
         // and it is injected here rather than stored as an ordinary variable so nobody can rename,

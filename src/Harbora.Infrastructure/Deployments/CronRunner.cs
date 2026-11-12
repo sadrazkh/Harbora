@@ -58,8 +58,10 @@ public sealed class CronRunner(IServiceScopeFactory scopeFactory, ILogger<CronRu
         var runner = scope.ServiceProvider.GetRequiredService<CronJobRunner>();
         var now = clock.UtcNow;
 
-        var jobs = await db.Apps
-            .Include(a => a.EnvironmentVariables)
+        // Unfiltered, because this has no session. Nothing is included: a job that is due has its
+        // whole environment loaded by CronJobRunner itself, the same way a "run now" from the queue
+        // does, so the two cannot drift apart — and every other job this tick reads costs one row.
+        var jobs = await db.Apps.IgnoreQueryFilters()
             .Where(a => a.Kind == ServiceKind.Cron
                         && a.CronExpression != null && a.CronExpression != ""
                         && a.Status != AppStatus.Stopped)

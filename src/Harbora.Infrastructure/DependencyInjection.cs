@@ -373,6 +373,11 @@ public static class DependencyInjection
         // Below the gate opener for the same reason the retention sweeper is — a timer, not a startup
         // reconciler — and it never throws into the host, so it cannot stop the panel starting.
         services.AddHostedService<Maintenance.DanglingImageSweeper>();
+        // Build directories nothing owns any more — what older versions left on the harbora_builds
+        // volume, and whatever a crash leaves now that the pipeline removes its own. Daily, first pass
+        // ten minutes after start, and Clean up disk runs the same sweep on demand.
+        services.AddScoped<Maintenance.BuildDirectorySweep>();
+        services.AddHostedService<Maintenance.BuildDirectorySweeper>();
 
         // 2.2 (2026-09 log-retention plan): persisted per-app log retention, searchable by
         // LogsController after the container that wrote it is gone. The disk-budget half of

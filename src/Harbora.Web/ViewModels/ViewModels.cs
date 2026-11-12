@@ -260,6 +260,12 @@ public sealed class ActivityPageViewModel
     public Harbora.Domain.Jobs.JobStatus? StatusFilter { get; set; }
 
     /// <summary>
+    /// How long a finished job stays listed before the retention sweep removes it
+    /// (<c>Retention:JobDays</c>), or null when finished jobs are kept for ever.
+    /// </summary>
+    public int? SettledKeptForDays { get; set; }
+
+    /// <summary>
     /// One sentence per live row, already resolved through <c>QueuePosition.Describe</c> in the
     /// current UI culture — the same thing <c>DeploymentsController.Details</c> puts in
     /// <c>ViewBag.QueueExplanation</c> for a single deployment, keyed here by job id because this

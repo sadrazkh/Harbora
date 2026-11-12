@@ -440,6 +440,7 @@ public class BillingGateEnforcementTests
         var runner = new CronJobRunner(
             db, new NoServerShouldBeAsked(), new PassthroughProtector(), GateHarness.Gate(db),
             Options.Create(new HarboraRuntimeOptions()),
+            Options.Create(new Harbora.Infrastructure.Storage.ObjectStorageOptions()),
             new FixedClock(new DateTimeOffset(2026, 8, 10, 3, 0, 0, TimeSpan.Zero)),
             NullLogger<CronJobRunner>.Instance);
 
