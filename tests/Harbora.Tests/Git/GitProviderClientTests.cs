@@ -149,4 +149,102 @@ public sealed class GitProviderClientTests
         thrown.Which.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
         thrown.Which.Message.Should().NotContain("ghp_secret");
     }
+
+    // ---- push webhooks ----
+
+    private static readonly HookSpec Spec = new("https://panel.example.com/webhooks/git/0190aaaa-0000-7000-8000-000000000001", "the-secret");
+
+    [Fact]
+    public async Task GitHub_hooks_are_listed_added_and_updated_on_the_repository_as_its_api_documents()
+    {
+        var provider = new ScriptedProvider
+        {
+            Answer = r => r.Method == HttpMethod.Get
+                ? ScriptedProvider.Json("""[{"id":7,"active":false,"config":{"url":"https://elsewhere.example/hook"}},{"id":42,"active":true,"config":{"url":"https://panel.example.com/webhooks/git/x"}}]""")
+                : ScriptedProvider.Json("""{"id":43,"active":true,"config":{"url":"https://panel.example.com/webhooks/git/0190aaaa-0000-7000-8000-000000000001"}}""",
+                    r.Method == HttpMethod.Post ? HttpStatusCode.Created : HttpStatusCode.OK)
+        };
+        var client = new GitProviderClient(new Factory(provider));
+
+        var hooks = await client.ListHooksAsync(GitProviderType.GitHub, "", "ghp_t", "acme/shop", default);
+        var made = await client.CreateHookAsync(GitProviderType.GitHub, "", "ghp_t", "acme/shop", Spec, default);
+        await client.UpdateHookAsync(GitProviderType.GitHub, "", "ghp_t", "acme/shop", "42", Spec, default);
+
+        hooks.Should().Equal(new RemoteHook("7", "https://elsewhere.example/hook", false), new RemoteHook("42", "https://panel.example.com/webhooks/git/x", true));
+        made.Id.Should().Be("43");
+        provider.Requests.Select(r => $"{r.Method} {r.RequestUri}").Should().Equal(
+            "GET https://api.github.com/repos/acme/shop/hooks?per_page=100",
+            "POST https://api.github.com/repos/acme/shop/hooks",
+            "PATCH https://api.github.com/repos/acme/shop/hooks/42");
+        provider.Requests.Should().OnlyContain(r => r.Headers.Authorization!.ToString() == "token ghp_t");
+
+        var created = System.Text.Json.JsonDocument.Parse(provider.Bodies[1]!).RootElement;
+        created.GetProperty("name").GetString().Should().Be("web");
+        created.GetProperty("active").GetBoolean().Should().BeTrue();
+        created.GetProperty("events").EnumerateArray().Select(e => e.GetString()).Should().Equal("push");
+        created.GetProperty("config").GetProperty("url").GetString().Should().Be(Spec.Url);
+        created.GetProperty("config").GetProperty("content_type").GetString().Should().Be("json");
+        created.GetProperty("config").GetProperty("secret").GetString().Should().Be("the-secret");
+        System.Text.Json.JsonDocument.Parse(provider.Bodies[2]!).RootElement.TryGetProperty("name", out _).Should().BeFalse(
+            "an edit does not rename the hook");
+    }
+
+    [Fact]
+    public async Task GitLab_hooks_live_on_the_url_encoded_project_and_carry_the_secret_as_their_token()
+    {
+        var provider = new ScriptedProvider
+        {
+            Answer = r => r.Method == HttpMethod.Get
+                ? ScriptedProvider.Json("""[{"id":5,"url":"https://panel.example.com/webhooks/git/x","alert_status":"disabled"},{"id":6,"url":"https://other.example/","push_events":true}]""")
+                : ScriptedProvider.Json("""{"id":9,"url":"https://panel.example.com/webhooks/git/0190aaaa-0000-7000-8000-000000000001"}""", HttpStatusCode.Created)
+        };
+        var client = new GitProviderClient(new Factory(provider));
+
+        var hooks = await client.ListHooksAsync(GitProviderType.GitLab, "https://gitlab.example.com", "glpat", "group/sub/shop", default);
+        await client.CreateHookAsync(GitProviderType.GitLab, "https://gitlab.example.com", "glpat", "group/sub/shop", Spec, default);
+        await client.UpdateHookAsync(GitProviderType.GitLab, "https://gitlab.example.com", "glpat", "group/sub/shop", "5", Spec, default);
+
+        hooks[0].Active.Should().BeFalse("GitLab turned it off after failures, so it delivers nothing");
+        hooks[1].Active.Should().BeTrue();
+        provider.Requests.Select(r => $"{r.Method} {r.RequestUri!.AbsoluteUri}").Should().Equal(
+            "GET https://gitlab.example.com/api/v4/projects/group%2Fsub%2Fshop/hooks?per_page=100",
+            "POST https://gitlab.example.com/api/v4/projects/group%2Fsub%2Fshop/hooks",
+            "PUT https://gitlab.example.com/api/v4/projects/group%2Fsub%2Fshop/hooks/5");
+
+        var body = System.Text.Json.JsonDocument.Parse(provider.Bodies[1]!).RootElement;
+        body.GetProperty("url").GetString().Should().Be(Spec.Url);
+        body.GetProperty("token").GetString().Should().Be("the-secret", "the webhook processor compares X-Gitlab-Token with the secret");
+        body.GetProperty("push_events").GetBoolean().Should().BeTrue();
+        body.GetProperty("tag_push_events").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Gitea_hooks_are_of_its_own_type_and_signed_with_the_secret()
+    {
+        var provider = new ScriptedProvider
+        {
+            Answer = r => r.Method == HttpMethod.Get
+                ? ScriptedProvider.Json("""[{"id":3,"type":"gitea","active":true,"config":{"url":"https://panel.example.com/webhooks/git/x","content_type":"json"}}]""")
+                : ScriptedProvider.Json("""{"id":4,"type":"gitea","active":true,"config":{"url":"https://panel.example.com/webhooks/git/y"}}""", HttpStatusCode.Created)
+        };
+        var client = new GitProviderClient(new Factory(provider));
+
+        var hooks = await client.ListHooksAsync(GitProviderType.Gitea, "https://code.example.com/", "gt", "me/app", default);
+        await client.CreateHookAsync(GitProviderType.Gitea, "https://code.example.com/", "gt", "me/app", Spec, default);
+        await client.UpdateHookAsync(GitProviderType.Gitea, "https://code.example.com/", "gt", "me/app", "3", Spec, default);
+
+        hooks.Should().ContainSingle().Which.Should().Be(new RemoteHook("3", "https://panel.example.com/webhooks/git/x", true));
+        provider.Requests.Select(r => $"{r.Method} {r.RequestUri}").Should().Equal(
+            "GET https://code.example.com/api/v1/repos/me/app/hooks?limit=50",
+            "POST https://code.example.com/api/v1/repos/me/app/hooks",
+            "PATCH https://code.example.com/api/v1/repos/me/app/hooks/3");
+        var body = System.Text.Json.JsonDocument.Parse(provider.Bodies[1]!).RootElement;
+        body.GetProperty("type").GetString().Should().Be("gitea");
+        body.GetProperty("config").GetProperty("secret").GetString().Should().Be("the-secret");
+        body.GetProperty("config").GetProperty("content_type").GetString().Should().Be("json");
+    }
+
+    [Fact]
+    public void A_hook_spec_prints_its_address_and_never_its_secret() =>
+        Spec.ToString().Should().Contain(Spec.Url).And.NotContain("the-secret");
 }

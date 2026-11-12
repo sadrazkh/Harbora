@@ -218,4 +218,26 @@ public sealed class LaunchPickerTests
         row.FailureMessageFa.Should().Contain("اتصال Git").And.NotContain(AccountToken);
         h.Logs.Lines.Should().NotContain(l => l.Contains(AccountToken));
     }
+
+    [Fact]
+    public async Task A_picked_launch_sets_its_push_webhook_up_once_through_a_retry_and_a_second_launch()
+    {
+        using var h = new LaunchHarness();
+        var account = Connect(h);
+        var id = await PickedAsync(h, account);
+        h.Creates.RefuseApp = new ServiceRefusal("No address left.", "نشانی نمانده است.");
+
+        (await h.ConfirmAsync(id)).Status.Should().Be(LaunchStatus.Failed);
+        h.GitProviders.HookCalls.Should().BeEmpty("there is no app yet, so nothing to deploy on a push");
+
+        await h.Request().RetryAsync(id, null, default);
+        var repository = RepositoryOf(h, id);
+        h.GitProviders.Hooks["acme/shop"].Should().ContainSingle()
+            .Which.Url.Should().Be($"https://panel.example.com/webhooks/git/{repository.Id}");
+        h.GitProviders.HookCalls.Single(c => c.Call == "create").Spec!.Secret.Should().Be(repository.WebhookSecret);
+
+        var again = await PickedAsync(h, account);
+        await h.ConfirmAsync(again);
+        h.GitProviders.Hooks["acme/shop"].Should().ContainSingle("a second app on the repository finds the hook already there");
+    }
 }

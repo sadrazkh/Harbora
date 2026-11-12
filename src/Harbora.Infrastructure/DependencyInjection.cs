@@ -82,6 +82,8 @@ public static class DependencyInjection
         services.AddScoped<IGitWebhookProcessor, Git.GitWebhookProcessor>();
         services.AddScoped<IGitOAuthService, Git.GitOAuthService>();
         services.AddScoped<Git.GitAccounts>();
+        services.AddSingleton<Git.GitHookStatusCache>();
+        services.AddScoped<Git.IGitHookService, Git.GitHookService>();
 
         // Security — resolve the master key fail-closed (ADR-009 / doc 10 §2.2): Production must
         // supply a key; only Development may fall back to the insecure dev key (with a loud warning).

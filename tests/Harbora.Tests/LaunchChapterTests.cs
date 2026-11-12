@@ -252,6 +252,7 @@ public sealed class LaunchChapterTests : IDisposable
     [InlineData("بررسی کن", "src/Harbora.Web/Views/Apps/Details.cshtml")]
     [InlineData("اپ چطور این‌ها را می‌خواند؟", "src/Harbora.Web/Views/Apps/Details.cshtml")]
     [InlineData("استقرار خودکار (Git)", "src/Harbora.Web/Views/Apps/Details.cshtml")]
+    [InlineData("وب‌هوک را بگذار", "src/Harbora.Web/Views/Apps/Details.cshtml")]
     [InlineData("نسخه‌ی تازه", "src/Harbora.Web/Views/Apps/Details.cshtml")]
     [InlineData("دستور پیش از انتشار", "src/Harbora.Web/Views/Apps/Details.cshtml")]
     [InlineData("فرم کامل", "src/Harbora.Web/Views/Apps/Index.cshtml")]

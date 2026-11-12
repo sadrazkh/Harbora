@@ -44,7 +44,8 @@ public sealed class AppProvisioningService(
     ProjectService projects,
     ProjectAccessService access,
     AppAddressAssigner addresses,
-    ResourceCreationBilling creationBilling) : IAppProvisioningService
+    ResourceCreationBilling creationBilling,
+    IGitHookService hooks) : IAppProvisioningService
 {
     public async Task<IReadOnlyList<ServiceRefusal>> ValidateCreateAsync(AppCreateRequest request, CancellationToken ct)
     {
@@ -186,9 +187,15 @@ public sealed class AppProvisioningService(
             catch (LowDiskRefusedException ex) { deployRefusal = new(ex.Message, ex.ReasonFa ?? ex.Message); }
         }
 
+        // After the commit, never inside the creation lock: this asks a provider over the network. The
+        // app exists whatever it answers, and the app page says what that was.
+        GitHookOutcome? webhook = null;
+        if (repository.Account is not null && (app.GitRepositoryId ?? app.GitRepository?.Id) is { } hooked)
+            webhook = await hooks.EnsureAsync(hooked, ct);
+
         return ServiceOutcome<AppCreateResult>.Success(new AppCreateResult(
             app.Id, app.Name, app.Slug, address.Value.Host, AddressNotice(address.Value),
-            templateAdvice, deploymentId, deployRefusal));
+            templateAdvice, deploymentId, deployRefusal, webhook));
     }
 
     /// <summary>

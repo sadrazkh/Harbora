@@ -164,7 +164,8 @@ internal sealed class LaunchHarness : IDisposable
         var deployments = new GatedDeployments(new DeploymentEngine(db, Jobs, Clock), this);
 
         var apps = new ScriptedApps(
-            new AppProvisioningService(db, quota, Scheduler, protector, Audit, deployments, projects, access, addresses, creationBilling),
+            new AppProvisioningService(db, quota, Scheduler, protector, Audit, deployments, projects, access, addresses, creationBilling,
+                GitProviders.HookService(db, protector, Audit, Clock)),
             Creates);
         var databases = new ScriptedDatabases(
             new DatabaseProvisioningService(db, Provisioner, quota, Scheduler, protector, projects, access, creationBilling, Audit, user),

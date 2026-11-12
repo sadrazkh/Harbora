@@ -48,7 +48,8 @@ public sealed class LaunchPanelFixture : IDisposable
 
     public LaunchPanelFixture()
     {
-        Panel = _root.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
+        // A public address, so the app page's webhook block has somewhere to point a provider at.
+        Panel = _root.WithWebHostBuilder(builder => builder.UseSetting("PANEL_DOMAIN", "panel.example.com").ConfigureTestServices(services =>
         {
             services.RemoveAll<ILaunchService>();
             services.AddScoped<ILaunchService>(provider =>

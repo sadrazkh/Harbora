@@ -109,4 +109,50 @@ public sealed class AppRepositorySourceTests
         unknown.Should().Contain(r => r.Message.Contains("no longer connected"));
         h.Db.Apps.IgnoreQueryFilters().Should().BeEmpty();
     }
+
+    // ---- the push webhook ----
+
+    [Fact]
+    public async Task An_app_on_a_connected_accounts_repository_has_its_webhook_set_up_once_whatever_shares_it()
+    {
+        using var h = new AppServiceHarness();
+        var (account, row) = Imported(h);
+
+        var first = await h.Provisioning().CreateAsync(FromGit(h, Shop), default);
+        var second = await h.Provisioning().CreateAsync(FromGit(h, Shop) with { Name = "Shop worker" }, default);
+
+        first.Value!.Webhook!.State.Should().Be(Harbora.Infrastructure.Git.GitHookState.Confirmed);
+        first.Value.Webhook.Created.Should().BeTrue();
+        second.Value!.Webhook!.IsConfirmed.Should().BeTrue();
+        second.Value.Webhook.Created.Should().BeFalse("the second app shares the row, so its address, so the hook");
+        h.GitProviders.Hooks["acme/shop"].Should().ContainSingle()
+            .Which.Url.Should().Be($"https://{AppServiceHarness.PanelDomain}/webhooks/git/{row.Id}");
+        h.GitProviders.HookCalls.Should().OnlyContain(c => c.Token == "gho_account");
+        account.Id.Should().NotBeEmpty();
+    }
+
+    [Fact]
+    public async Task An_app_with_a_provider_of_its_own_asks_no_provider_anything()
+    {
+        using var h = new AppServiceHarness();
+
+        var created = await h.Provisioning().CreateAsync(FromGit(h, "https://github.com/acme/blog.git"), default);
+
+        created.Value!.Webhook.Should().BeNull("the page keeps the paste, and says why");
+        h.GitProviders.HookCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_provider_that_refuses_the_hook_does_not_undo_the_app()
+    {
+        using var h = new AppServiceHarness();
+        Imported(h);
+        h.GitProviders.HookFailing["gho_account"] = new HttpRequestException("Forbidden", null, System.Net.HttpStatusCode.Forbidden);
+
+        var created = await h.Provisioning().CreateAsync(FromGit(h, Shop), default);
+
+        created.Ok.Should().BeTrue();
+        created.Value!.Webhook!.State.Should().Be(Harbora.Infrastructure.Git.GitHookState.Failed);
+        h.Db.Apps.IgnoreQueryFilters().Should().ContainSingle();
+    }
 }
