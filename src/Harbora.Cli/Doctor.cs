@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Harbora.Shared;
 using Harbora.Shared.Inspection;
 
 namespace Harbora.Cli;
@@ -300,12 +301,18 @@ public static class Doctor
             var excludedByPath = packed.Excluded
                 .GroupBy(e => e.Path, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(g => g.Key, g => g.First().Reason, StringComparer.OrdinalIgnoreCase);
+            var envFilesKept = packed.Excluded.Where(e => e.EnvFile).Select(e => e.Path)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
+            // A Dockerfile that copies .env.production built until env files stayed home, and now fails
+            // on the missing file, so for one of those this says what to do instead.
             foreach (var path in referencedFromDockerfile.Distinct(StringComparer.OrdinalIgnoreCase))
                 if (excludedByPath.TryGetValue(path, out var reason))
                     checks.Add(new("Upload / Dockerfile COPY", Level.Fail,
-                        $"the Dockerfile COPYs {path}, but the upload would exclude it ({reason}) — the build " +
-                        "will fail with that file missing, the way DriveUnion's did."));
+                        $"the Dockerfile COPYs {path}, but the upload would exclude it ({reason}) — " +
+                        (envFilesKept.Contains(path)
+                            ? EnvFileNotice.ForCopy(path)
+                            : "the build will fail with that file missing, the way DriveUnion's did.")));
 
             foreach (var (packageJson, script, path, reason) in FindExcludedScriptReferences(projectDir, excludedByPath))
                 checks.Add(new("Upload / package.json", Level.Fail,
@@ -400,6 +407,49 @@ public static class Doctor
                 ".env.local exists but nothing in .gitignore excludes it — `harbora env pull` writes real, " +
                 "decrypted secret values into that file, and an untracked-but-not-ignored file is one " +
                 "`git add .` away from reaching a shared remote. Add `.env.local` to .gitignore.")];
+    }
+
+    // ---- env files: which ones a push keeps on this machine ------------------------------------
+
+    /// <summary>
+    /// The env files holding real values that a push would keep on this machine, named before a deploy
+    /// does it, and any a <c>!</c> line sends instead. Only in the full report, like
+    /// <see cref="CheckEnvLocal"/>: a deploy names what it kept back after packing, and saying it twice
+    /// in one run would only bury it.
+    ///
+    /// <para>
+    /// A warning when something other than <c>.env</c> or <c>.env.local</c> stays, because there is a
+    /// decision in it: a build that reads <c>.env.production</c> now builds without it, and only the
+    /// person knows whether its values are on the app already. Those two never go, so naming them is
+    /// all there is to do. Silent when the project has no env file.
+    /// </para>
+    /// </summary>
+    public static List<Check> CheckEnvFiles(string projectDir, ProjectConfig config)
+    {
+        var found = SourcePacker.SurveyEnvFiles(projectDir, config);
+        if (found.Count == 0) return [];
+
+        var kept = found.Where(f => !f.Sent).Select(f => f.Path).ToList();
+        var sent = found.Where(f => f.Sent).Select(f => f.Path).ToList();
+
+        var sentSentence = sent.Count == 0 ? "" :
+            $"{EnvFileNotice.List(sent)} would be uploaded, because a ! line lets it through: whoever can read " +
+            "the build can read what is in it.";
+
+        if (kept.Count == 0)
+            return [new Check("Env files", Level.Ok, sentSentence)];
+
+        var decision = kept.Any(EnvFileNotice.CanBeSent);
+        var detail = (decision
+                ? $"{EnvFileNotice.List(kept)} would stay on this machine: env files hold real values, so an upload " +
+                  "leaves them out. If the app or its build reads one, set those values as the app's variables (a " +
+                  "public name such as VITE_ or NEXT_PUBLIC_ reaches a generated build by itself), or send the file. " +
+                  EnvFileNotice.HowToSend(kept)
+                : $"{EnvFileNotice.List(kept)} would stay on this machine, as .env and .env.local always do. The app " +
+                  "gets its values from its variables in the panel.")
+            + (sent.Count == 0 ? "" : " " + sentSentence);
+
+        return [new Check("Env files", decision ? Level.Warn : Level.Ok, detail)];
     }
 
     // ---- auth: a session for this server, not expired --------------------------------------------

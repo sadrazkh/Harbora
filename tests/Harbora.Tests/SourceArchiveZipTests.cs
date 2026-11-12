@@ -126,6 +126,9 @@ public sealed class SourceArchiveZipTests : IDisposable
     [InlineData(".env.local")]
     [InlineData("repo-main/.env")]
     [InlineData("repo-main/apps/api/.env.local")]
+    [InlineData(".env.production")]
+    [InlineData("repo-main/.env.staging")]
+    [InlineData("repo-main/apps/web/.env.production.local")]
     public async Task What_the_cli_would_filter_on_the_client_is_left_out_at_any_depth(string name)
     {
         await using var archive = Zip((name, "AWS_SECRET=real"), ("package.json", "{}"));
@@ -139,6 +142,8 @@ public sealed class SourceArchiveZipTests : IDisposable
 
     [Theory]
     [InlineData(".env.example")]
+    [InlineData(".env.local.example")]
+    [InlineData("example.env")]
     [InlineData(".envrc")]
     [InlineData("config/env")]
     [InlineData(".github/workflows/ci.yml")]
@@ -150,6 +155,97 @@ public sealed class SourceArchiveZipTests : IDisposable
         await SourceArchive.ExtractAsync(archive, Dest, default);
 
         File.Exists(Path.Combine(Dest, name.Replace('/', Path.DirectorySeparatorChar))).Should().BeTrue();
+    }
+
+    // ---- env files, by the rule the CLI applies on a developer's machine ---------------------------
+
+    [Fact]
+    public async Task What_was_left_out_is_named_for_the_deploy_log_by_its_path_in_the_project()
+    {
+        await using var archive = Zip(
+            ("shop/package.json", "{}"), ("shop/.env.production", "VITE_API_URL=https://api.example.com"),
+            ("shop/.env", "KEY=real"), ("shop/.env.example", "KEY="));
+
+        var result = await SourceArchive.ExtractAsync(archive, Dest, default);
+
+        result.EnvFilesLeftOut.Should().BeEquivalentTo([".env.production", ".env"]);
+        Written(".env.example").Should().BeTrue("Launch reads the variable names in it");
+
+        // Somebody who sent this from a browser has no terminal: the deploy log is where it is said.
+        SourceArchive.DescribeEnvFilesLeftOut(result).Should()
+            .Contain(".env.production").And.Contain("variables").And.Contain("\"!.env.production\"").And.Contain(".dockerignore");
+    }
+
+    [Fact]
+    public async Task Nothing_left_out_is_nothing_said()
+    {
+        await using var archive = Zip(("package.json", "{}"));
+
+        var result = await SourceArchive.ExtractAsync(archive, Dest, default);
+
+        SourceArchive.DescribeEnvFilesLeftOut(result).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task The_zips_own_dockerignore_lets_one_through_as_it_does_for_the_cli_but_never_env()
+    {
+        await using var archive = Zip(
+            ("shop/package.json", "{}"), ("shop/.dockerignore", "node_modules\n.env*\n!.env.production\n!.env\n"),
+            ("shop/.env.production", "VITE_API_URL=https://api.example.com"), ("shop/.env", "KEY=real"));
+
+        var result = await SourceArchive.ExtractAsync(archive, Dest, default);
+
+        Written(".env.production").Should().BeTrue();
+        Written(".env").Should().BeFalse("the do-not-change list says .env is never uploaded");
+        result.EnvFilesLeftOut.Should().Equal(".env");
+        SourceArchive.DescribeEnvFilesLeftOut(result).Should().NotContain("dockerignore",
+            "nothing can be done to send .env, so nothing is offered");
+    }
+
+    [Fact]
+    public async Task With_no_dockerignore_its_gitignore_is_read_with_windows_line_ends_and_all()
+    {
+        await using var archive = Zip(
+            ("package.json", "{}"), (".gitignore", "﻿node_modules\r\n!.env.staging\r\n"), (".env.staging", "x"));
+
+        await SourceArchive.ExtractAsync(archive, Dest, default);
+
+        Written(".env.staging").Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task A_dockerignore_wins_over_a_gitignore_in_a_zip_as_well()
+    {
+        await using var archive = Zip(
+            ("package.json", "{}"), (".dockerignore", "node_modules\n"), (".gitignore", "!.env.staging\n"), (".env.staging", "x"));
+
+        await SourceArchive.ExtractAsync(archive, Dest, default);
+
+        Written(".env.staging").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task An_env_file_beside_the_wrapper_is_outside_the_project_and_its_ignore_file()
+    {
+        await using var archive = Zip(
+            ("shop/package.json", "{}"), ("shop/.dockerignore", "!.env.production\n"), (".env.production", "KEY=real"));
+
+        var result = await SourceArchive.ExtractAsync(archive, Dest, default);
+
+        Written("package.json").Should().BeTrue("a file that stays home does not count as beside the folder");
+        Written(".env.production").Should().BeFalse();
+        result.EnvFilesLeftOut.Should().Equal(".env.production");
+    }
+
+    [Fact]
+    public async Task An_ignore_file_too_large_to_be_one_lets_nothing_through()
+    {
+        await using var archive = Zip(
+            ("package.json", "{}"), (".dockerignore", "!.env.production\n" + new string('#', 70_000)), (".env.production", "x"));
+
+        await SourceArchive.ExtractAsync(archive, Dest, default);
+
+        Written(".env.production").Should().BeFalse();
     }
 
     // ---- the folder a zip wraps everything in -----------------------------------------------------

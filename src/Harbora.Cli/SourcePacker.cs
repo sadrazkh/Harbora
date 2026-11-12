@@ -1,6 +1,7 @@
 using System.Formats.Tar;
 using System.IO.Enumeration;
 using System.IO.Compression;
+using Harbora.Shared;
 
 namespace Harbora.Cli;
 
@@ -10,7 +11,8 @@ namespace Harbora.Cli;
 /// Exclusions matter more than they look: shipping <c>node_modules</c>, <c>.git</c> or a local
 /// <c>.env</c> would turn a two-second push into a hundred-megabyte one and could send credentials
 /// to the server. <c>.dockerignore</c> is honoured first (it is what the build actually uses), then
-/// <c>.gitignore</c>, then a small built-in list so an unconfigured project still behaves.
+/// <c>.gitignore</c>, then a small built-in list so an unconfigured project still behaves. Env files
+/// follow <see cref="EnvFiles"/>, the rule the panel applies to a zip as well.
 /// </summary>
 public static class SourcePacker
 {
@@ -28,9 +30,17 @@ public static class SourcePacker
         ".venv", "venv", "__pycache__", ".pytest_cache",
         ".idea", ".vs", ".vscode",
         ".DS_Store", "Thumbs.db",
-        ".env", ".env.local",
+        // Never uploaded, whatever an ignore file says. As a folder name ".env" is just as often a
+        // Python virtualenv, which is the other reason it stays on this list.
+        .. EnvFiles.NeverUploaded,
         ".terraform", ".gradle"
     ];
+
+    /// <summary>
+    /// The reason an env file holding real values gives when it is left out. The rest of the rule,
+    /// and the way back in, is <see cref="EnvFiles"/>.
+    /// </summary>
+    public const string EnvFileRule = "built-in rule '.env.*'";
 
     /// <summary>
     /// Also skipped with no ignore file, but only when the name is the very first path segment —
@@ -56,7 +66,12 @@ public static class SourcePacker
     /// *what* went missing, not just how many. An upload that only ever said "Unpacked 215 entries"
     /// left no way to discover that 130 of a project's 345 tracked files had been silently dropped.
     /// </summary>
-    public sealed record ExcludedEntry(string Path, string Reason);
+    /// <param name="EnvFile">
+    /// An env file kept on this machine because it holds real values, which a push names on its own
+    /// with what to do about it: a build may have been reading it. Not one that went with the folder
+    /// it was in, such as anything under <c>node_modules</c>.
+    /// </param>
+    public sealed record ExcludedEntry(string Path, string Reason, bool EnvFile = false);
 
     public sealed record Packed(string ArchivePath, int Files, long Bytes, IReadOnlyList<ExcludedEntry> Excluded);
 
@@ -98,10 +113,9 @@ public static class SourcePacker
                 ct.ThrowIfCancellationRequested();
 
                 var relative = Path.GetRelativePath(root, file).Replace('\\', '/');
-                var reason = DescribeExclusion(relative, ignore);
-                if (reason is not null)
+                if (Classify(relative, ignore) is { } exclusion)
                 {
-                    excluded.Add(new ExcludedEntry(relative, reason));
+                    excluded.Add(exclusion);
                     continue;
                 }
 
@@ -117,21 +131,17 @@ public static class SourcePacker
     /// <summary>
     /// Reads .dockerignore, else .gitignore. Supports the common subset: comments, blank lines,
     /// directory and wildcard entries. Deliberately not a full gitignore implementation — anything
-    /// it misses is included, which is the safe direction to be wrong in.
+    /// it misses is included, which is the safe direction to be wrong in. A <c>!</c> line is kept,
+    /// with its <c>!</c>, for one purpose only: one naming an env file lets that file through.
     /// </summary>
     public static List<string> LoadIgnorePatterns(string root)
     {
-        foreach (var name in new[] { ".dockerignore", ".gitignore" })
+        foreach (var name in IgnoreFile.Names)
         {
             var path = Path.Combine(root, name);
             if (!File.Exists(path)) continue;
 
-            return File.ReadAllLines(path)
-                .Select(l => l.Trim())
-                .Where(l => l.Length > 0 && !l.StartsWith('#') && !l.StartsWith('!'))
-                .Select(l => l.Replace('\\', '/').Trim('/'))
-                .Where(l => l.Length > 0)
-                .ToList();
+            return IgnoreFile.Entries(File.ReadAllLines(path));
         }
         return [];
     }
@@ -144,21 +154,58 @@ public static class SourcePacker
     /// just yes/no — a built-in name, a root-only built-in name, or the exact .dockerignore/.gitignore
     /// pattern — so a dropped file can be explained rather than just counted.
     /// </summary>
-    public static string? DescribeExclusion(string relativePath, IReadOnlyCollection<string> ignore)
+    public static string? DescribeExclusion(string relativePath, IReadOnlyCollection<string> ignore) =>
+        Classify(relativePath, ignore)?.Reason;
+
+    private static ExcludedEntry? Classify(string relativePath, IReadOnlyCollection<string> ignore)
     {
         var segments = relativePath.Split('/');
 
         // Built-ins match any path segment: "node_modules" anywhere in the tree, not just at the root.
-        var builtin = segments.FirstOrDefault(s => AlwaysExclude.Contains(s, StringComparer.OrdinalIgnoreCase));
-        if (builtin is not null)
-            return $"built-in rule '{builtin}'";
+        var builtin = Array.FindIndex(segments, s => AlwaysExclude.Contains(s, StringComparer.OrdinalIgnoreCase));
+        if (builtin >= 0)
+            return new(relativePath, $"built-in rule '{segments[builtin]}'",
+                EnvFile: builtin == segments.Length - 1 && EnvFiles.StaysHome(relativePath, []));
 
         // The ambiguous names only count at the root — see RootOnlyExclude's own comment for why.
         if (RootOnlyExclude.Contains(segments[0], StringComparer.OrdinalIgnoreCase))
-            return $"built-in rule '{segments[0]}' (project root)";
+            return new(relativePath, $"built-in rule '{segments[0]}' (project root)");
+
+        // A line naming an env file outranks the patterns around it, so ".env*" followed by
+        // "!.env.example" sends the example, as Git and Docker would.
+        if (EnvFiles.IsLetThrough(relativePath, ignore)) return null;
+        if (EnvFiles.StaysHome(relativePath, ignore))
+            return new(relativePath, EnvFileRule, EnvFile: true);
 
         var pattern = MatchingIgnorePattern(relativePath, ignore);
-        return pattern is null ? null : $"ignore pattern '{pattern}'";
+        return pattern is null ? null : new(relativePath, $"ignore pattern '{pattern}'");
+    }
+
+    /// <summary>
+    /// Every env file under <paramref name="projectDir"/> that holds real values, and whether a push
+    /// would send it, by the same decision <see cref="PackAsync(string, ProjectConfig, CancellationToken)"/>
+    /// makes and without packing anything: for <c>harbora doctor</c>, which says so before a deploy
+    /// does. One inside a folder that is left out anyway, such as <c>node_modules</c>, is not listed.
+    /// </summary>
+    public static IReadOnlyList<(string Path, bool Sent)> SurveyEnvFiles(string projectDir, ProjectConfig config)
+    {
+        var root = Path.GetFullPath(projectDir);
+        var ignore = LoadIgnorePatterns(root);
+        ignore.AddRange(config.Ignore);
+
+        var found = new List<(string Path, bool Sent)>();
+        foreach (var file in Directory.EnumerateFiles(root, ".env*", SearchOption.AllDirectories))
+        {
+            var relative = Path.GetRelativePath(root, file).Replace('\\', '/');
+            if (!EnvFiles.HoldsRealValues(Path.GetFileName(relative))) continue;
+
+            switch (Classify(relative, ignore))
+            {
+                case null: found.Add((relative, true)); break;
+                case { EnvFile: true }: found.Add((relative, false)); break;
+            }
+        }
+        return found.OrderBy(f => f.Path, StringComparer.Ordinal).ToList();
     }
 
     /// <summary>
@@ -175,6 +222,9 @@ public static class SourcePacker
         var segments = relativePath.Split('/');
         foreach (var pattern in patterns)
         {
+            // A negation excludes nothing; the only one ever read is EnvFiles.IsLetThrough's.
+            if (pattern.StartsWith('!')) continue;
+
             if (pattern.Contains('*'))
             {
                 if (segments.Any(s => FileSystemName.MatchesSimpleExpression(pattern, s)) ||
