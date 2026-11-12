@@ -70,6 +70,19 @@ public class ActivityHttpTests(HarboraHttpFixture fixture)
             "another workspace's job must never appear, even though Job itself carries no tenant filter");
     }
 
+    [Fact]
+    public async Task The_page_says_how_long_a_finished_job_stays_on_it()
+    {
+        // The retention sweep removes settled jobs after Retention:JobDays (30 by default), so the
+        // page no longer claims to list every job this workspace ever queued.
+        Panel.GivenUser(fixture.WorkspaceId, "activity-retention@example.com", SystemRole.Owner);
+
+        var client = await Panel.SignedInAs("198.51.100.79", "activity-retention@example.com");
+        var html = WebUtility.HtmlDecode(await (await client.GetAsync("/activity")).Content.ReadAsStringAsync());
+
+        html.Should().ContainAny("A finished job stays here for 30 days.", "کاری که تمام شده تا 30 روز اینجا می‌ماند.");
+    }
+
     /// <summary>Job rows with no workspace at all (a billing tick, a pre-login email) must not leak
     /// onto every workspace's page — the failure mode a filter of "null or mine" would have produced,
     /// which is exactly why <see cref="Harbora.Web.Controllers.ActivityController"/> compares to the

@@ -36,6 +36,9 @@ public static class RetentionTables
     /// <summary>2.2 (2026-09 log-retention plan) — see <c>DataRetentionSweeper.SweepAppLogLinesAsync</c>
     /// for why this table's age-based sweep is not one more <c>SweepAgedTableAsync</c> call.</summary>
     public const string AppLogLines = "AppLogLines";
+    /// <summary>The durable job queue's settled rows — see <c>DataRetentionSweeper.SweepJobsAsync</c>
+    /// for why it is deleted a batch at a time.</summary>
+    public const string Jobs = "Jobs";
 }
 
 /// <summary>
@@ -104,6 +107,12 @@ public sealed class DataRetentionSweeper(
     ISystemClock clock,
     ILogger<DataRetentionSweeper> logger) : BackgroundService
 {
+    /// <summary>How many settled jobs one statement deletes. See <see cref="SweepJobsAsync"/>.</summary>
+    public const int DefaultJobDeleteBatchSize = 10_000;
+
+    /// <summary>Settable so a test can watch the batching with a handful of rows.</summary>
+    internal int JobDeleteBatchSize { get; init; } = DefaultJobDeleteBatchSize;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
@@ -150,13 +159,17 @@ public sealed class DataRetentionSweeper(
         // One table. The rule is built INSIDE the try on purpose: the deployment-log rule has to read
         // its protection set first, and a failure to work out what must be protected has to fail the
         // sweep of that table rather than fall through to a delete that protects nothing.
-        async Task SweepTableAsync<TEntity>(
+        Task SweepTableAsync<TEntity>(
             string table, Func<Task<Expression<Func<TEntity, bool>>>> ruleFor)
-            where TEntity : class
+            where TEntity : class =>
+            SweepCountedAsync(table, async () => await DeleteAsync(db, await ruleFor(), ct));
+
+        // The same guard, around a table whose delete is more than one statement.
+        async Task SweepCountedAsync(string table, Func<Task<int>> delete)
         {
             try
             {
-                deleted[table] = await DeleteAsync(db, await ruleFor(), ct);
+                deleted[table] = await delete();
             }
             // Shutdown is not a table failure. Without the guard, stopping the panel mid-sweep would
             // record nine "failures" and log nine errors about a sweep that was simply asked to stop.
@@ -174,6 +187,14 @@ public sealed class DataRetentionSweeper(
             string table, string key, int days,
             Func<DateTimeOffset, Task<Expression<Func<TEntity, bool>>>> ruleFor)
             where TEntity : class
+        {
+            if (AgedCutoff(table, key, days) is { } cutoff)
+                await SweepTableAsync(table, () => ruleFor(cutoff));
+        }
+
+        // The cutoff for a table kept by a configured age, or null, said in the log, when the setting
+        // means keep everything.
+        DateTimeOffset? AgedCutoff(string table, string key, int days)
         {
             if (RetentionRule.CutoffFor(days, now) is not { } cutoff)
             {
@@ -199,10 +220,10 @@ public sealed class DataRetentionSweeper(
                         "Retention of {Table} is off ({Setting} is {Days}); every row is being kept.",
                         table, $"{RetentionOptions.SectionName}:{key}", days);
 
-                return;
+                return null;
             }
 
-            await SweepTableAsync(table, () => ruleFor(cutoff));
+            return cutoff;
         }
 
         await SweepAgedTableAsync<DeploymentLog>(RetentionTables.DeploymentLogs, nameof(RetentionOptions.DeploymentLogDays), config.DeploymentLogDays,
@@ -274,6 +295,12 @@ public sealed class DataRetentionSweeper(
             RetentionTables.NotificationDigestEntries, nameof(RetentionOptions.NotificationDigestEntryDays),
             config.NotificationDigestEntryDays,
             cutoff => Task.FromResult(RetentionRule.NotificationDigestEntriesToDelete(cutoff)));
+
+        // The durable job queue's settled rows. Aged like every table above, but deleted a batch at a
+        // time: see SweepJobsAsync for why this one table cannot be a single statement.
+        if (AgedCutoff(RetentionTables.Jobs, nameof(RetentionOptions.JobDays), config.JobDays) is { } jobCutoff)
+            await SweepCountedAsync(RetentionTables.Jobs,
+                () => SweepJobsAsync(db, jobCutoff, JobDeleteBatchSize, ct));
 
         // 2.2 (2026-09 log-retention plan): each app's own LogRetentionDays, not a shared
         // RetentionOptions knob — see SweepAppLogLinesAsync for why this cannot go through
@@ -382,6 +409,61 @@ public sealed class DataRetentionSweeper(
     }
 
     /// <summary>
+    /// The settled jobs past the cutoff, at most <paramref name="batchSize"/> rows per statement,
+    /// oldest first and one status at a time.
+    ///
+    /// <para>
+    /// <b>Batches, not the one statement every other table here gets.</b> When this was written the
+    /// production queue held 4.2 million rows covering three months, so its first pass meets about two
+    /// thirds of a table that size at once. One <c>DELETE</c> over all of it is one transaction holding
+    /// every one of those rows and writing all of their WAL before it commits, on the table the worker
+    /// claims from every few seconds; and a pass cut short by a restart rolls the whole of it back and
+    /// meets the same pile the next night. A batch commits on its own, so a pass can be stopped
+    /// anywhere and keeps what it did, and every pass after the first is one night's worth.
+    /// </para>
+    /// <para>
+    /// <b>One status at a time, oldest first,</b> so each batch is the start of one range of the
+    /// <c>(Status, CreatedAt)</c> index the worker's claim already reads (<c>HarboraDbContext</c>): no
+    /// new index and no migration. Over the three statuses together there is no single order the index
+    /// can hand rows back in, and every batch would have to find and sort all the remaining candidates
+    /// to choose its first ten thousand. That is the plan PostgreSQL is expected to choose, reasoned from
+    /// the index; it has not been measured against a table this size.
+    /// </para>
+    /// <para>
+    /// The predicate is <see cref="RetentionRule.JobsToDelete"/> unchanged, and narrowing it to one
+    /// status can only take rows away from what it selects. A batch that comes back short is the end of
+    /// its status, so the loop is bounded by the rows there are, never by the clock.
+    /// </para>
+    /// </summary>
+    internal static async Task<int> SweepJobsAsync(
+        HarboraDbContext db, DateTimeOffset cutoff, int batchSize, CancellationToken ct)
+    {
+        var size = Math.Max(1, batchSize);
+        var rule = RetentionRule.JobsToDelete(cutoff);
+        var deleted = 0;
+
+        foreach (var status in RetentionRule.SettledJobStatuses)
+        {
+            int removed;
+            do
+            {
+                ct.ThrowIfCancellationRequested();
+                var batch = db.Jobs.IgnoreQueryFilters()
+                    .Where(rule)
+                    .Where(job => job.Status == status)
+                    .OrderBy(job => job.CreatedAt)
+                    .Take(size);
+
+                removed = await DeleteAsync(db, batch, ct);
+                deleted += removed;
+            }
+            while (removed == size);
+        }
+
+        return deleted;
+    }
+
+    /// <summary>
     /// Deletes everything the rule selects.
     ///
     /// <para>
@@ -400,12 +482,16 @@ public sealed class DataRetentionSweeper(
     /// statement itself is exercised where a real PostgreSQL is available.
     /// </para>
     /// </summary>
-    private static async Task<int> DeleteAsync<TEntity>(
+    private static Task<int> DeleteAsync<TEntity>(
         HarboraDbContext db, Expression<Func<TEntity, bool>> rule, CancellationToken ct)
+        where TEntity : class =>
+        DeleteAsync(db, db.Set<TEntity>().IgnoreQueryFilters().Where(rule), ct);
+
+    /// <summary>The same, for a query narrowed further than one rule: a batch.</summary>
+    private static async Task<int> DeleteAsync<TEntity>(
+        HarboraDbContext db, IQueryable<TEntity> doomed, CancellationToken ct)
         where TEntity : class
     {
-        var doomed = db.Set<TEntity>().IgnoreQueryFilters().Where(rule);
-
         if (db.Database.IsRelational())
             return await doomed.ExecuteDeleteAsync(ct);
 

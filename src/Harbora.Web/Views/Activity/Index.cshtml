@@ -19,9 +19,18 @@
     <div>
         <h1 class="text-xl font-semibold">@(isFa ? "فعالیت" : "Activity")</h1>
         <p class="text-sm text-ink-muted">
-            @(isFa
-                ? "هر کار پس‌زمینه‌ای که این فضای کاری صف کرده، جدیدترین ابتدا."
-                : "Every background job this workspace has queued, newest first.")
+            @if (Model.SettledKeptForDays is { } keptDays)
+            {
+                @(isFa
+                    ? $"کارهای پس‌زمینه‌ای که این فضای کاری صف کرده، جدیدترین ابتدا. کاری که تمام شده تا {keptDays} روز اینجا می‌ماند."
+                    : $"Background jobs this workspace has queued, newest first. A finished job stays here for {keptDays} days.")
+            }
+            else
+            {
+                @(isFa
+                    ? "هر کار پس‌زمینه‌ای که این فضای کاری صف کرده، جدیدترین ابتدا."
+                    : "Every background job this workspace has queued, newest first.")
+            }
         </p>
     </div>
 </div>

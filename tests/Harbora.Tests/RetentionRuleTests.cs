@@ -5,6 +5,7 @@ using Harbora.Domain.Auditing;
 using Harbora.Domain.Common;
 using Harbora.Domain.Deployments;
 using Harbora.Domain.Identity;
+using Harbora.Domain.Jobs;
 using Harbora.Domain.Nodes;
 using Harbora.Infrastructure.Maintenance;
 using Harbora.NodeAgent.Contracts;
@@ -351,5 +352,72 @@ public class RetentionRuleTests
         var liveToken = new EmailVerificationToken { ExpiresAt = Now.AddSeconds(1) };
         Selected(RetentionRule.EmailVerificationTokensToDelete(Now), oldToken, liveToken)
             .Should().ContainSingle().Which.Should().BeSameAs(oldToken);
+    }
+
+    // ---------- the job queue ----------
+
+    private static Job Job(JobStatus status, DateTimeOffset createdAt, DateTimeOffset? finishedAt) => new()
+    {
+        Kind = JobKind.Deployment, TargetId = Guid.NewGuid(), Status = status,
+        CreatedAt = createdAt, FinishedAt = finishedAt
+    };
+
+    [Theory]
+    [InlineData(JobStatus.Succeeded)]
+    [InlineData(JobStatus.Failed)]
+    [InlineData(JobStatus.Cancelled)]
+    public void A_settled_job_queued_and_finished_before_the_cutoff_goes_and_a_newer_one_stays(JobStatus status)
+    {
+        var cutoff = Now.AddDays(-30);
+        var old = Job(status, cutoff.AddDays(-1), cutoff.AddDays(-1));
+        var recent = Job(status, cutoff.AddDays(1), cutoff.AddDays(1));
+
+        Selected(RetentionRule.JobsToDelete(cutoff), old, recent)
+            .Should().ContainSingle().Which.Should().BeSameAs(old);
+    }
+
+    [Theory]
+    [InlineData(JobStatus.Pending)]
+    [InlineData(JobStatus.Running)]
+    public void A_job_still_in_the_queue_is_never_swept_however_old_it_is(JobStatus status)
+    {
+        // That row is the queue: the worker claims it, a restart's reconciler settles it, a cancel
+        // finds it. A Pending one can be old for a reason (a retry backoff, another job of the same app
+        // ahead of it), and deleting it would drop the work without a word to anybody.
+        var cutoff = Now.AddDays(-30);
+        var ancient = Job(status, cutoff.AddYears(-1), finishedAt: null);
+
+        Selected(RetentionRule.JobsToDelete(cutoff), ancient).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void A_job_that_waited_past_the_cutoff_is_kept_until_its_finish_is_past_it_too()
+    {
+        // Age is the queue time, because that is what the index is ordered by; but a job that sat in
+        // the queue for weeks and finished last night is not thirty days old in any sense a person
+        // reading the Activity page would recognise.
+        var cutoff = Now.AddDays(-30);
+        var finishedLastNight = Job(JobStatus.Succeeded, cutoff.AddDays(-5), Now.AddDays(-1));
+
+        Selected(RetentionRule.JobsToDelete(cutoff), finishedLastNight).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void The_predicate_and_the_entity_agree_about_which_jobs_are_settled()
+    {
+        // JobsToDelete spells the statuses out because it has to become SQL, while Job.IsTerminal is
+        // C#, and the sweeper deletes one status of SettledJobStatuses at a time. A status appended to
+        // the enum and to only one of the three fails here.
+        var cutoff = Now.AddDays(-30);
+
+        foreach (var status in Enum.GetValues<JobStatus>())
+        {
+            var job = Job(status, cutoff.AddDays(-1), cutoff.AddDays(-1));
+
+            Selected(RetentionRule.JobsToDelete(cutoff), job).Should()
+                .HaveCount(job.IsTerminal ? 1 : 0, "the sweep's idea of a settled {0} job must match the job's own", status);
+            RetentionRule.SettledJobStatuses.Contains(status).Should().Be(job.IsTerminal,
+                "the sweeper walks exactly the settled statuses, one at a time");
+        }
     }
 }
