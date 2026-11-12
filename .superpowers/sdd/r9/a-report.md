@@ -114,7 +114,26 @@ patterns around it), else `EnvFiles.StaysHome` keeps it back with the reason `bu
 
 ## Runs on the final commit
 
-Recorded in the reply that hands this report back; the numbers are filled in below after the run.
+On `90feb05` (the last code commit; the report commits after it change nothing that builds), in this
+worktree, nothing else running in it:
+
+```
+export MSBUILDDISABLENODEREUSE=1
+dotnet build Harbora.slnx --no-restore --nologo -v q -p:UseSharedCompilation=false   # BUILD_EXIT=0
+dotnet test Harbora.slnx --no-build --nologo -v q --blame-hang --blame-hang-timeout 6m --blame-hang-dump-type none   # EXIT=0
+```
+
+- Build: 0 errors, 2 warnings, both `NU1903` advisories on `SSH.NET` 2025.1.0 in
+  `Harbora.Postgres.Tests.csproj`, a package this work does not touch. No compiler warnings.
+- `Harbora.Tests.dll`: **9544 passed**, 0 failed, 0 skipped (baseline 9457; +87 new).
+- `Harbora.NodeAgent.Tests.dll`: 500 passed, 17 skipped. `Harbora.NodeIngress.Tests.dll`: 15 passed.
+  `Harbora.Postgres.Tests.dll`: 117 skipped (no Postgres credentials here), as at baseline.
+- `grep -c "Harbora.Tests.dll"` on the log: 2.
+- Front-end tests not run: nothing under `Scripts/` changed.
+
+Earlier, on the way: the filtered run of my own classes (EnvFiles, SourcePacker, SourceArchive,
+SourceArchiveZip, CliDoctor, CliEnvFileNotice, CliLaunchEndToEnd, LaunchChapter) gave 359 passed; and
+CiExample, DocumentationDrift, Learning*, LaunchChapter and LaunchHttp gave 282 passed.
 
 ## Unverified
 
