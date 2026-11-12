@@ -311,6 +311,7 @@ public sealed class CliLaunchEndToEndTests : IClassFixture<LaunchPanelFixture>, 
     {
         File.WriteAllText(Path.Combine(_dir, ".env"), "REAL_SECRET=hunter2-from-dotenv");
         File.WriteAllText(Path.Combine(_dir, ".env.local"), "REAL_SECRET=hunter2-from-dotenv-local");
+        File.WriteAllText(Path.Combine(_dir, ".env.production"), "REAL_SECRET=hunter2-from-production");
         File.WriteAllText(Path.Combine(_dir, ".env.example"), "REAL_SECRET=");
         Directory.CreateDirectory(Path.Combine(_dir, "services", "api"));
         File.WriteAllText(Path.Combine(_dir, "services", "api", ".env"), "REAL_SECRET=hunter2-from-nested");
@@ -329,6 +330,9 @@ public sealed class CliLaunchEndToEndTests : IClassFixture<LaunchPanelFixture>, 
         entries.Values.Should().NotContain(content => content.Contains("hunter2"));
 
         output.Should().Contain("built-in rule '.env'", "what went missing, and why, is said out loud");
+        output.Should().Contain("Kept on this machine: .env, .env.local, .env.production, services/api/.env",
+            "each env file is named, because a build may have been reading one");
+        output.Should().Contain("\"!.env.production\"");
     }
 
     private static async Task<Dictionary<string, string>> ReadTarAsync(string path)

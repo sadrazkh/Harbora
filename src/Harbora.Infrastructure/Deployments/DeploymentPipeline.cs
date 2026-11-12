@@ -1281,7 +1281,8 @@ public sealed class DeploymentPipeline(
 
             await log(LogStream.System, "Unpacking uploaded source …");
             await using var stream = File.OpenRead(deployment.SourceArchivePath);
-            await SourceArchive.ExtractAsync(stream, workDir, ct);
+            var unpacked = await SourceArchive.ExtractAsync(stream, workDir, ct);
+            if (SourceArchive.DescribeEnvFilesLeftOut(unpacked) is { } leftOut) await log(LogStream.System, $"⚠ {leftOut}");
             try { File.Delete(deployment.SourceArchivePath); } catch { /* best effort */ }
             return workDir;
         }
@@ -1326,6 +1327,7 @@ public sealed class DeploymentPipeline(
             var result = await SourceArchive.ExtractAsync(stream, workDir, ct);
             await log(LogStream.System,
                 $"Unpacked {result.Files} entries ({result.Bytes / 1024 / 1024.0:0.#} MB).");
+            if (SourceArchive.DescribeEnvFilesLeftOut(result) is { } leftOut) await log(LogStream.System, $"⚠ {leftOut}");
         }
 
         // The upload is consumed; keeping it would double the disk cost of every deployment.

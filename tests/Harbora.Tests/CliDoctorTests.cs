@@ -544,6 +544,106 @@ public class CliDoctorTests : IDisposable
         checks.Should().Contain(c => c.Name == "Environment");
     }
 
+    // ---- env files a push keeps on this machine ------------------------------------------------
+
+    [Fact]
+    public void A_project_with_no_env_file_hears_nothing_about_them()
+    {
+        Write("package.json", "{}");
+        Write(".env.example", "KEY=\n");
+
+        Doctor.CheckEnvFiles(_root, new ProjectConfig()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Env_and_env_local_are_named_and_need_no_decision()
+    {
+        Write(".env", "A=1\n");
+        Write(".env.local", "B=2\n");
+
+        var check = Single(Doctor.CheckEnvFiles(_root, new ProjectConfig()), "Env files");
+
+        check.Level.Should().Be(Doctor.Level.Ok, "they never go, so there is nothing to choose");
+        check.Detail.Should().Contain(".env, .env.local").And.Contain("variables");
+    }
+
+    [Fact]
+    public void Env_production_is_a_warning_that_says_where_its_values_go_and_how_to_send_it()
+    {
+        // A Vite build reads .env.production; until now it went with the push and the build had it.
+        Write(".env.production", "VITE_API_URL=https://api.example.com\n");
+        Write(".env", "A=1\n");
+
+        var check = Single(Doctor.CheckEnvFiles(_root, new ProjectConfig()), "Env files");
+
+        check.Level.Should().Be(Doctor.Level.Warn);
+        check.Detail.Should().Contain(".env.production").And.Contain("app's variables")
+            .And.Contain("\"!.env.production\"").And.Contain(".dockerignore").And.Contain("ignore: in harbora.yml");
+    }
+
+    [Fact]
+    public void One_a_bang_line_sends_is_said_to_be_uploaded()
+    {
+        Write(".env.production", "VITE_API_URL=https://api.example.com\n");
+        Write(".dockerignore", "node_modules\n!.env.production\n");
+
+        var check = Single(Doctor.CheckEnvFiles(_root, new ProjectConfig()), "Env files");
+
+        check.Level.Should().Be(Doctor.Level.Ok);
+        check.Detail.Should().Contain(".env.production would be uploaded");
+    }
+
+    [Fact]
+    public void One_under_node_modules_is_not_the_projects_to_decide_about()
+    {
+        Write("node_modules/some-package/.env.production", "X=1\n");
+
+        Doctor.CheckEnvFiles(_root, new ProjectConfig()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_dockerfile_copying_env_production_fails_before_the_upload_with_what_to_do_instead()
+    {
+        Write(".env.production", "VITE_API_URL=https://api.example.com\n");
+
+        var checks = await Doctor.CheckUploadAsync(_root, new ProjectConfig(), [".env.production"], default);
+
+        var failure = checks.Should().ContainSingle(c => c.Level == Doctor.Level.Fail).Which;
+        failure.Name.Should().Be("Upload / Dockerfile COPY");
+        failure.Detail.Should().Contain("\"!.env.production\"").And.Contain("drop the COPY").And.NotContain("DriveUnion");
+    }
+
+    [Fact]
+    public async Task Doctor_full_report_includes_the_env_files_check()
+    {
+        Write("package.json", "{}");
+        Write(".env.staging", "KEY=value\n");
+
+        var checks = await DoctorCommand.RunAsync(_root, new ProjectConfig { App = "my-app" }, null, null, null, default);
+
+        checks.Should().Contain(c => c.Name == "Env files" && c.Level == Doctor.Level.Warn);
+    }
+
+    [Fact]
+    public async Task Deploys_preflight_neither_stops_for_an_env_file_nor_says_it_twice()
+    {
+        // The push names what it kept, after packing; the preflight saying it as well would only bury it.
+        Write("package.json", "{}");
+        Write("index.js", "console.log(1)");
+        Write(".env.production", "KEY=value\n");
+
+        var exit = await DeployCommand.PreflightAsync(_root, new ProjectConfig(), skip: false, default);
+
+        exit.Should().BeNull();
+
+        var source = CliSource("Commands.cs");
+        var preflight = source.IndexOf("public static async Task<int?> PreflightAsync", StringComparison.Ordinal);
+        var next = source.IndexOf("TriggerAsync(", preflight, StringComparison.Ordinal);
+        preflight.Should().BeGreaterThan(-1);
+        next.Should().BeGreaterThan(preflight);
+        source[preflight..next].Should().NotContain("CheckEnvFiles");
+    }
+
     // ---- auth ---------------------------------------------------------------------------------
 
     private sealed class Panel(Func<HttpRequestMessage, HttpResponseMessage> answer) : HttpMessageHandler

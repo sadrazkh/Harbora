@@ -272,7 +272,7 @@ harbora accounts                               # signed in to several panels? th
 harbora update                                 # keep the CLI current; it says when it is behind the panel
 
 harbora init                                   # writes ./harbora.yml (slug = folder name; detects a Dockerfile)
-harbora doctor                                 # manifest, Dockerfile/COPY sources, $PORT, upload excludes, auth
+harbora doctor                                 # manifest, Dockerfile/COPY sources, $PORT, upload excludes, env files, auth
                                                #   — deploy runs this itself before uploading
 
 harbora launch                                 # this folder, start to finish: says what it found and what it will cost,
@@ -293,6 +293,8 @@ harbora run -- npm start                       # run a local command with that s
 ```
 
 `harbora init` makes `harbora.yml` ready to edit, so `harbora deploy` needs no arguments and the same file drives CI. Use a different name with `harbora init --app my-name`.
+
+To deploy on every push, copy [`examples/ci/`](examples/ci/): a GitHub Actions workflow and a GitLab CI job, each needing two secrets, the panel's address and a token from **Settings → API Tokens**. The steps: [docs/cli-deploy.md](docs/cli-deploy.md#ci-deploy-on-every-push).
 
 `harbora env pull` never overwrites an existing `.env.local` silently — it shows which keys would change and needs `--force`. `.env.local` is already excluded from every upload, and `harbora doctor` warns when it exists but `.gitignore` does not exclude it, since it can hold real secret values.
 
@@ -321,9 +323,9 @@ No app for it yet? `harbora launch` from the same folder does step 1 for you and
 | `--yes` | Do not ask which app; use the one in `harbora.yml` (implied in CI) |
 
 > **What never leaves your machine.** `.dockerignore` is honoured first — it is what the build actually reads — then `.gitignore`. On top of that these are always skipped, even with no ignore file:
-> `.git` · `node_modules` · `vendor` · `bin` · `obj` · `dist` · `build` · `.next` · `.venv` · `__pycache__` · `.idea` · `.vs` · `.vscode` · **`.env`** · `.env.local`
+> `.git` · `node_modules` · `vendor` · `bin` · `obj` · `dist` · `build` · `.next` · `.venv` · `__pycache__` · `.idea` · `.vs` · `.vscode` · **every env file that holds real values**: `.env`, `.env.local`, `.env.production`, `.env.staging`, any `.env.<name>`
 >
-> `.env` is excluded deliberately: it usually holds local database URLs and API keys. Production values belong in the app's **Environment Variables**, not in an uploaded file.
+> Env files usually hold local database URLs and API keys. Production values belong in the app's **Environment Variables**, not in an uploaded file, and the CLI names every env file it kept back. The examples (`.env.example`, `.env.sample`, `.env.template` and the like) are uploaded, because Launch reads your variable names from them. A build that read one of the others (Vite, Next.js and Create React App read `.env.production`) gets public names such as `VITE_` from the app's variables instead; or let that one file through with a `!.env.production` line in `.dockerignore`, or under `ignore:` in `harbora.yml` when there is no `.dockerignore`. `.env` and `.env.local` never go. A Git deploy clones the repository, so a committed `.env.production` is in that build either way. The whole rule: [docs/cli-deploy.md](docs/cli-deploy.md#what-is-never-uploaded).
 
 ## 🖧 Add nodes — one panel, many servers
 

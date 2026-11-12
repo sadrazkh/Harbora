@@ -1,5 +1,6 @@
 using System.Formats.Tar;
 using System.IO.Compression;
+using Harbora.Shared;
 
 namespace Harbora.Infrastructure.Deployments;
 
@@ -30,7 +31,38 @@ public static class SourceArchive
     /// <summary>Entry ceiling — guards against an archive of millions of empty files.</summary>
     public const int MaxEntries = 200_000;
 
-    public sealed record Result(int Files, long Bytes);
+    /// <summary>The ceiling on a zip's own ignore file, read for its <c>!</c> lines before anything is extracted.</summary>
+    private const int MaxIgnoreFileBytes = 64 * 1024;
+
+    public sealed record Result(int Files, long Bytes)
+    {
+        /// <summary>
+        /// The env files a zip carried and the upload left out, by their path in the project. Always
+        /// empty for a tar, which the CLI filtered before it was sent.
+        /// </summary>
+        public IReadOnlyList<string> EnvFilesLeftOut { get; init; } = [];
+    }
+
+    /// <summary>
+    /// The deploy log's line about <see cref="Result.EnvFilesLeftOut"/>, or null when nothing was left
+    /// out. Somebody who sent a zip from a browser has no terminal that could have said it, and a build
+    /// that read <c>.env.production</c> now builds without it.
+    /// </summary>
+    public static string? DescribeEnvFilesLeftOut(Result result)
+    {
+        var paths = result.EnvFilesLeftOut;
+        if (paths.Count == 0) return null;
+
+        var named = paths.Count <= 5 ? string.Join(", ", paths) : $"{string.Join(", ", paths.Take(5))} and {paths.Count - 5} more";
+        var sendable = paths.FirstOrDefault(p =>
+            !EnvFiles.NeverUploaded.Contains(Path.GetFileName(p), StringComparer.OrdinalIgnoreCase));
+
+        return $"Left out {named}: env files hold real values, so an upload does not carry them. Set what the app " +
+               "needs as its variables" +
+               (sendable is null
+                   ? "."
+                   : $"; to build with {sendable}, add \"!{sendable}\" to the project's .dockerignore and upload it again.");
+    }
 
     public static async Task<Result> ExtractAsync(Stream archive, string destination, CancellationToken ct)
     {
@@ -156,10 +188,12 @@ public static class SourceArchive
             if (zip.Entries.Count > MaxEntries) throw TooManyEntries();
 
             var wrapper = SoleTopLevelFolder(zip.Entries);
+            var ignore = IgnoreEntries(zip, wrapper);
 
             var files = 0;
             long bytes = 0;
             var buffer = new byte[81920];
+            var envFilesLeftOut = new List<string>();
 
             foreach (var entry in zip.Entries)
             {
@@ -167,7 +201,18 @@ public static class SourceArchive
 
                 // Resolved before anything is skipped: "../../.env" is an escape, not a file to ignore.
                 var target = ResolveSafePath(root, entry.FullName);
-                if (target is null || IsLeftOutOfAnUpload(entry.FullName)) continue;
+                if (target is null || IsNotSource(entry.FullName)) continue;
+
+                // Read the way the CLI reads a folder: from the project's own root, with its own ignore
+                // file's ! lines. Something beside the wrapper is outside the project and has none. A
+                // folder that happens to be called ".env" holds no keys of its own; only a file does.
+                var inProject = PathInProject(entry.FullName, wrapper);
+                if (!IsZipDirectory(entry.FullName)
+                    && EnvFiles.StaysHome(inProject ?? Relative(entry.FullName), inProject is null ? [] : ignore))
+                {
+                    envFilesLeftOut.Add(inProject ?? Relative(entry.FullName));
+                    continue;
+                }
 
                 if (wrapper is not null)
                 {
@@ -201,7 +246,7 @@ public static class SourceArchive
 
             // A zip of nothing but node_modules and .env is, for a build, an empty folder.
             if (files == 0) throw NotAnArchive();
-            return new Result(files, bytes);
+            return new Result(files, bytes) { EnvFilesLeftOut = envFilesLeftOut };
         }
         catch (Exception ex) when (ex is InvalidDataException or EndOfStreamException)
         {
@@ -210,6 +255,40 @@ public static class SourceArchive
     }
 
     private static bool IsZipDirectory(string entryName) => entryName.EndsWith('/') || entryName.EndsWith('\\');
+
+    /// <summary>An entry's path from the project's root, without the wrapper; null for one outside it.</summary>
+    private static string? PathInProject(string entryName, string? wrapper)
+    {
+        var relative = Relative(entryName);
+        if (wrapper is null) return relative;
+        return relative.StartsWith(wrapper + "/", StringComparison.Ordinal) ? relative[(wrapper.Length + 1)..] : null;
+    }
+
+    /// <summary>
+    /// The project's own <c>.dockerignore</c>, else its <c>.gitignore</c>, as entries: the file the CLI
+    /// reads on a developer's machine, so a <c>!.env.production</c> line lets that file through a zip
+    /// the same way it does a push. Only its <c>!</c> lines are ever used here. Read with a ceiling,
+    /// because the size a zip states for an entry is nothing anybody checked.
+    /// </summary>
+    private static List<string> IgnoreEntries(ZipArchive zip, string? wrapper)
+    {
+        foreach (var name in IgnoreFile.Names)
+        {
+            var path = wrapper is null ? name : $"{wrapper}/{name}";
+            var entry = zip.Entries.FirstOrDefault(e =>
+                !IsZipLink(e) && !IsZipDirectory(e.FullName) && Relative(e.FullName) == path);
+            if (entry is null) continue;
+
+            using var input = entry.Open();
+            var text = new byte[MaxIgnoreFileBytes + 1];
+            var read = input.ReadAtLeast(text, text.Length, throwOnEndOfStream: false);
+            if (read > MaxIgnoreFileBytes) return [];   // nobody's ignore file; nothing is let through
+
+            var content = System.Text.Encoding.UTF8.GetString(text, 0, read).TrimStart('\uFEFF');
+            return IgnoreFile.Entries(content.Split('\n'));
+        }
+        return [];
+    }
 
     /// <summary>
     /// The folder a zip wraps everything in, when it wraps everything: <c>my-shop-main/</c> from GitHub,
@@ -276,11 +355,18 @@ public static class SourceArchive
     }
 
     /// <summary>
-    /// What the CLI filters out on the client. A browser upload has no such step, and a <c>.env</c>
+    /// What the CLI filters out on the client. A browser upload has no such step, and an env file
     /// usually holds real keys, so it stops here: at any depth, because a GitHub zip puts everything
     /// under one top-level folder. Only zips: the tar path is the CLI's, which has already done this.
+    /// Env files are the shared rule in <see cref="EnvFiles"/>, asked here without the project's ignore
+    /// file: that only lets one back in, and a top-level <c>.env.production</c> must never decide
+    /// whether a zip has a wrapper. Extraction asks again, with it.
     /// </summary>
-    private static bool IsLeftOutOfAnUpload(string entryName)
+    private static bool IsLeftOutOfAnUpload(string entryName) =>
+        IsNotSource(entryName) || (!IsZipDirectory(entryName) && EnvFiles.StaysHome(Relative(entryName), []));
+
+    /// <summary><c>.git</c>, <c>node_modules</c>, a Mac's <c>__MACOSX</c> and a desktop's litter: nobody's source.</summary>
+    private static bool IsNotSource(string entryName)
     {
         var segments = entryName.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (segments.Length == 0) return false;
@@ -290,11 +376,7 @@ public static class SourceArchive
                               || s.Equals("__MACOSX", StringComparison.OrdinalIgnoreCase)))
             return true;
 
-        // A folder that happens to be called ".env" holds no keys of its own; only a file does.
-        return !IsZipDirectory(entryName)
-            && (segments[^1].Equals(".env", StringComparison.OrdinalIgnoreCase)
-                || segments[^1].Equals(".env.local", StringComparison.OrdinalIgnoreCase)
-                || SystemLitter.Contains(segments[^1], StringComparer.OrdinalIgnoreCase));
+        return !IsZipDirectory(entryName) && SystemLitter.Contains(segments[^1], StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>

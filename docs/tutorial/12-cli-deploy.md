@@ -30,6 +30,10 @@ deploy با خطایی گیج‌کننده شکست خورد. چیزهایی ک�
 * **Upload** — دقیقاً همان چیزی که `--push` می‌فرستد را می‌سازد و می‌گوید چند فایل و کدام‌ها کنار
   گذاشته می‌شوند و چرا؛ سپس هر مسیر `COPY` و هر اسکریپت `package.json` را با همان فهرستِ حذف‌شده‌ها
   مقایسه می‌کند. **این همان چکی است که می‌توانست اتفاق بالا را قبل از آپلود بگیرد.**
+* **فایل‌های env** — فقط در اجرای مستقیم `harbora doctor` — نام هر فایل env با مقدار واقعی که آپلود
+  روی سیستم شما نگه می‌دارد، و هر فایلی که یک خط `!` به‌جایش می‌فرستد. اگر چیزی جز `.env` و `.env.local`
+  بماند هشدار می‌دهد، چون ممکن است build آن را بخواند (بخش «فایل‌های env» پایین‌تر). Dockerfileی که یکی
+  از این‌ها را `COPY` کند، در چک Upload شکست می‌خورد و می‌گوید به‌جایش چه کنید.
 * **ورود (auth)** — فقط در اجرای مستقیم `harbora doctor`، نه در پیش‌بررسی خودکار داخل `deploy` —
   اینکه نشست فعلی روی همان سرور هنوز معتبر است.
 
@@ -125,6 +129,33 @@ copy-fonts.mjs` — دو سطح پایین‌تر از ریشه، داخل پو�
 2. اگر واقعاً یک پوشهٔ تودرتو به همین اسم‌ها دارید، ورودی ignore خودتان را به ریشه محدود کنید:
    `/build` به‌جای `build`.
 
+### فایل‌های env
+
+هر فایل env که مقدار واقعی دارد روی سیستم خودتان می‌ماند: `.env`، `.env.local`، `.env.production`،
+`.env.staging` و هر `.env.<نام>` دیگری، در هر عمقی. فایل‌های نمونه آپلود می‌شوند، چون Launch نام
+متغیرها را از آن‌ها می‌خواند: `.env.example`، `.env.sample`، `.env.template`، `.env.dist`،
+`env.example`، `example.env`، `sample.env` و هر `.env.<نام>` که به `.example`، `.sample`، `.template`
+یا `.dist` ختم شود، مثل `.env.local.example`. `harbora deploy` و `harbora launch` نام هر فایلی را که
+نگه داشتند می‌گویند، و `harbora doctor` همین را پیش از هر دو. zipی که از مرورگر فرستاده شود هم همین
+قانون را دارد، و لاگ deploy نام چیزی را که کنار گذاشته شد می‌برد.
+
+مقدارهای production جایشان در متغیرهای اپ است، و build هم از همان‌جا می‌خواند: در build خودکار، نامی
+عمومی مثل `VITE_` یا `NEXT_PUBLIC_` خودش به build می‌رسد. این مهم است، چون Vite، Next.js و Create
+React App فایل `.env.production` را هنگام build می‌خوانند؛ پروژه‌ای که به آن فایل تکیه داشت، تا وقتی
+مقدارها روی اپ تنظیم نشده‌اند، بدون آن‌ها ساخته می‌شود.
+
+اگر فایلی واقعاً باید برود، یک خط `!` که نامش را ببرد آن را رد می‌کند: `!.env.production`، یا با
+مسیر: `!apps/web/.env.production`. اگر پروژه `.dockerignore` دارد خط را همان‌جا بنویسید، چون Docker هم
+همان فایل را می‌خواند و خطی مثل `.env*` در آن، فایلی را که CLI فرستاده باز هم از build بیرون نگه
+می‌دارد. وگرنه زیر `ignore:` در `harbora.yml` بنویسید، داخل گیومه: `- "!.env.production"`؛ ساختن یک
+`.dockerignore` فقط برای این کار جای `.gitignore`ی را می‌گیرد که آپلود می‌خواند. در zip، `.dockerignore`
+خود پروژه (یا اگر نباشد `.gitignore`) خوانده می‌شود، نه `harbora.yml`. خط `!` فقط فایل env را
+برمی‌گرداند، و هیچ‌وقت `.env` یا `.env.local` را؛ و هرچه بفرستد، هر کسی که build را ببیند می‌تواند
+بخواند.
+
+deploy از Git مخزن را clone می‌کند، پس `.env.production`ی که commit شده در آن build هست، هرچه این
+قانون‌ها بگویند؛ `--branch` هم همان محتوای commitشده را می‌فرستد.
+
 ## راهنمای هر نوع پروژه
 
 ### ۱. اپ .NET با یک قدم build فرانت‌اند
@@ -211,6 +242,84 @@ Nginx سرو می‌شود — هیچ Dockerfile لازم نیست.
    ساده — وگرنه سیگنال توقفِ هر deploy بعدی به فرآیند اصلی نمی‌رسد.
 4. هرچه در `package.json`/اسکریپت‌های build از یک مسیر سورس نیاز دارید، همان مسیر باید در آپلود
    باشد — `harbora doctor` را قبل از اولین deploy اجرا کنید تا مطمئن شوید.
+
+## deploy با هر push، از CI
+
+دو فایل آماده در [`examples/ci/`](../../examples/ci/) هست، یکی برای GitHub Actions و یکی برای GitLab
+CI. هرکدام دو secret لازم دارد و دیگر هیچ:
+
+1. **یک توکن.** در پنل از منوی حساب کاربری به **«تنظیمات»** بروید، در بخش **«توکن‌های API»** یک نام
+   بدهید (مثلاً `ci`) و **«ساخت»** را بزنید. توکن فقط همان یک بار نشان داده می‌شود، پس همان موقع
+   کپی‌اش کنید. این توکن به‌جای حساب خودتان، در فضای کاری شخصی‌تان، کار می‌کند.
+2. **دو secret در مخزن:** `HARBORA_SERVER` با آدرس پنل (مثل `https://panel.example.com`) و
+   `HARBORA_TOKEN` با همان توکن. در GitHub زیر *Settings → Secrets and variables → Actions*؛ در GitLab
+   زیر *Settings → CI/CD → Variables*، با توکنِ masked.
+3. **کدام اپ.** `harbora deploy` اپ را از `app:` در `harbora.yml` می‌خواند، پس این فایل را commit کنید
+   (`harbora init` آن را می‌سازد)، یا اسلاگ را در خود دستور بنویسید: `harbora deploy my-app --push …`.
+4. **خود فایل.** `examples/ci/github-actions.yml` می‌شود `.github/workflows/harbora.yml`، و
+   `examples/ci/gitlab-ci.yml` می‌شود `.gitlab-ci.yml`.
+
+GitHub Actions، بدون توضیح‌هایش:
+
+```yaml
+name: Deploy to Harbora
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: harbora-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the Harbora CLI
+        run: curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install-cli.sh | bash
+
+      - name: Deploy
+        env:
+          HARBORA_SERVER: ${{ secrets.HARBORA_SERVER }}
+          HARBORA_TOKEN: ${{ secrets.HARBORA_TOKEN }}
+        run: harbora deploy --push --yes --server "$HARBORA_SERVER" --token "$HARBORA_TOKEN"
+```
+
+GitLab CI، بدون توضیح‌هایش:
+
+```yaml
+deploy:
+  stage: deploy
+  image: debian:bookworm-slim
+  resource_group: harbora
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates > /dev/null
+    - curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install-cli.sh | bash
+  script:
+    - harbora deploy --push --yes --server "$HARBORA_SERVER" --token "$HARBORA_TOKEN"
+```
+
+همه‌ی کار را همان یک دستور می‌کند:
+
+* `--push` همان commitی را می‌فرستد که job گرفته، چه اپ مخزن Git داشته باشد چه نه؛ پس چیزی که deploy
+  می‌شود دقیقاً همان است که push شد. بدون آن، اپی که مخزن Git دارد را سرور از شاخه‌ی پیش‌فرضش می‌کشد.
+* `--server` و `--token` جای `harbora login` را می‌گیرند، پس اطلاعات ورود روی runner ذخیره نمی‌شود. وقتی
+  ترمینالی نیست `--yes` خودبه‌خود فرض می‌شود؛ اینجا نوشته شده تا دستور هیچ‌وقت منتظر جواب نماند.
+* دستور build را تا آخر دنبال می‌کند: اگر deploy موفق شود با `0` تمام می‌شود و اگر شکست بخورد، لغو
+  شود یا برگردانده شود با `1`؛ پس deploy شکست‌خورده job را هم شکست می‌دهد. `--no-follow` همین که deploy
+  در صف قرار گرفت با `0` برمی‌گردد و چیزی درباره‌ی موفق‌بودنش نمی‌گوید.
+* `concurrency` در GitHub و `resource_group` در GitLab هر بار فقط یک deploy را اجرا می‌کنند. بدون آن‌ها،
+  آپلودی که وقتی build همین اپ هنوز در جریان است برسد، رد می‌شود.
+* `.env.production`ی که commit شده در checkout هست ولی آپلود نمی‌شود (بخش «فایل‌های env») و لاگ job
+  نامش را می‌برد. مقدارهایش را در متغیرهای اپ بگذارید.
+
+اپی که به مخزن Git وصل است، بدون هیچ CIی هم می‌تواند با هر push از بخش «استقرار خودکار (Git)» در
+صفحه‌ی خودش deploy شود.
 
 ## جمع‌بندی: قبل از اولین deploy یک اپ تازه
 

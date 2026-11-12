@@ -241,6 +241,7 @@ public sealed class DoctorCommand : AsyncCommand<DoctorCommand.Settings>
         // deploy's own preflight below — an ungitignored .env.local is a git-hygiene risk, not
         // something that would break this deploy the way a Warn-level check here never would anyway.
         checks.AddRange(Doctor.CheckEnvLocal(dir));
+        checks.AddRange(Doctor.CheckEnvFiles(dir, config));
 
         var (buildChecks, referenced) = Doctor.CheckBuild(dir, config);
         checks.AddRange(buildChecks);
@@ -535,6 +536,7 @@ public sealed class DeployCommand : AsyncCommand<DeployCommand.Settings>
         AnsiConsole.MarkupLine(
             $"[yellow]Excluded[/] {excluded.Count} file(s): {Markup.Escape(string.Join(", ", byReason))}" +
             (verbose ? "" : " [grey](--verbose lists every file)[/]"));
+        EnvFileNotice.Print(excluded);
 
         if (!verbose) return;
         foreach (var entry in excluded)

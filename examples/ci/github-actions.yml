@@ -1,0 +1,42 @@
+# Deploys this repository to Harbora on every push to main.
+#
+# 1. Copy this file to .github/workflows/harbora.yml in your repository.
+# 2. Make a token in the panel: account menu → Settings → API Tokens → Create. It is shown once.
+# 3. In GitHub: Settings → Secrets and variables → Actions → New repository secret, twice:
+#      HARBORA_SERVER   the panel's address, such as https://panel.example.com
+#      HARBORA_TOKEN    the token from step 2
+# 4. Commit harbora.yml with app: set to the app's slug (harbora init writes it), or put the slug
+#    straight after "harbora deploy" below.
+#
+# Env files holding real values (.env, .env.production and the like) are not uploaded: the app's
+# variables in the panel are where those values belong. docs/cli-deploy.md, "CI: deploy on every
+# push", says how to send one that has to go.
+name: Deploy to Harbora
+
+on:
+  push:
+    branches: [main]
+
+# One deploy at a time: a second push waits for the first rather than being refused while it builds.
+concurrency:
+  group: harbora-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The latest release of the CLI.
+      - name: Install the Harbora CLI
+        run: curl -fsSL https://raw.githubusercontent.com/sadrazkh/Harbora/master/deploy/install-cli.sh | bash
+
+      # --push uploads the commit this job checked out. The command follows the build and exits
+      # non-zero when the deployment fails, so a failed deploy fails this job.
+      # Workspace: the token owner's personal one. (Placeholder: a team workspace is named on this command.)
+      - name: Deploy
+        env:
+          HARBORA_SERVER: ${{ secrets.HARBORA_SERVER }}
+          HARBORA_TOKEN: ${{ secrets.HARBORA_TOKEN }}
+        run: harbora deploy --push --yes --server "$HARBORA_SERVER" --token "$HARBORA_TOKEN"
