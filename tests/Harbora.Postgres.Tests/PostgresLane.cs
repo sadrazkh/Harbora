@@ -108,7 +108,13 @@ public sealed class PostgresLane : IAsyncLifetime
             // A constraint violation names the row that caused it. Off by default because values
             // can be personal data; on here because the values are this file's own inventions and a
             // CI failure with the offending key in it is worth several hours.
-            IncludeErrorDetail = true
+            IncludeErrorDetail = true,
+            // Every fact gets a database of its own, and Npgsql keeps one pool per connection string, so
+            // each database used to leave its connections open and idle for the five minutes before
+            // pruning. The whole lane runs in less than that, so they only ever added up: with 119 facts
+            // the container's 100 connections ran out and an unrelated test failed with 53300, "too
+            // many clients already". Unpooled, a connection closes when the fact disposes it.
+            Pooling = false
         }.ConnectionString;
     }
 
