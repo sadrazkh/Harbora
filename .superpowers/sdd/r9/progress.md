@@ -93,3 +93,33 @@ template returns before committing its creation transaction (TemplateDeploymentS
 so on PostgreSQL the database, its charge and its job would roll back while the page reports success.
 
 Still held: E, F and G. Not done: merging to master, pushing, deploying.
+
+## Released as 0.13.0 and deployed, 2026-11-12
+
+The owner answered both questions (a template database fix and an automatic backup at the plan's own
+maximum: do them; billing jobs are deleted like the rest), said to deploy, and then to let the baseline
+documents go with it.
+
+- Agent H (Opus) made the two fixes on `r9/h` (1588b6e, 1342d87) and they were picked onto r9/int.
+- Final run on r9/int at eacd3f7 (version 0.13.0): build 0 errors; Harbora.Tests 9710 passed, 0 failed;
+  NodeAgent 500 (+17 skipped); NodeIngress 15; Postgres 119 skipped here; front-end 539; Vite ok.
+- Merged into master as 1b8d520 with the baseline documents, and pushed. Tag v0.13.0 and the CLI release
+  (Windows, Linux, macOS, nupkg) published. Launch proof 43248018959 on 1b8d520: success.
+- CI 43248018684 failed in the Postgres lane only: 53300 "too many clients already" in an unrelated test.
+  Every fact makes its own database and each kept an idle Npgsql pool open for the whole run; at 119 facts
+  the container's 100 connections ran out. Fixed by opening those databases unpooled (a99f7bc, test code
+  only). CI 43298167843 on a99f7bc: every job green, the Postgres lane included.
+- Pre-flight: server on 7e90af0, disk 50%, panel healthy, nothing in flight, all four customer databases
+  Running, MinIO pin in place and every service but the panel unchanged by hash.
+- Rollback image `harbora/panel:before-1b8d520` (c38ea3bd5190, the 7e90af0 build).
+- `install.sh update` detached: UPDATE_EXIT=0, every verify check passed including both certificates.
+  HEAD a99f7bc; image built 20:25Z against a commit at 20:13Z; panel healthy, 0 restarts, no error lines;
+  `/api/v1/version` answers 0.13.0; MinIO not recreated, still on its pinned image. No migration in this
+  release.
+- What happens next on its own: the build-directory sweep about ten minutes after start (about 1 GB in 13
+  folders before it), and the first Jobs retention pass at 03:00 UTC (about 2.3 million settled rows older
+  than 30 days, in batches of 10,000). The freed table space returns to the disk only after a
+  `VACUUM (FULL) "Jobs"`, which was not run.
+
+Still held: E (checks after every deployment), F (the extended real proof; its first run on proof/r9 has
+not been read), G (workspace selection for the CLI and API).

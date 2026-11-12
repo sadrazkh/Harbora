@@ -34,7 +34,7 @@ Labels used in every baseline document: **[Verified]** was checked against the c
 | Backlog tracker | 66 items: 41 done, 16 partial, 9 open | `docs/product-audit/backlog.json` |
 | License | none; the README says "TBD" and there is no LICENSE file | `README.md` |
 
-[Verified] Production runs commit `7e90af0` (v0.12.0), deployed 2026-11-05 (`.superpowers/sdd/r8/progress.md`). The two later commits on `master` change only that ledger.
+[Verified] Production runs commit `a99f7bc` (v0.13.0), deployed 2026-11-12 (`.superpowers/sdd/r9/progress.md`). Later commits on `master`, if any, change only documents and ledgers.
 
 [Verified] The repository is public on GitHub. Production host addresses and access details are deliberately not written in these documents.
 
