@@ -7,6 +7,7 @@ using Harbora.Domain.Launch;
 using Harbora.Infrastructure.Apps;
 using Harbora.Infrastructure.Billing;
 using Harbora.Infrastructure.Deployments;
+using Harbora.Infrastructure.Git;
 using Harbora.Infrastructure.Security;
 using Harbora.Infrastructure.Services;
 using Harbora.Shared.Inspection;
@@ -57,6 +58,7 @@ public sealed partial class LaunchService(
     IOptions<HarboraRuntimeOptions> runtime,
     IOptions<BillingOptions> billing,
     ILaunchSourceReader reader,
+    GitAccounts accounts,
     IServiceProvider serviceProvider,
     ILogger<LaunchService> logger) : ILaunchService
 {
@@ -72,6 +74,14 @@ public sealed partial class LaunchService(
 
     private static readonly ServiceRefusal NotFound = new(
         "This launch does not exist.", "این راه‌اندازی وجود ندارد.");
+
+    /// <summary>How long the inspection waits on one connected account asked whether a pasted address is its own.</summary>
+    private static readonly TimeSpan OwnerPatience = TimeSpan.FromSeconds(20);
+
+    private static readonly ServiceRefusal AccountGone = new(
+        "That Git account is no longer connected. Connect it again on the Git page, or paste the repository's address.",
+        "این حساب Git دیگر وصل نیست. آن را در «اتصال Git» دوباره وصل کن، یا آدرس مخزن را بنویس.",
+        nameof(LaunchStartRequest.GitProviderId));
 
     private static readonly ServiceRefusal NotTheCaller = new(
         "This request names a workspace or user other than the one signed in.",
@@ -98,6 +108,7 @@ public sealed partial class LaunchService(
         if (!place.Allowed) return ServiceOutcome<Guid>.Refused(AppRefusals.EnvironmentNotAllowed);
 
         string? cloneUrl = null, token = null, gitRef = null, archivePath = null;
+        Guid? accountId = null;
         switch (request.Source)
         {
             case LaunchSourceKind.Git:
@@ -109,6 +120,22 @@ public sealed partial class LaunchService(
                 if (gitRef?.Length > MaxRefLength)
                     return ServiceOutcome<Guid>.Refused(new ServiceRefusal(
                         "That branch name is too long.", "نام این شاخه بیش از حد بلند است.", nameof(LaunchStartRequest.GitRef)));
+
+                // Picked from a connected account's list. Its token is read from its own row when the
+                // repository is, so nothing secret goes onto this one; and only an address on that
+                // account's host is read with it.
+                if (request.GitProviderId is { } picked)
+                {
+                    var account = await accounts.FindAsync(request.WorkspaceId, picked, ct);
+                    if (account is null) return ServiceOutcome<Guid>.Refused(AccountGone);
+                    if (!GitRepositoryAddress.IsOn(account, cloneUrl))
+                        return ServiceOutcome<Guid>.Refused(new ServiceRefusal(
+                            $"That address is not on {account.Name}, so it cannot be read with that account.",
+                            $"این آدرس روی {account.Name} نیست، پس با آن حساب خوانده نمی‌شود.",
+                            nameof(LaunchStartRequest.CloneUrl)));
+                    accountId = account.Id;
+                    token = null;
+                }
                 break;
 
             case LaunchSourceKind.Upload:
@@ -135,7 +162,8 @@ public sealed partial class LaunchService(
             CloneUrl = cloneUrl,
             GitRef = gitRef,
             EncryptedGitToken = string.IsNullOrEmpty(token) ? null : protector.Protect(token),
-            ArchivePath = archivePath
+            ArchivePath = archivePath,
+            InspectionJson = accountId is { } through ? LaunchJson.Write(StoredInspection.ReadThrough(through)) : null
         };
         db.AppLaunches.Add(launch);
         await db.SaveChangesAsync(ct);
@@ -147,6 +175,7 @@ public sealed partial class LaunchService(
                 source = request.Source.ToString(),
                 url = cloneUrl,
                 gitRef,
+                gitAccount = accountId,
                 archive = archivePath is null ? null : LaunchSource.LabelForArchive(archivePath)
             }),
             workspaceId: request.WorkspaceId, ct: ct);
@@ -202,7 +231,7 @@ public sealed partial class LaunchService(
         if (launch is null || launch.Status != LaunchStatus.Inspecting) return;
 
         var work = WorkDirFor(launchId);
-        var token = TokenOf(launch);
+        var (token, accountId) = await CredentialForAsync(launch, ct);
         try
         {
             string root;
@@ -224,7 +253,7 @@ public sealed partial class LaunchService(
                 root = work;
             }
 
-            var stored = ReadTree(root, launch.GitRef, branch);
+            var stored = ReadTree(root, launch.GitRef, branch) with { GitProviderId = accountId };
 
             await UpdateAsync(launchId, l =>
             {
@@ -243,7 +272,7 @@ public sealed partial class LaunchService(
         {
             logger.LogWarning("Launch {LaunchId} could not read its source: {Reason}", launchId, Scrub(ex.Message, token));
             var (message, messageFa) = launch.SourceKind == LaunchSourceKind.Git
-                ? CloneFailure(ex, token)
+                ? CloneFailure(ex, token, throughAccount: accountId is not null)
                 : ArchiveFailure(ex);
             await EndInspectionAsync(launchId, message, messageFa, CancellationToken.None);
         }
@@ -255,6 +284,30 @@ public sealed partial class LaunchService(
     }
 
     private string WorkDirFor(Guid launchId) => Path.Combine(runtime.Value.WorkDir, "_launch", launchId.ToString());
+
+    /// <summary>
+    /// What reads the repository, and through which connected account. A token typed for this launch
+    /// is the person's own say and wins. Then the account it was picked from, while that is still
+    /// connected and the address is on its host. Then, for a pasted address, a connected account whose
+    /// own list holds it: such a repository is plainly that account's, and is read and created as if it
+    /// had been picked. Nothing found is the anonymous clone a pasted address always was.
+    /// </summary>
+    private async Task<(string? Token, Guid? AccountId)> CredentialForAsync(AppLaunch launch, CancellationToken ct)
+    {
+        if (launch.SourceKind != LaunchSourceKind.Git) return (null, null);
+        if (TokenOf(launch) is { } typed) return (typed, null);
+
+        if (LaunchJson.ReadStored(launch.InspectionJson).GitProviderId is { } picked)
+        {
+            var account = await accounts.FindAsync(launch.WorkspaceId, picked, ct);
+            return account is not null && GitRepositoryAddress.IsOn(account, launch.CloneUrl) && accounts.TokenOf(account) is { } own
+                ? (own, account.Id)
+                : (null, null);
+        }
+
+        var owner = await accounts.OwnerOfAsync(launch.WorkspaceId, launch.CloneUrl!, OwnerPatience, ct);
+        return owner is { } found ? (found.Token, found.Account.Id) : (null, null);
+    }
 
     /// <summary>
     /// The tree, and every folder in it a person might choose: this is the last moment any of them can
@@ -318,9 +371,16 @@ public sealed partial class LaunchService(
         return inspection with { Notes = notes };
     }
 
-    private (string Message, string MessageFa) CloneFailure(Exception ex, string? token)
+    /// <summary>
+    /// Read through a connected account, "add a token" is the wrong advice: the account's own token was
+    /// the one used, so what to do about it is the account.
+    /// </summary>
+    private (string Message, string MessageFa) CloneFailure(Exception ex, string? token, bool throughAccount)
     {
         var reason = LogText.Clean(Scrub(ex.Message, token)).Trim();
+        if (throughAccount)
+            return ($"Could not read this repository with the connected Git account: its token may have expired, or may no longer reach this repository. Connect it again on the Git page, or paste the address with a token. Nothing was created. ({reason})",
+                $"این مخزن با حساب Git وصل‌شده خوانده نشد: شاید توکنش منقضی شده باشد یا دیگر به این مخزن دسترسی نداشته باشد. آن را در «اتصال Git» دوباره وصل کن، یا آدرس را با توکن بده. چیزی ساخته نشد. ({reason})");
         return ($"Could not read this repository. The URL may be wrong, or the repository may be private: if it is, add an access token and try again. Nothing was created. ({reason})",
             $"این مخزن خوانده نشد. شاید آدرس اشتباه باشد یا مخزن خصوصی باشد؛ اگر خصوصی است، توکن دسترسی را هم بده و دوباره امتحان کن. چیزی ساخته نشد. ({reason})");
     }

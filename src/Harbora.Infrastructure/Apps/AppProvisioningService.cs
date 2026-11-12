@@ -10,6 +10,7 @@ using Harbora.Domain.Networking;
 using Harbora.Domain.Tenancy;
 using Harbora.Infrastructure.Billing;
 using Harbora.Infrastructure.Deployments;
+using Harbora.Infrastructure.Git;
 using Harbora.Infrastructure.Networking;
 using Harbora.Infrastructure.Projects;
 using Harbora.Infrastructure.Security;
@@ -49,6 +50,7 @@ public sealed class AppProvisioningService(
     {
         var refusals = new List<ServiceRefusal>();
         var slug = await CheckFormAsync(request, refusals, ct);
+        if ((await RepositorySourceAsync(request, ct)).AccountGone) refusals.Add(GitAccountGone);
         var size = await SizeAsync(request.InstanceSizeKey, ct);
         var environment = await PeekEnvironmentAsync(request.WorkspaceId, request.EnvironmentId, ct);
 
@@ -85,6 +87,8 @@ public sealed class AppProvisioningService(
 
         var refusals = new List<ServiceRefusal>();
         var slug = await CheckFormAsync(request, refusals, ct);
+        var repository = await RepositorySourceAsync(request, ct);
+        if (repository.AccountGone) refusals.Add(GitAccountGone);
         var size = await SizeAsync(request.InstanceSizeKey, ct);
 
         // The environment id is a writable form value. Workspace ownership alone is not enough: a
@@ -127,24 +131,7 @@ public sealed class AppProvisioningService(
         await CheckGovernedAsync(request.WorkspaceId, app, refusals, ct);
         if (refusals.Count > 0) return ServiceOutcome<AppCreateResult>.Refused(refusals);
 
-        if (UsesRepository(request.SourceType))
-        {
-            app.GitRepository = new GitRepository
-            {
-                Provider = new GitProvider
-                {
-                    WorkspaceId = request.WorkspaceId,
-                    Name = "Custom",
-                    Type = GitProviderType.Custom,
-                    ApiBaseUrl = string.Empty,
-                    EncryptedCredential = string.IsNullOrWhiteSpace(request.GitToken) ? null : protector.Protect(request.GitToken)
-                },
-                FullName = DeriveRepoName(request.CloneUrl!),
-                CloneUrl = request.CloneUrl!,
-                DefaultBranch = request.GitRef ?? "main",
-                WebhookSecret = Guid.NewGuid().ToString("N")
-            };
-        }
+        if (UsesRepository(request.SourceType)) AttachRepository(app, request, repository);
 
         // Attached only now, after every refusal above: a refused create leaves nothing tracked behind
         // it for some later SaveChangesAsync in the same request — the agent's own bookkeeping, an audit
@@ -499,6 +486,100 @@ public sealed class AppProvisioningService(
             };
             if (ours) entry.State = EntityState.Detached;
         }
+    }
+
+    // ---- the repository ------------------------------------------------------------------------
+
+    private static readonly ServiceRefusal GitAccountGone = new(
+        "The Git account this repository was chosen from is no longer connected, or the address is not on it. Connect it again on the Git page, or paste the address.",
+        "حساب Gitی که این مخزن از آن انتخاب شد دیگر وصل نیست، یا این آدرس روی آن نیست. آن را در «اتصال Git» دوباره وصل کن، یا آدرس را بنویس.",
+        nameof(AppCreateRequest.CloneUrl));
+
+    /// <param name="Account">The connected account the app's repository belongs to. Null: a provider of the app's own, as always.</param>
+    /// <param name="Existing">That account's row for this very repository, which the app shares rather than adding a second.</param>
+    /// <param name="AccountGone">An account was named and cannot be used: refused, rather than quietly reading the repository without it.</param>
+    private sealed record RepositorySource(GitProvider? Account, GitRepository? Existing, bool AccountGone = false);
+
+    /// <summary>
+    /// Which repository row the app hangs off. Before this, every app got a <c>Custom</c> provider of its
+    /// own holding whatever token was typed, so an app made from a connected account's repository was
+    /// tied to nothing Harbora could ask a provider about, and two apps on one repository had two
+    /// webhook addresses. Now: the account named (the launch's picker, or a pasted address the account's
+    /// own list held), or else, with no token typed, a connected account that already has a row for
+    /// this repository. Anything else is the provider of its own it always was.
+    ///
+    /// <para>
+    /// Unfiltered with the workspace applied here, like every read of this service that has to hold
+    /// for a caller without a session; and only a row on the address's own host, so a connected
+    /// account's token is never sent to a repository somewhere else.
+    /// </para>
+    /// </summary>
+    private async Task<RepositorySource> RepositorySourceAsync(AppCreateRequest request, CancellationToken ct)
+    {
+        var none = new RepositorySource(null, null);
+        if (!UsesRepository(request.SourceType) || string.IsNullOrWhiteSpace(request.CloneUrl)) return none;
+
+        var key = GitRepositoryAddress.Key(request.CloneUrl);
+        var types = GitAccounts.Connectable.ToList();
+        var accounts = db.GitProviders.IgnoreQueryFilters().AsNoTracking()
+            .Where(p => p.WorkspaceId == request.WorkspaceId && types.Contains(p.Type)
+                        && p.EncryptedCredential != null && p.EncryptedCredential != "");
+
+        if (request.GitProviderId is { } named)
+        {
+            var account = await accounts.FirstOrDefaultAsync(p => p.Id == named, ct);
+            if (account is null || key is null || !GitRepositoryAddress.IsOn(account, request.CloneUrl))
+                return new RepositorySource(null, null, AccountGone: true);
+
+            var rows = await db.GitRepositories.IgnoreQueryFilters().AsNoTracking()
+                .Where(r => r.GitProviderId == named).OrderBy(r => r.CreatedAt).ToListAsync(ct);
+            return new RepositorySource(account, rows.FirstOrDefault(r => GitRepositoryAddress.Key(r.CloneUrl) == key));
+        }
+
+        if (key is null || !string.IsNullOrWhiteSpace(request.GitToken)) return none;
+
+        var ids = await accounts.Select(p => p.Id).ToListAsync(ct);
+        if (ids.Count == 0) return none;
+        var known = await db.GitRepositories.IgnoreQueryFilters().AsNoTracking().Include(r => r.Provider)
+            .Where(r => ids.Contains(r.GitProviderId)).OrderBy(r => r.CreatedAt).ToListAsync(ct);
+        var match = known.FirstOrDefault(r => GitRepositoryAddress.Key(r.CloneUrl) == key
+                                              && r.Provider is not null && GitRepositoryAddress.IsOn(r.Provider, r.CloneUrl));
+        return match is null ? none : new RepositorySource(match.Provider, match);
+    }
+
+    /// <summary>
+    /// Shares the account's row when there is one, adds one under the account when there is not, and
+    /// otherwise gives the app the <c>Custom</c> provider of its own it always had. A connected account's
+    /// row is named by its full path (<c>acme/shop</c>, <c>group/sub/project</c>), which is what each
+    /// provider's API calls a repository; a provider of the app's own keeps the bare name it always had.
+    /// </summary>
+    private void AttachRepository(App app, AppCreateRequest request, RepositorySource source)
+    {
+        if (source.Existing is { } shared)
+        {
+            app.GitRepositoryId = shared.Id;
+            return;
+        }
+
+        var cloneUrl = request.CloneUrl!;
+        app.GitRepository = new GitRepository
+        {
+            GitProviderId = source.Account?.Id ?? Guid.Empty,
+            Provider = source.Account is not null ? null : new GitProvider
+            {
+                WorkspaceId = request.WorkspaceId,
+                Name = "Custom",
+                Type = GitProviderType.Custom,
+                ApiBaseUrl = string.Empty,
+                EncryptedCredential = string.IsNullOrWhiteSpace(request.GitToken) ? null : protector.Protect(request.GitToken)
+            },
+            FullName = source.Account is not null
+                ? GitRepositoryAddress.FullNameOf(cloneUrl) ?? DeriveRepoName(cloneUrl)
+                : DeriveRepoName(cloneUrl),
+            CloneUrl = cloneUrl,
+            DefaultBranch = request.GitRef ?? "main",
+            WebhookSecret = Guid.NewGuid().ToString("N")
+        };
     }
 
     private static bool UsesRepository(AppSourceType source) => source is AppSourceType.GitRepository

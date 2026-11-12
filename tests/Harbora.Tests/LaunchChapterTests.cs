@@ -223,6 +223,8 @@ public sealed class LaunchChapterTests : IDisposable
     [InlineData("بخوانش", "src/Harbora.Web/Views/Launch/Index.cshtml")]
     [InlineData("نشد کدت را بخوانم.", "src/Harbora.Web/Views/Launch/Index.cshtml")]
     [InlineData("مخزن خصوصی است؟", "src/Harbora.Web/Views/Launch/Index.cshtml")]
+    [InlineData("اتصال Git", "src/Harbora.Web/Views/Git/Index.cshtml")]
+    [InlineData("توکن این حساب را نپذیرفت", "src/Harbora.Infrastructure/Git/GitAccounts.cs")]
     [InlineData("این مخزن چند اپ دارد", "src/Harbora.Web/Views/Launch/Root.cshtml")]
     [InlineData("این را پیدا کردم", "src/Harbora.Web/Views/Launch/Confirm.cshtml")]
     [InlineData("راه بینداز", "src/Harbora.Web/Views/Launch/Confirm.cshtml")]

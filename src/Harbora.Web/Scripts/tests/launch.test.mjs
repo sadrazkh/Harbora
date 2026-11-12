@@ -11,6 +11,7 @@ import {
   isAnswered,
   isSlow,
   isTooBig,
+  repositoryMatches,
   slugFor,
   withoutValues,
 } from '../launch.js';
@@ -473,4 +474,41 @@ test('a poll that loses sight of the launch stops claiming anything and offers a
   assert.equal(stopped.classList.contains('hidden'), false);
   assert.equal(spinner.classList.contains('animate-spin'), false);
   assert.equal(keepsGoing.classList.contains('hidden'), true);
+});
+
+// ---- the repository picker's search ----
+
+test('a repository stays in the list when every typed word is somewhere in its name, in any case', () => {
+  assert.equal(repositoryMatches('acme/Shop-API', 'shop'), true);
+  assert.equal(repositoryMatches('acme/Shop-API', 'api acme'), true);
+  assert.equal(repositoryMatches('acme/Shop-API', 'shop web'), false);
+  assert.equal(repositoryMatches('acme/shop', '   '), true, 'nothing typed keeps everything');
+  assert.equal(repositoryMatches('group/sub/project', 'SUB/PRO'), true);
+});
+
+test('typing in the picker hides what does not match and says so when nothing is left', () => {
+  const shop = element({ dataset: { launchRepo: 'acme/shop' } });
+  const blog = element({ dataset: { launchRepo: 'acme/blog' } });
+  const none = element({ classes: ['hidden'] });
+  const list = element({ all: { '[data-launch-repo]': [shop, blog] } });
+  list.parentElement = element({ selected: { '[data-launch-repo-none]': none } });
+  const filter = element({ value: '' });
+  const section = element({
+    selected: { '[data-launch-repo-filter]': filter },
+    all: { '[data-launch-repo-list]': [list] },
+  });
+  const doc = { querySelector: (selector) => (selector === '[data-launch-repos]' ? section : null) };
+
+  initLaunch(doc, quietWindow);
+
+  filter.value = 'shop';
+  filter.fire('input');
+  assert.equal(shop.classList.contains('hidden'), false);
+  assert.equal(blog.classList.contains('hidden'), true);
+  assert.equal(none.classList.contains('hidden'), true);
+
+  filter.value = 'nothing-like-it';
+  filter.fire('input');
+  assert.equal(list.classList.contains('hidden'), true);
+  assert.equal(none.classList.contains('hidden'), false, 'an empty list says so rather than showing nothing');
 });

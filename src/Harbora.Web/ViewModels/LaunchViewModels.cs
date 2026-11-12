@@ -13,17 +13,38 @@ public sealed class LaunchStartForm
     public string? GitRef { get; set; }
     public string? GitToken { get; set; }
     public IFormFile? File { get; set; }
+
+    /// <summary>
+    /// The picker's button: <c>{account id}|{clone url}</c>. One form with a button per repository, so a
+    /// long list carries one antiforgery token rather than one per row, and the button that was pressed
+    /// is the only one whose value is posted.
+    /// </summary>
+    public string? Repository { get; set; }
+
+    public static string PickedValue(Guid accountId, string cloneUrl) => $"{accountId:D}|{cloneUrl}";
+
+    public static (Guid AccountId, string CloneUrl)? ReadPicked(string? value)
+    {
+        var bar = value?.IndexOf('|') ?? -1;
+        return bar > 0 && Guid.TryParse(value![..bar], out var id) && value[(bar + 1)..].Trim() is { Length: > 0 } url
+            ? (id, url)
+            : null;
+    }
 }
 
 /// <summary>What <c>/launch</c> draws. The token is not here: what a person typed into it is never drawn back.</summary>
 /// <param name="ReadingFailed">The last attempt could not be read, and <paramref name="Message"/> says why.</param>
 /// <param name="AskedForDetails">Open the private-repository fold: there is something in it, or something missing from it.</param>
+/// <param name="Accounts">Each connected Git account's repositories, or why they could not be listed. Empty with none connected, and then the page is the paste field it always was.</param>
+/// <param name="Filter">What the list was narrowed to, when somebody searched.</param>
 public sealed record LaunchQuestionModel(
     string? GitUrl = null,
     string? GitRef = null,
     string? Message = null,
     bool ReadingFailed = false,
-    bool AskedForDetails = false);
+    bool AskedForDetails = false,
+    IReadOnlyList<Harbora.Infrastructure.Git.AccountRepositories>? Accounts = null,
+    string? Filter = null);
 
 /// <summary>
 /// The confirm screen as posted. Port and kind are strings because a binder that cannot read one

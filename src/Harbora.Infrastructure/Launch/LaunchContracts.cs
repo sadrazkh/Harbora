@@ -22,6 +22,12 @@ public sealed record LaunchStartRequest
     /// <summary>Stored encrypted; never printed by <see cref="ToString"/>.</summary>
     public string? GitToken { get; init; }
 
+    /// <summary>
+    /// The connected account <see cref="CloneUrl"/> was picked from. The repository is then read with that
+    /// account's own token, so <see cref="GitToken"/> is not used, and the app is created under it.
+    /// </summary>
+    public Guid? GitProviderId { get; init; }
+
     /// <summary>An archive the caller has already written under the runtime's upload directory. Ownership passes to the launch.</summary>
     public string? ArchivePath { get; init; }
 

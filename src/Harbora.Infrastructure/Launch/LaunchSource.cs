@@ -117,11 +117,22 @@ public static partial class LaunchSource
 /// <param name="Root">What the tree as a whole was found to be. Its <c>RootCandidates</c> are the keys of <paramref name="Candidates"/>.</param>
 /// <param name="Candidates">Each folder a person can choose, with its <c>RootDirectory</c> relative to the tree rather than to that folder.</param>
 /// <param name="Chosen">The folder chosen so far, a key of <paramref name="Candidates"/>.</param>
+/// <param name="GitProviderId">
+/// The connected account the repository is read through: the one it was picked from, or the one whose
+/// own list held a pasted address. Kept here because this column is the launch's account of its source,
+/// and it is written before the inspection (a pick) as well as by it. The app is created under this
+/// account rather than under a provider of its own, and its token never touches the launch row.
+/// </param>
 public sealed record StoredInspection(
     SourceInspection Root,
     IReadOnlyDictionary<string, SourceInspection> Candidates,
-    string? Chosen = null)
+    string? Chosen = null,
+    Guid? GitProviderId = null)
 {
+    /// <summary>What a launch picked from a connected account holds before it has been read.</summary>
+    public static StoredInspection ReadThrough(Guid gitProviderId) =>
+        new(SourceInspection.Nothing, new Dictionary<string, SourceInspection>(), GitProviderId: gitProviderId);
+
     /// <summary>
     /// The chosen folder's inspection, or the root's while nothing is chosen. The folders stay listed on
     /// it so the person can change their mind, right up to the confirm.
@@ -167,7 +178,7 @@ public static class LaunchJson
     {
         var stored = Read<StoredInspection>(json);
         return stored?.Root is null
-            ? new StoredInspection(SourceInspection.Nothing, new Dictionary<string, SourceInspection>())
+            ? new StoredInspection(SourceInspection.Nothing, new Dictionary<string, SourceInspection>(), GitProviderId: stored?.GitProviderId)
             : stored with { Candidates = stored.Candidates ?? new Dictionary<string, SourceInspection>() };
     }
 

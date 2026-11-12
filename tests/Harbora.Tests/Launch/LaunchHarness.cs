@@ -73,6 +73,9 @@ internal sealed class LaunchHarness : IDisposable
     /// <summary>What every service built here protects with. A test that has to see ciphertext is not plaintext swaps in a real one.</summary>
     public ISecretProtector Protector { get; set; } = new PassthroughProtector();
 
+    /// <summary>The connected accounts' provider API: what a picked or pasted repository is checked against.</summary>
+    public FakeGitProviders GitProviders { get; } = new();
+
     /// <summary>Thrown by the next queue of a deployment, then forgotten.</summary>
     public Exception? RefuseNextDeployment { get; set; }
     public int DeploymentsQueued { get; set; }
@@ -175,7 +178,9 @@ internal sealed class LaunchHarness : IDisposable
         return new LaunchService(
             db, apps, databases, attachments, configuration, deployments, Provisioner, Git, Jobs, protector,
             new SecretRedactor(), Audit, user, Clock, access, Scheduler, quota, new NoReadings(), creationBilling,
-            Options.Create(new HarboraRuntimeOptions { WorkDir = WorkDir }), billing, Reader, provider, Logs);
+            Options.Create(new HarboraRuntimeOptions { WorkDir = WorkDir }), billing, Reader,
+            new Harbora.Infrastructure.Git.GitAccounts(db, GitProviders, protector, NullLogger<Harbora.Infrastructure.Git.GitAccounts>.Instance),
+            provider, Logs);
     }
 
     // ---- getting a launch to where a test wants it ---------------------------------------------

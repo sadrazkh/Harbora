@@ -38,6 +38,13 @@ public sealed record AppCreateRequest
     /// <summary>Stored encrypted on the Git provider row; never printed by <see cref="ToString"/>.</summary>
     public string? GitToken { get; init; }
 
+    /// <summary>
+    /// A connected Git account (GitHub, GitLab, Gitea) of this workspace to read <see cref="CloneUrl"/>
+    /// through, rather than a provider of the app's own. The app then shares that account's row for the
+    /// repository with any other app on it. Refused when the account is gone or the address is not on its host.
+    /// </summary>
+    public Guid? GitProviderId { get; init; }
+
     public string? DockerfilePath { get; init; } = "Dockerfile";
     public string? ComposeFilePath { get; init; }
 

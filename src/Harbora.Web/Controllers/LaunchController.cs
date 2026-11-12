@@ -6,6 +6,7 @@ using Harbora.Domain.Common;
 using Harbora.Domain.Launch;
 using Harbora.Infrastructure.Apps;
 using Harbora.Infrastructure.Deployments;
+using Harbora.Infrastructure.Git;
 using Harbora.Infrastructure.Launch;
 using Harbora.Infrastructure.Networking;
 using Harbora.Infrastructure.Security;
@@ -45,6 +46,7 @@ public sealed class LaunchController(
     ProjectAccessService access,
     AppAddressAssigner addresses,
     SizePickerService sizes,
+    GitAccounts gitAccounts,
     IOptions<HarboraRuntimeOptions> runtime) : Controller
 {
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
@@ -54,8 +56,10 @@ public sealed class LaunchController(
     private string Say(ServiceRefusal refusal) => IsFa ? refusal.MessageFa : refusal.Message;
     private string Say(IEnumerable<ServiceRefusal> refusals) => string.Join(" ", refusals.Select(Say));
 
+    /// <param name="q">Narrows the connected accounts' repositories to the ones whose name holds this: the search without a script.</param>
     [HttpGet("")]
-    public IActionResult Index() => View(new LaunchQuestionModel());
+    public async Task<IActionResult> Index(string? q, CancellationToken ct) =>
+        View(await QuestionAsync(new LaunchQuestionModel(), q, ct));
 
     /// <summary>
     /// Takes the source and starts reading it. Nothing is created and nothing is charged here, so all
@@ -71,25 +75,35 @@ public sealed class LaunchController(
         var gitUrl = form.GitUrl?.Trim();
         var gitRef = form.GitRef?.Trim();
 
-        IActionResult Refused(string message) => View(nameof(Index), new LaunchQuestionModel(
-            gitUrl, gitRef, message, AskedForDetails: !string.IsNullOrEmpty(gitRef) || !string.IsNullOrEmpty(form.GitToken)));
+        // A repository picked from a connected account's list: which account, and its address. Nothing
+        // else from the paste form comes along, because the picker is a form of its own.
+        Guid? accountId = null;
+        if (LaunchStartForm.ReadPicked(form.Repository) is { } picked)
+        {
+            (accountId, gitUrl, gitRef) = (picked.AccountId, picked.CloneUrl, null);
+            form.GitToken = null;
+        }
+
+        async Task<IActionResult> Refused(string message) => View(nameof(Index), await QuestionAsync(new LaunchQuestionModel(
+            accountId is null ? gitUrl : null, gitRef, message,
+            AskedForDetails: !string.IsNullOrEmpty(gitRef) || !string.IsNullOrEmpty(form.GitToken)), null, ct));
 
         string? archivePath = null;
         if (form.File is { } file)
         {
             if (file.Length == 0)
-                return Refused(IsFa
+                return await Refused(IsFa
                     ? "این فایل خالی است. پوشه‌ی پروژه را دوباره zip کن."
                     : "That file is empty. Zip your project folder again.");
             if (UploadedArchive.WhyNot(file, IsFa) is { } notAZip)
-                return Refused(notAZip);
+                return await Refused(notAZip);
 
             archivePath = UploadedArchive.PathForLaunch(runtime.Value.WorkDir, file.FileName);
             await UploadedArchive.SaveAsync(file, archivePath, ct);
         }
         else if (string.IsNullOrEmpty(gitUrl))
         {
-            return Refused(IsFa
+            return await Refused(IsFa
                 ? "آدرس مخزن را بنویس، یا یک فایل zip انتخاب کن."
                 : "Paste the repository's URL, or choose a zip.");
         }
@@ -105,6 +119,7 @@ public sealed class LaunchController(
                 CloneUrl = archivePath is null ? gitUrl : null,
                 GitRef = archivePath is null && !string.IsNullOrEmpty(gitRef) ? gitRef : null,
                 GitToken = archivePath is null && !string.IsNullOrWhiteSpace(form.GitToken) ? form.GitToken.Trim() : null,
+                GitProviderId = archivePath is null ? accountId : null,
                 ArchivePath = archivePath,
                 ClientIp = ClientIp
             }, ct);
@@ -119,7 +134,7 @@ public sealed class LaunchController(
         if (!outcome.Ok)
         {
             if (archivePath is not null) UploadedArchive.Delete(archivePath);
-            return Refused(Say(outcome.Refusals));
+            return await Refused(Say(outcome.Refusals));
         }
 
         // LaunchView cannot say which branch was asked for, and a failed read draws the form again
@@ -137,12 +152,12 @@ public sealed class LaunchController(
         if (view is null) return NotFound();
 
         if (view.Status == LaunchStatus.InspectFailed)
-            return View(nameof(Index), new LaunchQuestionModel(
+            return View(nameof(Index), await QuestionAsync(new LaunchQuestionModel(
                 view.Source == LaunchSourceKind.Git ? view.SourceLabel : null,
                 branch,
                 IsFa ? view.FailureMessageFa : view.FailureMessage,
                 ReadingFailed: true,
-                AskedForDetails: view.Source == LaunchSourceKind.Git));
+                AskedForDetails: view.Source == LaunchSourceKind.Git), null, ct));
 
         if (view.Status == LaunchStatus.AwaitingConfirmation
             && await launches.ProposeAsync(id, ct) is { } proposal)
@@ -264,6 +279,27 @@ public sealed class LaunchController(
             ? "دیگر نمی‌شود بی‌خیالش شد؛ ساختن شروع شده است."
             : "It's too late to call this off: creating has already begun.";
         return Redirect($"/launch/{id}");
+    }
+
+    /// <summary>
+    /// The question, with the repositories of every connected account to pick from. Asked of each
+    /// provider while the page is drawn, so it works with no script; each gets
+    /// <see cref="GitAccounts.PagePatience"/>, and one that cannot answer is a sentence beside the paste
+    /// field rather than a page that waits. Only for somebody who may create an app: nobody else is
+    /// shown the forms the list belongs to.
+    /// </summary>
+    private async Task<LaunchQuestionModel> QuestionAsync(LaunchQuestionModel model, string? filter, CancellationToken ct)
+    {
+        if (!NavigationCapabilities.For(User)(Capabilities.AppsCreate)) return model;
+
+        var accounts = await gitAccounts.ListAsync(WorkspaceId, GitAccounts.PagePatience, ct);
+        var wanted = filter?.Trim();
+        if (!string.IsNullOrEmpty(wanted))
+            accounts = accounts
+                .Select(a => a with { Repositories = a.Repositories.Where(r => r.FullName.Contains(wanted, StringComparison.OrdinalIgnoreCase)).ToList() })
+                .ToList();
+
+        return model with { Accounts = accounts, Filter = string.IsNullOrEmpty(wanted) ? null : wanted };
     }
 
     // ---- the form and the choices ------------------------------------------------------------------
