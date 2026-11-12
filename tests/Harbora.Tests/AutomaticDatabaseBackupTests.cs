@@ -21,8 +21,8 @@ using Xunit;
 namespace Harbora.Tests;
 
 /// <summary>
-/// Round nine, item one: a database a person creates gets a daily backup keeping seven, with nobody
-/// setting it up — through the same <see cref="DatabaseProvisioningService.CreateAsync"/> the form,
+/// Round nine, item one: a database a person creates gets a daily backup keeping seven (or the most a
+/// smaller plan allows), with nobody setting it up — through the same <see cref="DatabaseProvisioningService.CreateAsync"/> the form,
 /// Launch and the assistant all call. Each way it can be refused is here, and each one still creates
 /// the database and says in both languages why there is no backup.
 /// </summary>
@@ -291,17 +291,65 @@ public class AutomaticDatabaseBackupTests
     }
 
     [Fact]
-    public async Task A_plan_that_keeps_fewer_than_seven_gets_none_rather_than_a_schedule_past_its_limit()
+    public async Task A_plan_that_keeps_fewer_than_seven_gets_a_schedule_keeping_the_most_it_allows_and_is_told_so()
     {
+        // The owner's choice (round nine): this used to make no schedule at all for such a plan.
         using var rig = new Rig();
         rig.GivePlan(maxRetention: 3);
 
-        var outcome = await rig.Provisioning().CreateAsync(rig.H.Request(), default);
+        var outcome = await rig.Provisioning().CreateAsync(rig.H.Request("Shop DB"), default);
 
         outcome.Ok.Should().BeTrue();
+        var schedule = rig.Schedules().Should().ContainSingle().Subject;
+        schedule.RetentionCount.Should().Be(3, "the most the plan lets one schedule keep, never past it");
+        schedule.IntervalHours.Should().Be(24);
+        var backup = outcome.Value!.Backup!;
+        backup.Scheduled.Should().BeTrue();
+        backup.ScheduleId.Should().Be(schedule.Id);
+        backup.Message.Should().Be(
+            "Shop DB is backed up every day and the last three backups are kept, the most the plan allows; " +
+            "the first runs in 24 hours. You can change or remove this on the Backups page.");
+        backup.MessageFa.Should().Be(
+            "از «Shop DB» هر روز پشتیبان گرفته می‌شود و سه نسخهٔ آخر نگه داشته می‌شود، یعنی بیشترین تعدادی که پلن اجازه می‌دهد؛ " +
+            "اولی 24 ساعت دیگر گرفته می‌شود. در صفحهٔ «پشتیبان‌ها» می‌توانی تغییرش بدهی یا حذفش کنی.");
+        rig.H.Audit.Entries.Last().MetadataJson.Should().Contain("\"retention\":3");
+    }
+
+    [Theory]
+    [InlineData(1, 1, "only one backup is kept, the most the plan allows", "فقط یک نسخه نگه داشته می‌شود، یعنی بیشترین")]
+    [InlineData(2, 2, "the last two backups are kept, the most the plan allows", "دو نسخهٔ آخر نگه داشته می‌شود، یعنی بیشترین")]
+    [InlineData(6, 6, "the last six backups are kept, the most the plan allows", "شش نسخهٔ آخر نگه داشته می‌شود، یعنی بیشترین")]
+    [InlineData(7, 7, "the last seven backups are kept; the first", "هفت نسخهٔ آخر نگه داشته می‌شود؛ اولی")]
+    [InlineData(30, 7, "the last seven backups are kept; the first", "هفت نسخهٔ آخر نگه داشته می‌شود؛ اولی")]
+    public async Task The_schedule_keeps_seven_or_the_plans_smaller_number_and_the_sentence_says_which(
+        int planAllows, int kept, string sentence, string sentenceFa)
+    {
+        using var rig = new Rig();
+        rig.GivePlan(maxRetention: planAllows);
+
+        var outcome = await rig.Provisioning().CreateAsync(rig.H.Request(), default);
+
+        rig.Schedules().Single().RetentionCount.Should().Be(kept);
+        outcome.Value!.Backup!.Message.Should().Contain(sentence);
+        outcome.Value.Backup.MessageFa.Should().Contain(sentenceFa);
+    }
+
+    [Fact]
+    public async Task A_plan_that_will_not_keep_even_one_gets_none_and_its_own_reason_in_both_languages()
+    {
+        using var rig = new Rig();
+        rig.Quota = new NoRetentionQuota();
+
+        var outcome = await rig.Provisioning().CreateAsync(rig.H.Request("Shop DB"), default);
+
+        outcome.Ok.Should().BeTrue("the database is never refused for want of a backup");
+        rig.H.Db.ManagedServices.IgnoreQueryFilters().Should().ContainSingle();
         rig.Schedules().Should().BeEmpty();
-        outcome.Value!.Backup!.Message.Should().Contain("at most 3 backup(s)");
-        outcome.Value.Backup.MessageFa.Should().Contain("حداکثر 3 نسخه");
+        var backup = outcome.Value!.Backup!;
+        backup.Scheduled.Should().BeFalse();
+        backup.Message.Should().StartWith("No daily backup was set up for Shop DB: This plan keeps no backups.")
+            .And.Contain("Backups page");
+        backup.MessageFa.Should().StartWith("برای «Shop DB» پشتیبان‌گیری روزانه تنظیم نشد: این پلن هیچ نسخهٔ پشتیبانی نگه نمی‌دارد.");
     }
 
     [Fact]
@@ -452,6 +500,20 @@ public class AutomaticDatabaseBackupTests
 
             public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         }
+    }
+
+    /// <summary>
+    /// A plan whose retention check refuses every count, one included. <see cref="QuotaService"/> has
+    /// no such plan — zero means unlimited there — so this stands for any policy that says no to all.
+    /// </summary>
+    private sealed class NoRetentionQuota : IQuotaService
+    {
+        public Task<QuotaCheck> CanAddServiceAsync(Guid w, string? size, CancellationToken ct) => Task.FromResult(QuotaCheck.Ok);
+        public Task<QuotaCheck> CanAddAppAsync(Guid w, string? s, Guid? e, CancellationToken ct) => throw new NotSupportedException();
+        public Task<WorkspaceUsage> GetUsageAsync(Guid w, CancellationToken ct) => throw new NotSupportedException();
+
+        public Task<QuotaCheck> CanUseBackupRetentionAsync(Guid w, int retentionCount, CancellationToken ct) =>
+            Task.FromResult(QuotaCheck.Deny("This plan keeps no backups.", "این پلن هیچ نسخهٔ پشتیبانی نگه نمی‌دارد."));
     }
 
     /// <summary>Lets the database be created and then throws on the schedule's own plan check.</summary>

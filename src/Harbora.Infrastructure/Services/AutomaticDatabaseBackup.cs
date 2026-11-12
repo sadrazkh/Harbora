@@ -22,9 +22,9 @@ public sealed record DatabaseBackupSetup(
     bool Scheduled, Guid? ScheduleId, DateTimeOffset? FirstRunAt, string Message, string MessageFa);
 
 /// <summary>
-/// Gives a database a person has just created a daily backup keeping seven, so nobody has to go and
-/// set one up — and most never did: a database made by Launch had no backup at all until its owner
-/// found the Backups page.
+/// Gives a database a person has just created a daily backup keeping seven, or as many as the plan
+/// allows when that is fewer, so nobody has to go and set one up — and most never did: a database
+/// made by Launch had no backup at all until its owner found the Backups page.
 ///
 /// <para>
 /// <b>Always after the database's own creation has committed, never inside it.</b> Nothing here can
@@ -37,7 +37,9 @@ public sealed record DatabaseBackupSetup(
 /// <para>
 /// <b>The same plan checks the hand-made schedule asks</b> (<c>BackupsController.CreateSchedule</c>):
 /// the count of schedules and the retention, under the same lock. A plan with no room gets no
-/// schedule and a sentence that says so, never a database refused.
+/// schedule and a sentence that says so, never a database refused. A plan that keeps fewer than seven
+/// gets a schedule keeping the most it allows, and the sentence says how many and why — the owner's
+/// choice (round nine) over no schedule at all, which is what this did first.
 /// </para>
 ///
 /// <para>
@@ -69,7 +71,11 @@ public sealed class AutomaticDatabaseBackup(
     /// <summary>Daily. Proposed to the owner and accepted, with <see cref="RetentionCount"/>.</summary>
     public const int IntervalHours = 24;
 
+    /// <summary>How many backups it keeps, unless the plan allows fewer; then the most it allows.</summary>
     public const int RetentionCount = 7;
+
+    private static readonly string[] EnglishCounts = ["none", "one", "two", "three", "four", "five", "six", "seven"];
+    private static readonly string[] PersianCounts = ["هیچ", "یک", "دو", "سه", "چهار", "پنج", "شش", "هفت"];
 
     /// <summary>Only ever asked whether a plan exists; never run.</summary>
     private static readonly ServiceCreds Probe = new("probe", 0, "probe", "probe", "probe");
@@ -124,16 +130,16 @@ public sealed class AutomaticDatabaseBackup(
             if (!count.Allowed)
                 return NotSet(name, PlanReason(count, isFa: false), PlanReason(count, isFa: true), roomInPlan: true);
 
-            var retention = await quota.CanUseBackupRetentionAsync(service.WorkspaceId, RetentionCount, ct);
-            if (!retention.Allowed)
-                return NotSet(name, PlanReason(retention, isFa: false), PlanReason(retention, isFa: true), roomInPlan: true);
+            var (keep, refusal) = await RetentionAsync(service.WorkspaceId, ct);
+            if (refusal is not null)
+                return NotSet(name, PlanReason(refusal, isFa: false), PlanReason(refusal, isFa: true), roomInPlan: true);
 
             var destination = await DestinationAsync(service.WorkspaceId, added, ct);
             var firstRunAt = clock.UtcNow.AddHours(IntervalHours);
             var schedule = new BackupSchedule
             {
                 WorkspaceId = service.WorkspaceId, DestinationId = destination, Type = BackupType.Database,
-                TargetRef = service.Id.ToString(), IntervalHours = IntervalHours, RetentionCount = RetentionCount,
+                TargetRef = service.Id.ToString(), IntervalHours = IntervalHours, RetentionCount = keep,
                 NextRunAt = firstRunAt, IsEnabled = true
             };
             db.BackupSchedules.Add(schedule);
@@ -146,8 +152,7 @@ public sealed class AutomaticDatabaseBackup(
             await AuditAsync(schedule, service, firstRunAt, ipAddress, ct);
 
             return new DatabaseBackupSetup(true, schedule.Id, firstRunAt,
-                $"{name} is backed up every day and the last seven backups are kept; the first runs in {IntervalHours} hours. You can change or remove this on the Backups page.",
-                $"از «{name}» هر روز پشتیبان گرفته می‌شود و هفت نسخهٔ آخر نگه داشته می‌شود؛ اولی {IntervalHours} ساعت دیگر گرفته می‌شود. در صفحهٔ «پشتیبان‌ها» می‌توانی تغییرش بدهی یا حذفش کنی.");
+                Scheduled(name, keep, isFa: false), Scheduled(name, keep, isFa: true));
         }
         catch (Exception ex)
         {
@@ -244,7 +249,7 @@ public sealed class AutomaticDatabaseBackup(
                     service = service.Id,
                     name = service.Name,
                     intervalHours = IntervalHours,
-                    retention = RetentionCount,
+                    retention = schedule.RetentionCount,
                     firstRunAt
                 }),
                 workspaceId: service.WorkspaceId, ct: ct);
@@ -254,6 +259,47 @@ public sealed class AutomaticDatabaseBackup(
             logger.LogWarning(ex, "The daily backup of {Name} was set up, but its audit entry was not written.", service.Name);
         }
     }
+
+    /// <summary>
+    /// <see cref="RetentionCount"/>, or the most the plan lets one schedule keep when that is fewer.
+    /// Asked of the same check the hand-made schedule asks, counting down from seven, rather than read
+    /// off the plan a second way that could come to a different answer. The refusal comes back only
+    /// when it will not keep even one; it is the one given for one.
+    /// </summary>
+    private async Task<(int Keep, QuotaCheck? Refusal)> RetentionAsync(Guid workspaceId, CancellationToken ct)
+    {
+        QuotaCheck? refusal = null;
+        for (var keep = RetentionCount; keep >= 1; keep--)
+        {
+            refusal = await quota.CanUseBackupRetentionAsync(workspaceId, keep, ct);
+            if (refusal.Allowed) return (keep, null);
+        }
+        return (0, refusal);
+    }
+
+    /// <summary>
+    /// What the person is told about a schedule made here: how many backups it keeps, said as a word
+    /// in both languages, and — when the plan is why that is under seven — that it is the most the
+    /// plan allows, so a smaller number does not read as a choice somebody made for them at random.
+    /// </summary>
+    private static string Scheduled(string name, int keep, bool isFa)
+    {
+        var capped = keep < RetentionCount;
+        if (isFa)
+        {
+            var kept = keep == 1 ? "فقط یک نسخه" : $"{Count(PersianCounts, keep)} نسخهٔ آخر";
+            return $"از «{name}» هر روز پشتیبان گرفته می‌شود و {kept} نگه داشته می‌شود" +
+                   (capped ? "، یعنی بیشترین تعدادی که پلن اجازه می‌دهد" : "") +
+                   $"؛ اولی {IntervalHours} ساعت دیگر گرفته می‌شود. در صفحهٔ «پشتیبان‌ها» می‌توانی تغییرش بدهی یا حذفش کنی.";
+        }
+
+        var keptEn = keep == 1 ? "only one backup is kept" : $"the last {Count(EnglishCounts, keep)} backups are kept";
+        return $"{name} is backed up every day and {keptEn}" +
+               (capped ? ", the most the plan allows" : "") +
+               $"; the first runs in {IntervalHours} hours. You can change or remove this on the Backups page.";
+    }
+
+    private static string Count(string[] words, int n) => n >= 0 && n < words.Length ? words[n] : n.ToString();
 
     private static string PlanReason(QuotaCheck check, bool isFa) => isFa
         ? check.ReasonFa ?? check.Reason ?? "پلن جای زمان‌بندی دیگری ندارد"
