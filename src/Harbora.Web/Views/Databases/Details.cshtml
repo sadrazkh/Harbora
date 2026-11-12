@@ -1103,7 +1103,7 @@ else if (moving)
                 {
                     <div class="rounded-lg border border-danger bg-danger-soft px-3 py-2 text-xs text-danger"
                          data-spec-service-error="@db.ErrorMessage">
-                        @(isFa ? "علت شکست راه‌اندازی: " : "Why provisioning failed: ")@db.ErrorMessage
+                        @(isFa ? "علت شکست راه‌اندازی: " : "Why provisioning failed: ")@StrandedProvision.InReadersLanguage(db.ErrorMessage, isFa)
                     </div>
                 }
                 <form asp-action="Reprovision" asp-route-id="@db.Id" method="post">

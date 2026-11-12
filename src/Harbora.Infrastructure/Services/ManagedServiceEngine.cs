@@ -85,12 +85,16 @@ public sealed class ManagedServiceEngine(
         }
 
         var def = ServiceCatalog.All[svc.Type];
-        var docker = await engineFactory.ResolveAsync(svc.ServerId, ct);
 
         try
         {
             svc.Status = ServiceStatus.Provisioning;
             await db.SaveChangesAsync(ct);
+
+            // Inside the try (round nine): a revoked node or a server with nothing behind it throws
+            // here, and outside it that left a new database reading Provisioning for ever, with the
+            // reason only on a job row nobody looks at.
+            var docker = await engineFactory.ResolveAsync(svc.ServerId, ct);
 
             var creds = CredsFor(svc);
 
@@ -334,7 +338,9 @@ public sealed class ManagedServiceEngine(
     /// P4 only the row's <see cref="ManagedService.Status"/> changed and both of the other two never
     /// happened at all.
     /// </summary>
-    private async Task FailAsync(ManagedService svc, string reason, CancellationToken ct)
+    /// <remarks>Internal so <see cref="StrandedProvisionReconciler"/> settles a database nothing is
+    /// setting up through the same three surfaces, rather than writing Failed on the row alone.</remarks>
+    internal async Task FailAsync(ManagedService svc, string reason, CancellationToken ct)
     {
         svc.Status = ServiceStatus.Failed;
         svc.ErrorMessage = reason;

@@ -22,6 +22,12 @@ public sealed class JobReconciler(
     ISystemClock clock,
     ILogger<JobReconciler> logger) : IHostedService
 {
+    /// <summary>
+    /// What a job this settles says. Public because a target's own reconciler tells "cut off by a
+    /// restart" from "failed on its own" by it (<c>StrandedProvisionReconciler</c>).
+    /// </summary>
+    public const string InterruptedByRestart = "Interrupted by a platform restart before completion.";
+
     public async Task StartAsync(CancellationToken ct)
     {
         try { await ReconcileAsync(ct); }
@@ -50,7 +56,7 @@ public sealed class JobReconciler(
             // (containers started, archives written) that a blind re-run could compound; each
             // target's own reconciler decides what its half-finished state means.
             job.Status = JobStatus.Failed;
-            job.Error = "Interrupted by a platform restart before completion.";
+            job.Error = InterruptedByRestart;
             job.FinishedAt = clock.UtcNow;
             job.ClaimStamp++;
         }

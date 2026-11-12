@@ -163,6 +163,9 @@ public static class DependencyInjection
         // process), so it is settled as the panel starts — or its conversation could never be deleted. A
         // startup reconciler like the ones above, so it is registered above the gate, as the line below asks.
         services.AddHostedService<Agent.AgentPlanStartupReconciler>();
+        // Round nine: a database a restart left reading Provisioning is set going again or failed with
+        // a sentence, above the gate like the others, and swept again every few minutes after it.
+        services.AddHostedService<Services.StrandedProvisionReconciler>();
         // Lets the job worker start claiming. Hosted services start in registration order, so every
         // startup reconciler — including any added later — must be registered ABOVE this line; that
         // is the whole guarantee, and it is on the reconciler's registration, not on this one.
