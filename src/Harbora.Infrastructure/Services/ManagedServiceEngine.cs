@@ -479,6 +479,14 @@ public sealed class ManagedServiceEngine(
             .Where(g => g.ServiceId == serviceId && g.WorkspaceId == svc.WorkspaceId).ToListAsync(ct);
         db.ProjectGrants.RemoveRange(serviceGrants);
 
+        // Round nine: its backup schedules go with it, in the same save. A schedule outliving its
+        // database could only ever fail ("That database no longer exists"), with an alert every day;
+        // the backups it already took are Backup rows and stay, restorable, on the Backups page.
+        var target = serviceId.ToString();
+        var schedules = await db.BackupSchedules.IgnoreQueryFilters()
+            .Where(s => s.TargetRef == target && s.WorkspaceId == svc.WorkspaceId).ToListAsync(ct);
+        db.BackupSchedules.RemoveRange(schedules);
+
         db.ManagedServices.Remove(svc);
         await db.SaveChangesAsync(ct);
     }

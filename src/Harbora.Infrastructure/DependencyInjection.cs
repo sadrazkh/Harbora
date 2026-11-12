@@ -329,6 +329,8 @@ public static class DependencyInjection
         // Round six, phase 0b (in-panel agent): database creation, removal and attach/detach, moved out
         // of DatabasesController so the panel and the agent's tools run one set of checks and audits.
         services.AddScoped<Services.IDatabaseProvisioningService, Services.DatabaseProvisioningService>();
+        // Round nine: the daily backup every new database is given, after its creation has committed.
+        services.AddScoped<Services.AutomaticDatabaseBackup>();
         services.AddScoped<Services.IDatabaseAttachmentService, Services.DatabaseAttachmentService>();
         // Round six, wave B, agent G (in-panel agent): the assistant's project and database write tools,
         // each over the service the matching ProjectsController/DatabasesController action calls. Here,

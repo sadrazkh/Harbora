@@ -66,7 +66,9 @@ public sealed partial class DatabasesController(
     /// in the constructor because those tests pass them by position.
     /// </summary>
     private IDatabaseProvisioningService Provisioning => provisioning ??= new DatabaseProvisioningService(
-        db, engine, quota, scheduler, protector, projects, access, creationBilling, audit, currentUser);
+        db, engine, quota, scheduler, protector, projects, access, creationBilling, audit, currentUser,
+        new AutomaticDatabaseBackup(db, quota, engines, audit, clock,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<AutomaticDatabaseBackup>.Instance));
 
     private IDatabaseAttachmentService Attachments =>
         attachments ??= new DatabaseAttachmentService(db, access, audit, currentUser);
@@ -574,7 +576,11 @@ public sealed partial class DatabasesController(
             return View(model);
         }
 
-        return RedirectToAction(nameof(Details), new { id = outcome.Value!.ServiceId });
+        // Said either way, on the page the person lands on: a backup set up, or why there is none.
+        if (outcome.Value!.Backup is { } backup)
+            TempData["Message"] = IsFa ? backup.MessageFa : backup.Message;
+
+        return RedirectToAction(nameof(Details), new { id = outcome.Value.ServiceId });
     }
 
     /// <summary>

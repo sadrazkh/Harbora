@@ -40,6 +40,10 @@ public sealed record DatabaseCreateRequest(
     string? IpAddress = null);
 
 /// <summary>A database that now exists as a row and has been queued for provisioning — not yet running.</summary>
+/// <param name="Backup">
+/// The daily backup it was given, or why it was not, in a sentence for whoever shows the result. Null
+/// only from a service built without <see cref="AutomaticDatabaseBackup"/>, as some tests build it.
+/// </param>
 public sealed record DatabaseCreateResult(
     Guid ServiceId,
     string Name,
@@ -48,7 +52,8 @@ public sealed record DatabaseCreateResult(
     ManagedServiceType Type,
     string Version,
     Guid EnvironmentId,
-    Guid ServerId);
+    Guid ServerId,
+    DatabaseBackupSetup? Backup = null);
 
 /// <summary>A database that is gone, and what became of its data.</summary>
 /// <param name="VolumeName">Where the data still is when <paramref name="DataDeleted"/> is false.</param>
@@ -74,7 +79,8 @@ public interface IDatabaseProvisioningService
     /// <summary>
     /// Re-checks everything under the workspace's creation lock, then saves the database with its
     /// first-hour charge, audits <c>database.created</c> and queues the provision. Nothing is saved
-    /// when it refuses.
+    /// when it refuses. Once all of that is done, gives it a daily backup where one can run, and says
+    /// on <see cref="DatabaseCreateResult.Backup"/> what became of it; that part never refuses.
     /// </summary>
     Task<ServiceOutcome<DatabaseCreateResult>> CreateAsync(DatabaseCreateRequest request, CancellationToken ct);
 
@@ -105,7 +111,9 @@ public sealed partial class DatabaseProvisioningService(
     ProjectAccessService access,
     ResourceCreationBilling creationBilling,
     IAuditLogger audit,
-    ICurrentUser currentUser) : IDatabaseProvisioningService
+    ICurrentUser currentUser,
+    // Optional so the hand-built services in tests keep the creation they always had; DI supplies it.
+    AutomaticDatabaseBackup? automaticBackup = null) : IDatabaseProvisioningService
 {
     public const string ContainerPrefix = "harbora-svc-";
 
@@ -127,6 +135,20 @@ public sealed partial class DatabaseProvisioningService(
     }
 
     public async Task<ServiceOutcome<DatabaseCreateResult>> CreateAsync(
+        DatabaseCreateRequest request, CancellationToken ct)
+    {
+        var created = await CreateCoreAsync(request, ct);
+        if (!created.Ok || automaticBackup is null) return created;
+
+        // After the creation's own transaction is over and its provision is queued, deliberately: the
+        // schedule takes the creation lock again in a transaction of its own, so nothing that goes wrong
+        // with it can undo or hold back a database that was just paid for. Not the request's token for
+        // the same reason — a person who closed the tab still has the database, so it gets its backup.
+        var backup = await automaticBackup.ScheduleAsync(created.Value!.ServiceId, request.IpAddress, CancellationToken.None);
+        return ServiceOutcome<DatabaseCreateResult>.Success(created.Value with { Backup = backup });
+    }
+
+    private async Task<ServiceOutcome<DatabaseCreateResult>> CreateCoreAsync(
         DatabaseCreateRequest request, CancellationToken ct)
     {
         if (!IsTheCaller(request)) return ServiceOutcome<DatabaseCreateResult>.Refused(NotTheCaller);

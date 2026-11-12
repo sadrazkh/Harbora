@@ -450,7 +450,14 @@ else if (moving)
             }
         </p>
 
-        @if (Model.Backups.Count == 0)
+        @if (Model.Backups.Count == 0 && Model.BackupIntervalHours is not null)
+        {
+            @* Round nine: a new database is given its schedule at creation, so "set up backups" would
+               send somebody to make a second one for a backup that is simply not due yet. *@
+            <partial name="Design/_EmptyState" model="@(new EmptyStateModel("cloud-upload",
+                isFa ? "هنوز پشتیبانی گرفته نشده؛ اولی در زمان بالا گرفته می‌شود." : "No backup has been taken yet; the first runs at the time above."))" />
+        }
+        else if (Model.Backups.Count == 0)
         {
             <partial name="Design/_EmptyState" model="@(new EmptyStateModel("cloud-upload",
                 isFa ? "هنوز پشتیبانی گرفته نشده." : "No backup has been taken yet.",
