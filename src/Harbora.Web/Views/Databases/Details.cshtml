@@ -552,8 +552,12 @@ else if (moving)
 
             @if (Model.CanImport)
             {
+                @* Round nine: the ceiling is stated, and a file over it is refused here before it is sent —
+                   a browser can give up on a large upload the server answered early. *@
                 <form asp-action="Import" asp-route-id="@db.Id" method="post" enctype="multipart/form-data"
-                      data-import-form class="space-y-2 border-t border-line pt-3">
+                      data-import-form class="space-y-2 border-t border-line pt-3"
+                      data-upload-limit data-max-bytes="@Harbora.Web.Controllers.DatabasesController.MaxImportBytes"
+                      data-too-big="@UploadLimit.TooLarge(Harbora.Web.Controllers.DatabasesController.MaxImportBytes, isFa)">
                     @Html.AntiForgeryToken()
                     <p class="text-xs leading-5 text-warn">
                         @(isFa
@@ -561,6 +565,8 @@ else if (moving)
                             : $"Importing overwrites \"{db.Name}\"'s current contents. A safety snapshot is taken automatically first.")
                     </p>
                     <input type="file" name="file" class="form-control text-sm" required />
+                    <p class="text-[11px] text-ink-faint">@UploadLimit.UpTo(Harbora.Web.Controllers.DatabasesController.MaxImportBytes, isFa)</p>
+                    <p class="field-error hidden" data-upload-limit-error></p>
                     <input type="text" name="confirmName" class="form-control text-sm" dir="ltr" autocomplete="off"
                            placeholder="@db.Name" data-import-confirm-name
                            aria-label="@(isFa ? "نام دیتابیس را برای تأیید بنویسید" : "Type the database name to confirm")" />

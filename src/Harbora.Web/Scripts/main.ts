@@ -7,6 +7,7 @@ import { mountDeployProgress } from './deployProgress';
 import { initMobileSidebar } from './mobileSidebar.js';
 import { initAssistantDrawer } from './assistantDrawer.js';
 import { initLaunch } from './launch.js';
+import { initUploadLimits } from './uploadLimit.js';
 
 // "Islands" pattern: Razor renders the page; we hydrate only the interactive nodes.
 // Each island is a mount point identified by id/selector — like initialising a jQuery plugin,
@@ -121,6 +122,7 @@ mountDeployProgress();
 // open (see the comment in mobileSidebar.js for why that is not `body`), and Escape.
 initMobileSidebar();
 initLaunch();
+initUploadLimits();
 
 // ---- icons ----
 // Declared as `data-lucide` attributes in Razor rather than inlined SVG, so a partial stays
