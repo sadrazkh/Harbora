@@ -50,3 +50,8 @@ Each worktree is left exactly as its agent left it, including uncommitted work. 
 
 To resume: send each agent a message to continue from its worktree, or start a fresh agent on the same
 worktree and brief, telling it to read git status and git diff first because half of the work is there.
+
+## Resumed, 2026-11-12
+
+The owner said to continue. All seven agents were resumed from their own transcripts, each told to read
+git status first and trust the disk. Worktrees were unchanged since the pause.
