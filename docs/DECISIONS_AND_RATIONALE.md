@@ -1,5 +1,5 @@
 Last verified: 2026-11-08
-Scope: decisions recorded in `docs/overhaul/09-architecture-decision-records.md`, `docs/superpowers/specs`, `docs/backup-sync/ARCHITECTURE.md`, code comments and round ledgers, each checked against the code at commit `b3fd974`. Updated 2026-11-12 for the round-nine work merged on `r9/int` (`7d7a0ae`), which is not on master or released; nothing else was re-verified.
+Scope: decisions recorded in `docs/overhaul/09-architecture-decision-records.md`, `docs/superpowers/specs`, `docs/backup-sync/ARCHITECTURE.md`, code comments and round ledgers, each checked against the code at commit `b3fd974`. Updated 2026-11-12 for round nine, released as 0.13.0; nothing else was re-verified.
 
 # Decisions and rationale
 
@@ -41,7 +41,7 @@ Labels: [Verified], [Assumption], [Recommendation]; see [MASTER_CONTEXT.md](MAST
 - **Context:** An in-memory queue stranded work on restart.
 - **Decision:** Jobs are rows, transactional with domain writes, claimed by an in-process pool, with reconcilers at boot.
 - **Alternatives considered:** Redis streams; Hangfire or Quartz (rejected: new surface and dependency).
-- **Consequences / limitations:** Completed rows were never pruned until round nine (KI-040, fixed on `r9/int`). Redis, which the ADR kept for caching, is unused (KI-052). No tenant fairness.
+- **Consequences / limitations:** Completed rows were never pruned until round nine (KI-040, fixed in 0.13.0). Redis, which the ADR kept for caching, is unused (KI-052). No tenant fairness.
 - **Do not change without reconsidering:** The reconciler ordering behind `JobStartupGate`.
 - **Status:** Verified in code.
 
@@ -227,15 +227,15 @@ Labels: [Verified], [Assumption], [Recommendation]; see [MASTER_CONTEXT.md](MAST
 - **Alternatives considered:** Excluding silently (rejected: Vite, Next.js and Create React App read `.env.production` at build time, so a build would change with no explanation); a second opt-in mechanism (rejected in favour of the ignore files already read).
 - **Consequences / limitations:** A Dockerfile that copies a kept env file now fails the preflight with what to do instead. `<name>.env` and `.envrc` are not covered. A Git deploy still carries a committed `.env.production`.
 - **Do not change without reconsidering:** Example names must keep going, because Launch reads variable names from them.
-- **Status:** Verified in code on `r9/int`.
+- **Status:** Verified in code.
 
 ## D-029: A new database gets a daily backup keeping seven  (2026-11-12)
 - **Context:** A database made by Launch had no backup until its owner set one up.
 - **Decision:** `DatabaseProvisioningService.CreateAsync` makes a daily schedule keeping seven after the creation has committed. The first run is 24 hours later. A refusal is a sentence, and the database is created regardless.
 - **Alternatives considered:** The same transaction as the database (rejected: a schedule must never fail or slow a creation); a first run as soon as the database is running (rejected: a schedule firing during setup fails and alerts).
-- **Consequences / limitations:** Only PostgreSQL, MySQL, MariaDB and MongoDB; not templates; none on a plan that keeps fewer than seven (KI-097). If the panel dies between the two steps the database has no schedule and nobody is told.
+- **Consequences / limitations:** Only PostgreSQL, MySQL, MariaDB and MongoDB; not templates (KI-097). A plan that keeps fewer than seven gets a schedule at its own maximum, as the owner chose. If the panel dies between the two steps the database has no schedule and nobody is told.
 - **Do not change without reconsidering:** The plan's schedule and retention limits are checked the same way the manual path checks them.
-- **Status:** Verified in code on `r9/int`.
+- **Status:** Verified in code.
 
 ## D-030: Settled jobs are kept 30 days  (2026-11-12)
 - **Context:** `Jobs` held 4.2 million rows in production and was in no retention rule.
@@ -243,7 +243,7 @@ Labels: [Verified], [Assumption], [Recommendation]; see [MASTER_CONTEXT.md](MAST
 - **Alternatives considered:** One statement (rejected for a table that size); a new index (not needed: `(Status, CreatedAt)` exists, and the round added no migration).
 - **Consequences / limitations:** Hourly-billing jobs are included, though a comment calls them an audit trail; nothing reads them. Deleting rows does not return disk space without `VACUUM (FULL)`. Not measured on a table of production size.
 - **Do not change without reconsidering:** A Pending or Running job is never deleted, whatever its age.
-- **Status:** Verified in code on `r9/int`.
+- **Status:** Verified in code.
 
 ## D-031: Whether a webhook is in place is asked of the provider, not stored  (2026-11-12)
 - **Context:** The app page must say honestly whether pushes deploy on their own.
@@ -251,7 +251,7 @@ Labels: [Verified], [Assumption], [Recommendation]; see [MASTER_CONTEXT.md](MAST
 - **Alternatives considered:** A new column (rejected: no migration this round); an audit row (rejected: the retention sweep deletes it).
 - **Consequences / limitations:** A miss can cost up to five seconds on the app page. No call has met a real GitHub, GitLab or Gitea.
 - **Do not change without reconsidering:** The page never claims a hook it did not confirm.
-- **Status:** Verified in code on `r9/int`.
+- **Status:** Verified in code.
 
 ## D-032: A build's directory does not outlive its deployment  (2026-11-12)
 - **Context:** Build directories accumulated for ever on a persistent volume.
@@ -259,4 +259,4 @@ Labels: [Verified], [Assumption], [Recommendation]; see [MASTER_CONTEXT.md](MAST
 - **Alternatives considered:** Keeping a failed build's directory to look at (rejected: nothing reads it, and it is what fills the disk).
 - **Consequences / limitations:** A failed checkout cannot be inspected afterwards. `_uploads` and Launch's own directories are not swept.
 - **Do not change without reconsidering:** The sweep never follows a link and never leaves the work directory.
-- **Status:** Verified in code on `r9/int`.
+- **Status:** Verified in code.

@@ -1,5 +1,5 @@
 Last verified: 2026-11-08
-Scope: `docs/product-audit/17-implementation-roadmap.md`, `backlog.json`, the Launch round's closing list, and [KNOWN_ISSUES_AND_TECH_DEBT.md](KNOWN_ISSUES_AND_TECH_DEBT.md). Priorities below are advice until the owner decides. Updated 2026-11-12 for the round-nine work merged on `r9/int` (`7d7a0ae`), which is not on master or released; nothing else was re-verified.
+Scope: `docs/product-audit/17-implementation-roadmap.md`, `backlog.json`, the Launch round's closing list, and [KNOWN_ISSUES_AND_TECH_DEBT.md](KNOWN_ISSUES_AND_TECH_DEBT.md). Priorities below are advice until the owner decides. Updated 2026-11-12 for round nine, released as 0.13.0; nothing else was re-verified.
 
 # Roadmap
 
@@ -33,7 +33,7 @@ Labels: [Verified], [Assumption], [Recommendation]; see [MASTER_CONTEXT.md](MAST
 
 ## Round nine, 2026-11-12
 
-[Verified] The owner chose twelve items for easier, safer deploys. Merged on `r9/int` and tested there, not yet on master: rows 1, 5 and 8 of the table above; of row 4, the `Jobs` retention and the build directories (the prune-job flood and the other unbounded tables are still open); and, beyond the table, a daily backup for a new database, the repository picker, the webhook through the provider, a retry that keeps answers, a CI example and the import size.
+[Verified] The owner chose twelve items for easier, safer deploys. Released in 0.13.0: rows 1, 5 and 8 of the table above; of row 4, the `Jobs` retention and the build directories (the prune-job flood and the other unbounded tables are still open); and, beyond the table, a daily backup for a new database, the repository picker, the webhook through the provider, a retry that keeps answers, a CI example, the import size, and a fix for a template database that was rolled back on PostgreSQL (KI-090).
 
 [Verified] Held by the owner with their work committed: the check after every deployment with the offer to go back, the extended real proof (row 9), and workspace selection for the CLI and API (KI-030).
 

@@ -1,11 +1,11 @@
 Last verified: 2026-11-08
-Scope: feature code at commit `b3fd974`, read statically; `docs/product-audit/backlog.json`; launch proof and CI of 2026-11-05. Nothing was built or run for this baseline. Short paths are under `src/Harbora.Infrastructure/`, or `src/Harbora.Web/` for `Controllers/`, `Views/` and `Scripts/`. Updated 2026-11-12 for the round-nine work merged on `r9/int` (`7d7a0ae`), which is not on master or released; nothing else was re-verified.
+Scope: feature code at commit `b3fd974`, read statically; `docs/product-audit/backlog.json`; launch proof and CI of 2026-11-05. Nothing was built or run for this baseline. Short paths are under `src/Harbora.Infrastructure/`, or `src/Harbora.Web/` for `Controllers/`, `Views/` and `Scripts/`. Updated 2026-11-12 for round nine, released as 0.13.0; nothing else was re-verified.
 
 # Implementation status
 
 Labels: [Verified], [Assumption], [Recommendation]; see [MASTER_CONTEXT.md](MASTER_CONTEXT.md).
 
-**Status words.** *Done*: the feature's main path exists end to end in the code. *Partial*: part of it is missing, or it has a known defect that changes the outcome. *Not started*: no working code. *Done* says nothing about whether it has run on a real server; the "Proven" tables below say that. *on `r9/int`* marks round-nine work that is merged on that branch and tested there, and is not yet on master or released.
+**Status words.** *Done*: the feature's main path exists end to end in the code. *Partial*: part of it is missing, or it has a known defect that changes the outcome. *Not started*: no working code. *Done* says nothing about whether it has run on a real server; the "Proven" tables below say that. *(0.13.0)* marks round-nine work released in that version; none of it had run on a real server when it was released.
 
 **[Verified]** every row in the feature tables, by reading the file named. Where a defect is the reason for *Partial*, the `KI-` number links to [KNOWN_ISSUES_AND_TECH_DEBT.md](KNOWN_ISSUES_AND_TECH_DEBT.md).
 
@@ -17,15 +17,15 @@ Labels: [Verified], [Assumption], [Recommendation]; see [MASTER_CONTEXT.md](MAST
 | Buildpacks: Node, .NET, Go, PHP/Laravel, Python, frontend, static | Done | `Deployments/Buildpacks.cs:52` |
 | Git deploy, webhooks | Partial | `Git/LibGit2GitService.cs`; a commit SHA or mistyped ref builds the default branch (KI-010) |
 | CLI upload deploy | Done | `Controllers/Api/ApiV1Controller.cs` `DeployArchive` |
-| Real env files are not uploaded by default | Done on `r9/int` | `Harbora.Shared/EnvFiles.cs`; CLI and browser zip |
-| CI examples for GitHub Actions and GitLab | Done on `r9/int`, never run | `examples/ci/` |
-| Pick a repository from a connected account on `/launch` | Done on `r9/int` | `Git/GitAccounts.cs`, `Views/Launch`; never met a real provider |
-| The push webhook is set up through the provider's API | Partial on `r9/int` | `Git/GitHooks.cs`; never met a real provider; not removed on delete (KI-096) |
-| Build directories are removed | Done on `r9/int` | `Maintenance/BuildDirectories.cs` |
+| Real env files are not uploaded by default | Done (0.13.0) | `Harbora.Shared/EnvFiles.cs`; CLI and browser zip |
+| CI examples for GitHub Actions and GitLab | Done (0.13.0), never run | `examples/ci/` |
+| Pick a repository from a connected account on `/launch` | Done (0.13.0) | `Git/GitAccounts.cs`, `Views/Launch`; never met a real provider |
+| The push webhook is set up through the provider's API | Partial (0.13.0) | `Git/GitHooks.cs`; never met a real provider; not removed on delete (KI-096) |
+| Build directories are removed | Done (0.13.0) | `Maintenance/BuildDirectories.cs` |
 | Prebuilt image deploy | Done | `DeploymentPipeline.AcquireImageAsync:952` |
 | Static site | Done | same |
 | Docker Compose apps | Partial | Runs, with several gaps (KI-012) |
-| Cron apps | Partial | On `r9/int` a run gets the app's effective environment; runs still mount no volumes and have no limits (KI-092) |
+| Cron apps | Partial | Since 0.13.0 a run gets the app's effective environment; runs still mount no volumes and have no limits (KI-092) |
 | Templates | Done | `Deployments/TemplateResolver.cs`; multi-service live proof is open in the backlog (HARBORA-0044) |
 | Rollback | Partial | Works for ordinary images; not for Compose, and not byte-exact for mutable tags (KI-012, KI-017) |
 | Deployment approval | Partial | Pinned commit is not what gets built (KI-010) |
@@ -53,8 +53,8 @@ Labels: [Verified], [Assumption], [Recommendation]; see [MASTER_CONTEXT.md](MAST
 | Feature | Status | Evidence, note |
 |---|---|---|
 | Eight managed services | Done on the panel host | `Services/ManagedServiceEngine.cs` |
-| A database left `Provisioning` by a restart is settled | Done on `r9/int` | `Services/StrandedProvisionReconciler.cs` |
-| Database import up to 2 GB | Done on `r9/int` | `Controllers/DatabasesController.*.cs`; no real 2 GB upload was sent |
+| A database left `Provisioning` by a restart is settled | Done (0.13.0) | `Services/StrandedProvisionReconciler.cs` |
+| Database import up to 2 GB | Done (0.13.0) | `Controllers/DatabasesController.*.cs`; no real 2 GB upload was sent |
 | Managed services on a v1 node | Partial | No volume measurement; external access not wired (KI-005, KI-033) |
 | Read replicas, PITR | Done, Postgres only | `PitrSupport`, `ReplicaPipelineTests` |
 | Object storage buckets | Partial | Not billed; no suspension or balance check (KI-006) |
@@ -68,7 +68,7 @@ Labels: [Verified], [Assumption], [Recommendation]; see [MASTER_CONTEXT.md](MAST
 | Legacy database and volume backup and restore | Done | `Backups/BackupEngine.cs` |
 | Legacy "app config" and "full platform" restore | Partial | Restores less than it captures (KI-020) |
 | Backup copies to Telegram or email | Done | `BackupDeliveryService` |
-| A new database gets a daily backup keeping seven | Done on `r9/int` | `Services/AutomaticDatabaseBackup.cs`; where it does not apply: KI-097 |
+| A new database gets a daily backup keeping seven | Done (0.13.0) | `Services/AutomaticDatabaseBackup.cs`; where it does not apply: KI-097 |
 | Upgrade restore point | Done | `UpgradeSafetyService`, `Program.cs:205` |
 | Backup module (`Features:Backup`) | Partial, off by default | Panel host only, restore types not honoured (KI-021, KI-022) |
 | Kopia engine | Partial | Local repositories only; needs `deploy/Dockerfile.panel-kopia` |

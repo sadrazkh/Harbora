@@ -1,5 +1,5 @@
 Last verified: 2026-11-08
-Scope: HTTP routes, enums, options classes, `appsettings.json`, compose file, CI workflows and subsystem code at commit `b3fd974`, read statically. Nothing was run. Short paths such as `Billing/BillingOptions.cs` are under `src/Harbora.Infrastructure/`; `Controllers/`, `Views/`, `Scripts/` and `Infrastructure/` paths are under `src/Harbora.Web/`; `Domain/` means `src/Harbora.Domain/`. Updated 2026-11-12 for the round-nine work merged on `r9/int` (`7d7a0ae`), which is not on master or released; nothing else was re-verified.
+Scope: HTTP routes, enums, options classes, `appsettings.json`, compose file, CI workflows and subsystem code at commit `b3fd974`, read statically. Nothing was run. Short paths such as `Billing/BillingOptions.cs` are under `src/Harbora.Infrastructure/`; `Controllers/`, `Views/`, `Scripts/` and `Infrastructure/` paths are under `src/Harbora.Web/`; `Domain/` means `src/Harbora.Domain/`. Updated 2026-11-12 for round nine, released as 0.13.0; nothing else was re-verified.
 
 # Technical specification
 
@@ -140,7 +140,7 @@ Source: `src/Harbora.Infrastructure/Jobs/`, `Domain/Jobs/Job.cs`. Default concur
 | DatabaseMaintenance | 13 | 6 h | `DatabaseMaintenanceService` |
 | LaunchInspect | 14 | 15 min | `IJobHandler` |
 
-Status: Pending, Running, Succeeded, Failed, Cancelled. On master, completed rows are never deleted; on `r9/int`, settled rows older than `Retention:JobDays` (30) are deleted in batches (KI-040).
+Status: Pending, Running, Succeeded, Failed, Cancelled. Since 0.13.0, settled rows older than `Retention:JobDays` (30) are deleted in batches (KI-040).
 
 ## Launch
 
@@ -208,7 +208,7 @@ Source: `Maintenance/RetentionOptions.cs`, in days; the sweep runs at 03:00 UTC.
 | NodeCommands | 90 | NotificationDigestEntries | 90 |
 | NodeEvents | 90 | PasswordResetTokens | 7 |
 
-Also swept: `IdempotencyRecords`, `UserSessions`, `EmailVerificationTokens`, `AppLogLines` (per app). `Jobs` is swept on `r9/int` only. Not swept: `Deployments`, `AppLaunches`, `BillingRuns`, `AiUsageRecords`, among others (`DataRetentionSweeper.cs`, `RetentionTables`).
+Also swept: `IdempotencyRecords`, `UserSessions`, `EmailVerificationTokens`, `AppLogLines` (per app). `Jobs` is swept since 0.13.0 (settled rows, 30 days). Not swept: `Deployments`, `AppLaunches`, `BillingRuns`, `AiUsageRecords`, among others (`DataRetentionSweeper.cs`, `RetentionTables`).
 
 ## Configuration
 

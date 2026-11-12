@@ -1,5 +1,5 @@
 Last verified: 2026-11-08
-Scope: solution structure, `Program.cs`, `DependencyInjection.cs`, deploy pipeline, job queue, launch, proxy, node channel and tenancy at commit `b3fd974`, read statically. Nothing was run. Short paths such as `Deployments/DeploymentPipeline.cs` are under `src/Harbora.Infrastructure/`. Updated 2026-11-12 for the round-nine work merged on `r9/int` (`7d7a0ae`), which is not on master or released; nothing else was re-verified.
+Scope: solution structure, `Program.cs`, `DependencyInjection.cs`, deploy pipeline, job queue, launch, proxy, node channel and tenancy at commit `b3fd974`, read statically. Nothing was run. Short paths such as `Deployments/DeploymentPipeline.cs` are under `src/Harbora.Infrastructure/`. Updated 2026-11-12 for round nine, released as 0.13.0; nothing else was re-verified.
 
 # Architecture
 
@@ -260,7 +260,7 @@ Source: `src/Harbora.Domain/Launch/AppLaunch.cs:21-59`, `src/Harbora.Infrastruct
 | Backups | `BackupScheduler`, `BackupVerifier`, `WalArchiveShipper`, `ReplicationLagMonitor`, `BackupPolicyScheduler` |
 | Observability | `LogIngestionHostedService`, `MetricsCollectorHostedService`, `UptimeChecker`, `CertificateWatcher`, `NotificationDigestScheduler` |
 | Functions | `FunctionCronScheduler`, `QueueFunctionConsumerHost` |
-| Maintenance | `DataRetentionSweeper`, `DanglingImageSweeper`, `BuildDirectorySweeper` and `StrandedProvisionReconciler` (both on `r9/int`), `AgentConversationRetentionSweeper`, `UpdateCheckService`, `GrantSweeper`, `LedgerSweeper`, `DatabaseAccessSweeper`, `DatabaseMaintenanceScheduler`, `AdminerSweeper`, `VolumeDownloadTokenSweeper`, `SyncStatusRefresher` |
+| Maintenance | `DataRetentionSweeper`, `DanglingImageSweeper`, `BuildDirectorySweeper` and `StrandedProvisionReconciler` (both since 0.13.0), `AgentConversationRetentionSweeper`, `UpdateCheckService`, `GrantSweeper`, `LedgerSweeper`, `DatabaseAccessSweeper`, `DatabaseMaintenanceScheduler`, `AdminerSweeper`, `VolumeDownloadTokenSweeper`, `SyncStatusRefresher` |
 
 ## Front end
 

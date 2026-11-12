@@ -1,5 +1,5 @@
 Last verified: 2026-11-08
-Scope: static read of the code at commit `b3fd974`, plus the round ledgers in `.superpowers/sdd`. None of these defects was reproduced by running the code. Paths are relative to `src/`, or to `src/Harbora.Infrastructure/` when they start with a subsystem folder such as `Billing/`, unless they start with another top-level folder. Updated 2026-11-12 for the round-nine work merged on `r9/int` (`7d7a0ae`), which is not on master or released; nothing else was re-verified.
+Scope: static read of the code at commit `b3fd974`, plus the round ledgers in `.superpowers/sdd`. None of these defects was reproduced by running the code. Paths are relative to `src/`, or to `src/Harbora.Infrastructure/` when they start with a subsystem folder such as `Billing/`, unless they start with another top-level folder. Updated 2026-11-12 for round nine, released as 0.13.0; nothing else was re-verified.
 
 # Known issues and technical debt
 
@@ -110,7 +110,7 @@ Recorded on 2026-11-05 and deliberately left. **[Verified]** that they were acce
 | KI-082 | A cancelled upload deployment leaves its archive |
 | KI-083 | `harbora deploy`'s "Stopped following" message is dead code |
 | KI-084 | A later-typed colliding name previews without `-2` |
-| KI-085 | A launched Git app needs its webhook pasted by hand when its repository is not on a connected account. For a connected account `r9/int` sets the hook up through the provider (see the fixed list) |
+| KI-085 | A launched Git app needs its webhook pasted by hand when its repository is not on a connected account. For a connected account, 0.13.0 sets the hook up through the provider (D-031) |
 | KI-086 | `AppRefusals` and `ResourceCreationBilling` Persian copy is still plural, unlike the singular voice of Launch |
 | KI-088 | The secret-name rule exists on both the service and the surfaces |
 | KI-089 | MongoDB, RabbitMQ and NATS have no readiness wait or connection test |
@@ -127,9 +127,9 @@ Recorded on 2026-11-05 and deliberately left. **[Verified]** that they were acce
 - A 404 at an app's address counts as something answering, in both the health gate and the launch check.
 - The AI gateway is labelled Preview.
 
-## Fixed on `r9/int` in round nine, not yet on master or released
+## Fixed in round nine, released in 0.13.0
 
-**[Verified]** that each fix is merged on `r9/int` and that the full suite passes there (9,701 in `Harbora.Tests`, 539 front-end tests, on `7d7a0ae`). None was run on a real server.
+**[Verified]** that each fix is in 0.13.0 and that the full suite passed on the release's code (9,710 in `Harbora.Tests`, 539 front-end tests, on `eacd3f7`). None was exercised on a real server before the release.
 
 | ID | What was wrong | What changed | Where |
 |---|---|---|---|
@@ -139,24 +139,26 @@ Recorded on 2026-11-05 and deliberately left. **[Verified]** that they were acce
 | KI-041 | Build directories were never removed | The pipeline removes its own directory when a deployment ends, and a daily sweep removes old ones no unsettled deployment owns | `Maintenance/BuildDirectories.cs`, `BuildDirectorySweeper.cs` |
 | KI-080 | A retried launch lost typed answers | The answers ride on the launch row, protected, until they are on the app; dropped after a day | `Launch/LaunchService.Confirm.cs` |
 | KI-081 | The CLI uploaded `.env.production` and the like | Every `.env.*` that is not an example stays home on the CLI and for a browser zip, is named in the output, and can be opted in with a `!` line. `.env` and `.env.local` never go | `Harbora.Shared/EnvFiles.cs`, `Harbora.Cli/SourcePacker.cs`, `Deployments/SourceArchive.cs` |
+| KI-090 | A database made from a template was rolled back on PostgreSQL while the page reported success | The database-only path commits its creation transaction after the provision is queued. The PostgreSQL test for it runs only in CI | `Templates/TemplateDeploymentService.cs` |
 | KI-087 | A database import over 128 MB failed with a bare 400 | Imports go through up to 2 GB and the backup upload up to 8 GB; a larger file is refused in a sentence. No real 2 GB upload was sent | `Harbora.Web/Controllers/DatabasesController.*.cs` |
 
 ## Found during round nine, not fixed
 
 | ID | Issue | Where | Impact | Check |
 |---|---|---|---|---|
-| KI-090 | A database-only template returns before committing its creation transaction, so on PostgreSQL the database, its charge and its provision job would roll back while the page reports success. The test database has no transactions, so no test sees it | `Templates/TemplateDeploymentService.cs:79,188,295`, `Tenancy/QuotaService.cs:31-57` | High | Verified by reading; not run |
 | KI-091 | `harbora env pull` never returns `SENTRY_DSN`: the env endpoint lacks the error-tracking include | `Harbora.Web/Controllers/Api/ApiV1Controller.cs` (`Env`) | Low | Verified\* |
 | KI-092 | A scheduled run mounts none of the app's volumes and has no memory or CPU limit | `Deployments/CronJobRunner.cs` | Medium | Verified\* |
 | KI-093 | The ignore-file loader trims slashes at both ends, so `/build` still matches a nested `build/`, against the guide's own advice | `Harbora.Cli/SourcePacker.cs` (`LoadIgnorePatterns`) | Low | Verified\* |
 | KI-094 | A backup schedule aimed at a deleted logical database fails every day | `Backups/BackupEngine.cs` | Low | Verified\* |
 | KI-095 | On a v1 node a "database" backup is a volume snapshot, not a dump, and the automatic schedule inherits that | `Backups/BackupEngine.cs` | Medium | Verified\* |
 | KI-096 | A webhook Harbora created is not removed from the provider when its app is deleted, and only the first page of a repository's hooks is read | `Git/GitHooks.cs`, `Deployments/AppOperationsService.cs` | Low | Verified\* |
-| KI-097 | By decision, the automatic backup is not given to a database made from a template, to Redis, Meilisearch, RabbitMQ or NATS, or on a plan that keeps fewer than seven | `Services/AutomaticDatabaseBackup.cs` | Low | Verified\* |
+| KI-097 | By decision, the automatic backup is not given to a database made from a template, or to Redis, Meilisearch, RabbitMQ or NATS. A plan that keeps fewer than seven gets a schedule at its own maximum | `Services/AutomaticDatabaseBackup.cs` | Low | Verified\* |
 | KI-098 | `LogicalDatabaseBackupHttpTests.Restoring_into_a_brand_new_database...` fails when run alone: nothing on that path creates the staging directory | `tests/Harbora.Tests/Http` | Low | Verified\* |
 | KI-099 | `examples/harbora.yml` advertises `env:` and `domains:` keys the parser ignores, and `docs/cli-deploy.md` leaves one rule out of how the deploy mode is chosen | as listed | Low | Verified\* |
 | KI-100 | `Jobs` grows by roughly 48,000 rows a day in production and nobody has looked at why | figure derived from the 2026-11-05 count | Medium | Assumption |
 | KI-101 | On the Git page the OAuth error is English only, and a Gitea account can be connected with no address and then never listed | `Harbora.Web/Controllers/GitController.cs` | Low | Verified\* |
+| KI-102 | After losing the race for the one unsettled deployment of an app, `CoalesceAfterLostRaceAsync` reads inside the creation lock's transaction, which PostgreSQL has already aborted, so the read would throw instead of returning the winner. Whether this can be reached while the lock is held was not established | `Deployments/DeploymentEngine.cs:107,132,163` | Medium | Assumption |
+| KI-103 | The `template.deploy` audit entry is written outside the creation transaction, and `EnvironmentCloner.CloneAsync` leaves new rows tracked after a refusal (harmless with its one caller) | `Harbora.Web/Controllers/SectionControllers.cs:190`, `Projects/EnvironmentCloner.cs:223` | Low | Verified\* |
 
 ## Build and test traps
 

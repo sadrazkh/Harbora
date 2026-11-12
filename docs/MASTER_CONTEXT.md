@@ -1,5 +1,5 @@
 Last verified: 2026-11-08
-Scope: repository at commit `b3fd974` on `master`, read statically (code, config, CI, existing docs, git history). Nothing was built or run for this baseline. Test figures come from the full run of 2026-11-05 on `72899f5`, whose code is identical to `b3fd974`.
+Scope: repository at commit `b3fd974` on `master`, read statically (code, config, CI, existing docs, git history). Nothing was built or run for this baseline. Test figures come from the full run of 2026-11-05 on `72899f5`, whose code is identical to `b3fd974`. Version, release and test rows were updated on 2026-11-12 for 0.13.0; nothing else was re-verified.
 
 # Harbora: master context
 
@@ -19,18 +19,18 @@ Labels used in every baseline document: **[Verified]** was checked against the c
 
 | Fact | Value | Source |
 |---|---|---|
-| Product version | 0.12.0 | `Directory.Build.props` |
-| Latest release tag | `v0.12.0`, 2026-11-05 | `git tag` |
-| First commit, commit count | 2026-07-06, 1075 | `git log` |
+| Product version | 0.13.0 | `Directory.Build.props` |
+| Latest release tag | `v0.13.0`, 2026-11-12 | `git tag` |
+| First commit, commit count | 2026-07-06, 1112 | `git log` |
 | Runtime | .NET 10, Node 22 (front-end build only) | `Dockerfile` |
 | Database | PostgreSQL 16, 128 `DbSet`s, 122 migrations | `deploy/docker-compose.yml`, `src/Harbora.Data` |
 | Production C# (no migrations) | about 159,000 lines; Infrastructure is 80,930 of them | line count of `src/**/*.cs` |
 | Razor views | 17,358 lines | `src/Harbora.Web/Views` |
-| `Harbora.Tests` | 9,457 passed, 0 failed | run of 2026-11-05 |
-| `Harbora.NodeAgent.Tests` | 500 passed, 17 skipped | run of 2026-11-05 |
-| `Harbora.NodeIngress.Tests` | 15 passed | run of 2026-11-05 |
-| `Harbora.Postgres.Tests` | 117; needs Docker, green in CI run 42031668424 | CI |
-| Front-end tests (`node --test`) | 533 passed | run of 2026-11-05 |
+| `Harbora.Tests` | 9,710 passed, 0 failed | run of 2026-11-12 on `eacd3f7` |
+| `Harbora.NodeAgent.Tests` | 500 passed, 17 skipped | run of 2026-11-12 |
+| `Harbora.NodeIngress.Tests` | 15 passed | run of 2026-11-12 |
+| `Harbora.Postgres.Tests` | 119; needs Docker, so it runs only in CI | CI |
+| Front-end tests (`node --test`) | 539 passed | run of 2026-11-12 |
 | Backlog tracker | 66 items: 41 done, 16 partial, 9 open | `docs/product-audit/backlog.json` |
 | License | none; the README says "TBD" and there is no LICENSE file | `README.md` |
 

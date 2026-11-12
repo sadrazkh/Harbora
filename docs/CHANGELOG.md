@@ -1,5 +1,5 @@
 Last verified: 2026-11-08
-Scope: git tags, version-bump commit messages and round ledgers up to commit `b3fd974`. Summaries are reconstructed from git, one line per release or milestone. The node contract has its own log at `contracts/node-agent/v1/CHANGELOG.md`.
+Scope: git tags, version-bump commit messages and round ledgers up to commit `b3fd974`. Summaries are reconstructed from git, one line per release or milestone. The node contract has its own log at `contracts/node-agent/v1/CHANGELOG.md`. Updated 2026-11-12 for round nine, released as 0.13.0; nothing else was re-verified.
 
 # Changelog
 
@@ -7,7 +7,8 @@ Labels: [Verified], [Assumption], [Recommendation]; see [MASTER_CONTEXT.md](MAST
 
 | Version | Date | Commits since previous | Summary |
 |---|---|---|---|
-| Baseline documentation | 2026-11-08 | | The 13 documents in `docs/` and `DOCUMENTATION_RULES.md`, on branch `docs/baseline` |
+| 0.13.0 | 2026-11-12 | 39 | Easier, safer deploys: real env files stay on the developer's machine; a new database is backed up daily; a repository is picked from a connected account and its push webhook set up through the provider; cron jobs get their app's environment; a database stuck being set up is settled; finished jobs and build directories are cleaned up; a CI example; a template database no longer rolled back on PostgreSQL |
+| Baseline documentation | 2026-11-08 | | The 13 documents in `docs/` and `DOCUMENTATION_RULES.md`, written on branch `docs/baseline` and published with 0.13.0 |
 | 0.12.0 | 2026-11-05 | 240 | Launch: one form or `harbora launch` from code to a checked app, with no AI. Eight bugs found by a real run, including the MinIO image that stopped every fresh install |
 | Round seven, no tag | 2026-10-15 | | Assistant polish: delete and stop conversations, readable activity, plans that stay visible |
 | Round six, no tag | 2026-10-12 | | In-panel assistant with write tools, streaming, resilient turns and a secrets lock |
