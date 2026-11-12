@@ -185,6 +185,13 @@ public sealed class TemplateDeploymentService(
                     Domain.Billing.BilledResourceType.Service, s.Id, s.Name, s.InstanceSizeKey,
                     s.ServerId)).ToList(), ct);
             foreach (var service in createdServices) await managedServices.QueueProvisionAsync(service.Id, ct);
+
+            // After the provision is queued, so the project, the database, its first hour and its job
+            // are kept together or not at all. This branch used to return without it: on PostgreSQL
+            // the creation lock is a real transaction, and disposing it uncommitted threw all four
+            // away while the page was handed the ids of rows that no longer existed. EF InMemory has
+            // no transaction, which is why no test saw it (TemplateDatabaseCommitTests now does).
+            await quotaReservation.CommitAsync(ct);
             return new TemplateDeployResult(project.Id, null, createdServices.Single().Id, null, 0);
         }
 
