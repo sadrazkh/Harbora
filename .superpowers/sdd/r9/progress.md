@@ -68,3 +68,28 @@ going until told otherwise. E, F and G were stopped and their work committed. Ea
 | G | e059b1d | b59ad32 the panel side; 80f44b9 the CLI side; e059b1d a checkpoint of the guides and the token workspace lookup with tests in progress, not built or tested | finish those tests, full test run, report |
 
 The remote branch proof/r9 exists and is left there. A, B, C and D (Opus) keep running.
+
+## The four Opus agents are done and merged, 2026-11-12
+
+| Agent | Range on its branch | Its own full run | Merge on r9/int |
+|---|---|---|---|
+| A | e84a288..19b2928 | 9544 passed | fe5b8eb |
+| D | e84a288..c4c33f7 | 9483 passed | d33d103 |
+| B | e84a288..6dd702a | 9513 passed, 537 front-end | 1366bf6 |
+| C | e84a288..1c3f656 | 9532 passed, 535 front-end | 7d7a0ae |
+
+All four merged with no conflict. On r9/int at 7d7a0ae: build 0 errors (the two NU1903 package warnings only);
+Harbora.Tests 9701 passed, 0 failed; NodeAgent 500 passed, 17 skipped; NodeIngress 15 passed; Postgres 118
+skipped here; front-end tests 539 passed; Vite build ok. Harbora.Tests.dll named twice in the log.
+
+The coordinator read, beyond the reports: the env-file rule; the build-directory sweep and its ownership
+check; how the first automatic backup is delayed (a real NextRunAt, not a stamped LastRunAt); every new
+unfiltered read of a Git account (each is pinned to the caller's workspace) and the webhook action.
+
+The status documents under docs/ were updated for this work in the same change.
+
+Found by B and confirmed by reading, not fixed because it is outside the chosen items: a database-only
+template returns before committing its creation transaction (TemplateDeploymentService, lines 79, 188, 295),
+so on PostgreSQL the database, its charge and its job would roll back while the page reports success.
+
+Still held: E, F and G. Not done: merging to master, pushing, deploying.

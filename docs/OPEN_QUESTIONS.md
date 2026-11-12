@@ -1,5 +1,5 @@
 Last verified: 2026-11-08
-Scope: questions the code and git history cannot answer, gathered during the baseline at commit `b3fd974`, plus those still open in `docs/product-audit/18-open-questions.md`.
+Scope: questions the code and git history cannot answer, gathered during the baseline at commit `b3fd974`, plus those still open in `docs/product-audit/18-open-questions.md`. Updated 2026-11-12 for the round-nine work merged on `r9/int` (`7d7a0ae`), which is not on master or released; nothing else was re-verified.
 
 # Open questions
 
@@ -43,7 +43,7 @@ The billing design left this open, and no sweep reclaims suspended volumes. **[A
 `90eb216` and `6316507` carry another address. Fixing them needs a force-push. **[Assumption]** Left.
 
 ### OQ-12: Should `Jobs` have a retention period, and how long?
-4.2 million rows in production (KI-040). **[Recommendation]** 30 days for completed rows.
+Answered in round nine: 30 days for settled rows (`Retention:JobDays`, on `r9/int`). Still open: whether hourly-billing jobs should be exempt, since a code comment calls them an audit trail though nothing reads them.
 
 ### OQ-13: Do the SSL-off controls stay?
 KI-015. **[Recommendation]** Remove them unless plain-HTTP apps are wanted.
@@ -59,6 +59,15 @@ Frozen with no date (`docs/product-audit/18-open-questions.md` Q3). **[Assumptio
 
 ### OQ-17: Should a marked build variable warn when it would be visible in `docker history`?
 Possible in a single-stage image (`.superpowers/sdd/r8/p-report.md`). **[Assumption]** Left as it is.
+
+### OQ-18: Should a plan that keeps fewer than seven backups still get an automatic one?
+Today such a plan gets no schedule at all (KI-097). **[Recommendation]** Make the schedule at the plan's own maximum.
+
+### OQ-19: Should Redis, Meilisearch, RabbitMQ and NATS get an automatic backup?
+They get none, partly because the Starter plan allows two schedules. **[Assumption]** Left as it is.
+
+### OQ-20: Is a build directory worth keeping after a failed build?
+It is removed (D-032). **[Assumption]** Nobody needs it.
 
 ## Carried over from the 2026-08 audit, still open
 
