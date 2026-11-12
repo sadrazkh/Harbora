@@ -39,14 +39,29 @@ public sealed class MonitoringController(
     /// rollback window, and — through the daemon's own prune — dangling (untagged, unreferenced)
     /// images. Tagged images outside the first two are never touched. The headline figure is the
     /// disk's own before/after, because summed image sizes overstate shared layers; the daemon's own
-    /// reclaimed figure for the dangling prune is reported beside it, labelled as the daemon's.
+    /// reclaimed figure for the dangling prune is reported beside it, labelled as the daemon's. Build
+    /// directories nothing owns any more are removed too (<see cref="Harbora.Infrastructure.Maintenance.BuildDirectorySweep"/>),
+    /// the same sweep that runs once a day, with their own figure.
     /// </summary>
     [HttpPost("cleanup")]
     [Authorize(Policy = Harbora.Domain.Authorization.Capabilities.ServersManage)]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> Cleanup(CancellationToken ct)
+    public async Task<IActionResult> Cleanup(
+        [FromServices] Harbora.Infrastructure.Maintenance.BuildDirectorySweep buildDirectories, CancellationToken ct)
     {
         var result = await cleanup.RunAsync(ct);
+
+        // The panel's own disk rather than any server's images, so it is reported on its own: what the
+        // files held, counted as they went, never folded into the disks' measured figure above.
+        Harbora.Infrastructure.Maintenance.BuildDirectorySweepResult? builds = null;
+        try
+        {
+            builds = await buildDirectories.RunAsync(ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            logger.LogWarning(ex, "Clean up disk could not sweep the build directories.");
+        }
 
         await audit.LogAsync("maintenance.disk_cleanup", "server", "local",
             HttpContext.Connection.RemoteIpAddress?.ToString(),
@@ -58,7 +73,9 @@ public sealed class MonitoringController(
                 freedBytes = result.FreedBytes,
                 dangling = result.DanglingRemoved,
                 danglingReclaimedBytes = result.DanglingReclaimedBytes,
-                servers = result.Servers
+                servers = result.Servers,
+                buildDirectories = builds?.Removed,
+                buildDirectoryBytes = builds?.FreedBytes
             }),
             // Cleans up the shared node's own leftover images across every workspace's apps at once
             // — not one workspace's act.
@@ -100,9 +117,30 @@ public sealed class MonitoringController(
 
         TempData["Message"] = (IsFa
             ? $"پاک‌سازی: {removed} ایمیج حذف شد ({result.OrphanRemoved} یتیم، {result.RetentionRemoved} قدیمی)، {result.DanglingRemoved} ایمیج بی‌برچسب (dangling) حذف شد (طبق گزارش Docker: {danglingBytes})، {result.Failed} در حال استفاده ماند؛ فضای آزادشده: {freed}."
-            : $"Cleanup removed {removed} image(s) ({result.OrphanRemoved} orphaned, {result.RetentionRemoved} superseded), pruned {result.DanglingRemoved} dangling image(s) (the daemon reported {danglingBytes}), {result.Failed} in use and kept; freed: {freed}.") + note + danglingNote;
+            : $"Cleanup removed {removed} image(s) ({result.OrphanRemoved} orphaned, {result.RetentionRemoved} superseded), pruned {result.DanglingRemoved} dangling image(s) (the daemon reported {danglingBytes}), {result.Failed} in use and kept; freed: {freed}.") + note + danglingNote
+            + BuildDirectoriesNote(builds);
 
         return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>The cleanup sentence's last clause: what the build-directory sweep did, or that it did not run.</summary>
+    private static string BuildDirectoriesNote(Harbora.Infrastructure.Maintenance.BuildDirectorySweepResult? builds)
+    {
+        if (builds is null)
+            return IsFa
+                ? " پوشه‌های ساخت بررسی نشدند؛ دلیلش در لاگ پنل است."
+                : " Build directories were not examined; the panel log says why.";
+
+        var bytes = Harbora.Infrastructure.Tenancy.ByteSize.Measured(builds.FreedBytes);
+        var failed = builds.Failed.Count == 0
+            ? string.Empty
+            : IsFa
+                ? $" {builds.Failed.Count} پوشه پاک نشد؛ نامشان در لاگ پنل است."
+                : $" {builds.Failed.Count} could not be removed; the panel log names them.";
+
+        return (IsFa
+            ? $" {builds.Removed} پوشهٔ ساخت باقی‌مانده هم پاک شد ({bytes})."
+            : $" Removed {builds.Removed} leftover build director(ies) ({bytes}).") + failed;
     }
 
     /// <summary>

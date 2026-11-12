@@ -246,6 +246,7 @@ public sealed class FakeDockerEngine : IDockerEngine
         ct.ThrowIfCancellationRequested();
         Record(nameof(BuildImageAsync), request.ImageTag);
         BuildRequests.Add(request);
+        OnBuild?.Invoke(request);
         if (_scriptedBuildOutcomes.TryDequeue(out var outcome))
         {
             if (outcome is not null) throw outcome;
@@ -258,6 +259,9 @@ public sealed class FakeDockerEngine : IDockerEngine
 
     /// <summary>Every build request, so a test can assert on build args as well as the image tag.</summary>
     public List<DockerBuildRequest> BuildRequests { get; } = [];
+
+    /// <summary>Called as each build starts, so a test can look at the build context while it exists.</summary>
+    public Action<DockerBuildRequest>? OnBuild { get; set; }
 
     /// <summary>
     /// 1.3 (2026-09 market-gaps round two): every credential a pull actually carried, keyed by the
