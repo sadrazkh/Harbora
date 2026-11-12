@@ -17,7 +17,7 @@ public sealed record LaunchDeploymentState(DeploymentStatus Status, string? Erro
 /// <param name="LastTouchedAt">The row's last write. While a launch is verifying, only the checks write to it.</param>
 /// <param name="ExpectedServices">How many databases were agreed to on the confirm screen.</param>
 /// <param name="Services">The ones that exist right now.</param>
-/// <param name="HoldsLeftovers">A token or an archive is still on the row.</param>
+/// <param name="HoldsLeftovers">A token, an archive or what was typed on the confirm screen is still on the row.</param>
 public sealed record LaunchSnapshot(
     LaunchStatus Status,
     LaunchSourceKind Source,

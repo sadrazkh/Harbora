@@ -121,7 +121,11 @@ internal sealed class AppServiceHarness : IDisposable
     public AppProvisioningService Provisioning() => new(
         Db, Quota(), Scheduler, new PassthroughProtector(), Audit, Deployments,
         new ProjectService(Db, Clock, new QuotaService(Db, Options.Create(Billing))), Access(), Addresses(),
-        new ResourceCreationBilling(Db, Clock, Options.Create(Billing)));
+        new ResourceCreationBilling(Db, Clock, Options.Create(Billing)),
+        GitProviders.HookService(Db, new PassthroughProtector(), Audit, Clock, PanelDomain));
+
+    /// <summary>The connected accounts' provider API: what a webhook is set up through.</summary>
+    public FakeGitProviders GitProviders { get; } = new();
 
     public AppConfigurationService Configuration() => new(
         Db, Quota(), new PassthroughProtector(), Audit, Access(), Addresses(),

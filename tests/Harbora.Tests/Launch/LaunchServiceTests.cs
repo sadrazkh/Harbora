@@ -555,34 +555,6 @@ public sealed class LaunchServiceTests
     }
 
     [Fact]
-    public async Task A_retry_cannot_recall_what_was_typed_so_it_says_so_and_names_what_is_not_set()
-    {
-        using var h = new LaunchHarness();
-        var id = await h.ReadyGitAsync(NodeWithPostgres());
-        h.Creates.RefuseApp = new ServiceRefusal("No address left.", "نشانی نمانده است.");
-
-        var failed = await h.ConfirmAsync(id, c => c with
-        {
-            EnvVars = c.EnvVars.Select(v => v.Key == "STRIPE_SECRET_KEY" ? v with { Value = "sk_live_abc" } : v).ToList()
-        });
-
-        failed.FailureMessage.Should().Contain("STRIPE_SECRET_KEY was not kept").And.NotContain("LOG_LEVEL",
-            "that one was left as the example file has it, so a retry reads it again");
-        failed.FailureMessage.Should().NotContain("sk_live_abc");
-        failed.FailureMessageFa.Should().Contain("STRIPE_SECRET_KEY").And.NotContain("sk_live_abc");
-        h.Row(id).ChoicesJson.Should().NotContain("sk_live_abc");
-
-        var retried = (await h.Request().RetryAsync(id, null, default)).Value!;
-
-        var variables = h.Store().EnvironmentVariables.IgnoreQueryFilters().ToList();
-        variables.Single(v => v.Key == "LOG_LEVEL").Value.Should().Be("info", "that one is in the example file");
-        variables.Should().Contain(v => v.Key == "JWT_SECRET" && v.IsSecret, "that one is generated");
-        variables.Should().NotContain(v => v.Key == "STRIPE_SECRET_KEY");
-        retried.Steps.Single(s => s.Key == LaunchStepKeys.App).Detail.Should().Contain("STRIPE_SECRET_KEY");
-        retried.Steps.Single(s => s.Key == LaunchStepKeys.App).DetailFa.Should().Contain("STRIPE_SECRET_KEY");
-    }
-
-    [Fact]
     public async Task Confirming_twice_creates_nothing_twice_and_the_second_lands_on_the_same_launch()
     {
         using var h = new LaunchHarness();

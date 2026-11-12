@@ -3,6 +3,7 @@ using Harbora.Data;
 using Harbora.Domain.Authorization;
 using Harbora.Domain.Common;
 using Harbora.Domain.Git;
+using Harbora.Infrastructure.Git;
 using Harbora.Web.ViewModels;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -21,10 +22,12 @@ public sealed class GitController(
     IGitProviderClient providerClient,
     IGitOAuthService oauth,
     ISecretProtector protector,
-    ICurrentUser currentUser) : Controller
+    ICurrentUser currentUser,
+    IGitHookService hooks) : Controller
 {
     private const string OAuthCookie = "harbora_oauth";
     private Guid WorkspaceId => currentUser.WorkspaceId ?? Guid.Empty;
+    private bool IsFa => System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
 
     /// <param name="reveal">
     /// The one repository whose webhook secret to show. Named as a query parameter deliberately —
@@ -193,20 +196,47 @@ public sealed class GitController(
         return RedirectToAction(nameof(Index));
     }
 
+    /// <summary>
+    /// A new secret. On a connected account's repository the hook Harbora set up is given it in the same
+    /// press, or every push after this would be refused as unsigned while the page still said they deploy.
+    /// </summary>
     [HttpPost("repos/{id:guid}/rotate-secret")]
     [Authorize(Policy = Capabilities.GitManage)]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> RotateSecret(Guid id, CancellationToken ct)
     {
-        var repo = await db.GitRepositories
+        var repo = await db.GitRepositories.Include(r => r.Provider)
             .FirstOrDefaultAsync(r => r.Id == id && r.Provider!.WorkspaceId == WorkspaceId, ct);
         if (repo is not null)
         {
             repo.WebhookSecret = Guid.NewGuid().ToString("N");
             await db.SaveChangesAsync(ct);
+
+            if (repo.Provider is { } account && GitAccounts.Connectable.Contains(account.Type))
+                Say(await hooks.EnsureAsync(repo.Id, ct));
         }
         return RedirectToAction(nameof(Index));
     }
+
+    /// <summary>
+    /// Sets the push webhook up on the provider, or finds it there and gives it the current secret: the
+    /// app page's button for a repository of a connected account. Pressed twice, it still leaves one hook.
+    /// </summary>
+    /// <param name="back">A path on this panel to return to, the app page that has the button.</param>
+    [HttpPost("repos/{id:guid}/webhook")]
+    [Authorize(Policy = Capabilities.GitManage)]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> SetUpWebhook(Guid id, [FromForm] string? back, CancellationToken ct)
+    {
+        var owned = await db.GitRepositories.AnyAsync(r => r.Id == id && r.Provider!.WorkspaceId == WorkspaceId, ct);
+        if (!owned) return NotFound();
+
+        Say(await hooks.EnsureAsync(id, ct));
+        return !string.IsNullOrEmpty(back) && Url.IsLocalUrl(back) ? LocalRedirect(back) : RedirectToAction(nameof(Index));
+    }
+
+    private void Say(GitHookOutcome outcome) =>
+        TempData[outcome.IsConfirmed ? "Message" : "Error"] = IsFa ? outcome.MessageFa : outcome.Message;
 
     private async Task<string?> GetSetting(string key, CancellationToken ct) =>
         await db.Settings.Where(s => s.Key == key).Select(s => s.Value).FirstOrDefaultAsync(ct);

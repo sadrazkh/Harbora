@@ -138,6 +138,9 @@ public class AppScopeCensusTests
         ["GitController.cs:SaveOAuthConfig(GitProviderType type"] = "Same reason as Connect above.",
         ["GitController.cs:OAuthStart(GitProviderType type"] = "Same reason as Connect above.",
         ["GitController.cs:RotateSecret(Guid id"] = "Same reason as Connect above — rotates one repository's own webhook secret, not an app's.",
+        ["GitController.cs:SetUpWebhook(Guid id"] =
+            "Same reason as RotateSecret above — sets one repository's own push webhook up on the provider, "
+            + "through the workspace's connected account; the repository may be shared by apps in several projects.",
 
         ["MailController.cs:CreateDomain(string domain"] =
             "MailDomain/Mailbox are workspace-wide managed mail infrastructure with no ProjectId "

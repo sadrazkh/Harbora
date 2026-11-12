@@ -4,6 +4,8 @@
     var isFa = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "fa";
     ViewData["Title"] = isFa ? "راه انداختن اپ" : "Launch";
     var canCreate = NavigationCapabilities.For(User)(Capabilities.AppsCreate);
+    var accounts = Model.Accounts ?? [];
+    string Digits(int n) => isFa ? string.Concat(n.ToString(System.Globalization.CultureInfo.InvariantCulture).Select(c => (char)('۰' + (c - '0')))) : n.ToString("N0", System.Globalization.CultureInfo.InvariantCulture);
 }
 @* One question. Nothing on this page needs a person to know what a container is, and nothing on it
    creates anything or costs anything: all it asks is where the code is. *@
@@ -35,6 +37,77 @@
     }
     else
     {
+        @* A connected GitHub, GitLab or Gitea account's own repositories, so nobody with one has to go
+           and copy an address. Drawn on the server, so it works with no script; the search is an
+           ordinary GET and the script only narrows the list as somebody types. One form for the whole
+           list, a button per repository: the one pressed is the one posted. *@
+        @if (accounts.Count > 0)
+        {
+            <section class="dashboard-panel mt-6 flex flex-col gap-4 md:mt-8 md:p-6" data-launch-repos>
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                    <h2 class="flex items-center gap-2 text-sm font-semibold text-ink"><i data-lucide="git-branch" class="h-4 w-4 text-ink-muted"></i>@(isFa ? "یکی از مخزن‌هایت را انتخاب کن" : "Pick one of your repositories")</h2>
+                    <form method="get" action="/launch" role="search" class="flex min-w-0 flex-1 items-center gap-2 sm:max-w-xs">
+                        <label class="sr-only" for="launch-repo-search">@(isFa ? "جست‌وجوی مخزن" : "Search repositories")</label>
+                        <input id="launch-repo-search" name="q" value="@Model.Filter" type="search" dir="ltr" autocomplete="off" spellcheck="false"
+                               placeholder="@(isFa ? "جست‌وجوی مخزن" : "Search repositories")" class="form-control min-w-0 flex-1" data-launch-repo-filter />
+                        <button type="submit" class="btn-secondary shrink-0" aria-label="@(isFa ? "جست‌وجو" : "Search")"><i data-lucide="search" class="h-4 w-4"></i></button>
+                    </form>
+                </div>
+
+                <form method="post" action="/launch" class="flex flex-col gap-4" data-launch-pick>
+                    @Html.AntiForgeryToken()
+                    @foreach (var account in accounts)
+                    {
+                        <div class="flex flex-col gap-2" data-launch-account>
+                            <p class="text-xs text-ink-muted"><span dir="ltr">@account.Name</span> · @account.Type</p>
+                            @if (account.Problem is not null)
+                            {
+                                <p class="flex items-start gap-2 rounded-lg border border-line bg-surface-2 p-3 text-sm text-ink" role="status" data-launch-account-problem>
+                                    <i data-lucide="info" class="mt-0.5 h-4 w-4 shrink-0 text-ink-muted"></i>
+                                    <span>@(isFa ? account.ProblemFa : account.Problem) <a href="/git" class="text-accent-text hover:underline">@(isFa ? "اتصال Git" : "Git page")</a></span>
+                                </p>
+                            }
+                            else if (account.Repositories.Count == 0)
+                            {
+                                <p class="text-sm text-ink-muted">@(Model.Filter is null
+                                    ? (isFa ? "این حساب مخزنی ندارد که بشود دید." : "This account has no repositories to show.")
+                                    : (isFa ? "مخزنی با این نام نیست." : "No repository matches that."))</p>
+                            }
+                            else
+                            {
+                                <ul class="max-h-80 divide-y divide-line overflow-y-auto rounded-lg border border-line" data-launch-repo-list>
+                                    @foreach (var repository in account.Repositories)
+                                    {
+                                        <li data-launch-repo="@repository.FullName">
+                                            <button type="submit" name="Repository" value="@LaunchStartForm.PickedValue(account.ProviderId, repository.CloneUrl)"
+                                                    class="flex w-full items-center justify-between gap-3 px-3 py-2 text-start hover:bg-surface-2">
+                                                <span class="min-w-0 truncate font-mono text-sm text-ink" dir="ltr">@repository.FullName</span>
+                                                <span class="flex shrink-0 items-center gap-1.5 text-xs text-ink-faint">
+                                                    @if (repository.Private)
+                                                    {
+                                                        <i data-lucide="lock" class="h-3.5 w-3.5" aria-label="@(isFa ? "خصوصی" : "Private")"></i>
+                                                    }
+                                                    <span dir="ltr">@repository.DefaultBranch</span>
+                                                </span>
+                                            </button>
+                                        </li>
+                                    }
+                                </ul>
+                                <p class="hidden text-sm text-ink-muted" data-launch-repo-none>@(isFa ? "مخزنی با این نام نیست." : "No repository matches that.")</p>
+                                @if (account.Truncated)
+                                {
+                                    <p class="text-xs text-ink-muted">@(isFa
+                                        ? $"فقط {Digits(Harbora.Application.Abstractions.IGitProviderClient.MaxRepositories)} مخزنِ اخیر آمده است؛ برای بقیه آدرس را پایین بنویس."
+                                        : $"Showing the {Digits(Harbora.Application.Abstractions.IGitProviderClient.MaxRepositories)} most recently active. For another one, paste its address below.")</p>
+                                }
+                            }
+                        </div>
+                    }
+                </form>
+                <p class="text-xs text-ink-muted">@(isFa ? "روی یکی بزن تا خوانده شود؛ هنوز چیزی ساخته نمی‌شود. یا آدرس را پایین بنویس." : "Press one to read it; nothing is created yet. Or paste an address below.")</p>
+            </section>
+        }
+
         <div class="mt-6 grid gap-4 md:mt-8 md:grid-cols-2">
             <form method="post" action="/launch" class="dashboard-panel flex flex-col gap-4 md:p-6" data-launch-git>
                 @Html.AntiForgeryToken()

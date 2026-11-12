@@ -98,7 +98,7 @@ public class AppLaunch : BaseEntity
     /// <summary>A serialised <c>SourceInspection</c>.</summary>
     public string? InspectionJson { get; set; }
 
-    /// <summary>A serialised <c>LaunchChoices</c> — what was confirmed, secrets excluded. A retry reads it.</summary>
+    /// <summary>A serialised <c>LaunchChoices</c> — what was confirmed, with no value in the open. What was typed rides along through <c>ISecretProtector</c> only until the variables are on the app. A retry reads it.</summary>
     public string? ChoicesJson { get; set; }
 
     /// <summary>Set once created. Nullable, and survives the app being deleted, because the launch is still history.</summary>

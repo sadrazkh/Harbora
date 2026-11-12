@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Harbora.Application.Abstractions;
@@ -116,11 +117,22 @@ public static partial class LaunchSource
 /// <param name="Root">What the tree as a whole was found to be. Its <c>RootCandidates</c> are the keys of <paramref name="Candidates"/>.</param>
 /// <param name="Candidates">Each folder a person can choose, with its <c>RootDirectory</c> relative to the tree rather than to that folder.</param>
 /// <param name="Chosen">The folder chosen so far, a key of <paramref name="Candidates"/>.</param>
+/// <param name="GitProviderId">
+/// The connected account the repository is read through: the one it was picked from, or the one whose
+/// own list held a pasted address. Kept here because this column is the launch's account of its source,
+/// and it is written before the inspection (a pick) as well as by it. The app is created under this
+/// account rather than under a provider of its own, and its token never touches the launch row.
+/// </param>
 public sealed record StoredInspection(
     SourceInspection Root,
     IReadOnlyDictionary<string, SourceInspection> Candidates,
-    string? Chosen = null)
+    string? Chosen = null,
+    Guid? GitProviderId = null)
 {
+    /// <summary>What a launch picked from a connected account holds before it has been read.</summary>
+    public static StoredInspection ReadThrough(Guid gitProviderId) =>
+        new(SourceInspection.Nothing, new Dictionary<string, SourceInspection>(), GitProviderId: gitProviderId);
+
     /// <summary>
     /// The chosen folder's inspection, or the root's while nothing is chosen. The folders stay listed on
     /// it so the person can change their mind, right up to the confirm.
@@ -128,6 +140,24 @@ public sealed record StoredInspection(
     public SourceInspection Current => Chosen is { } chosen && Candidates.TryGetValue(chosen, out var candidate)
         ? candidate with { RootCandidates = Root.RootCandidates }
         : Root;
+}
+
+/// <summary>
+/// What a person typed on the confirm screen, kept on the launch for as long as a failed step might
+/// still need it and no longer. A launch row is no place for somebody's API key in the open, so every
+/// answer goes through <c>ISecretProtector</c> as one value; only the names are readable, because they
+/// are what a sentence has to say when the answers are dropped before anything used them.
+/// </summary>
+/// <param name="Names">The variables a value was typed for. Never a value.</param>
+/// <param name="Sealed">Every answer, blank ones included, as protected JSON: a retry is handed exactly what the confirm was.</param>
+public sealed record SealedAnswers(IReadOnlyList<string> Names, string Sealed)
+{
+    /// <summary>A record prints every property by default, and this one is ciphertext of somebody's keys.</summary>
+    private bool PrintMembers(System.Text.StringBuilder builder)
+    {
+        builder.Append($"Names = [{string.Join(", ", Names)}]");
+        return true;
+    }
 }
 
 /// <summary>
@@ -148,7 +178,7 @@ public static class LaunchJson
     {
         var stored = Read<StoredInspection>(json);
         return stored?.Root is null
-            ? new StoredInspection(SourceInspection.Nothing, new Dictionary<string, SourceInspection>())
+            ? new StoredInspection(SourceInspection.Nothing, new Dictionary<string, SourceInspection>(), GitProviderId: stored?.GitProviderId)
             : stored with { Candidates = stored.Candidates ?? new Dictionary<string, SourceInspection>() };
     }
 
@@ -158,13 +188,51 @@ public static class LaunchJson
     public static LaunchChoices? ReadChoices(string? json) => Read<LaunchChoices>(json);
 
     /// <summary>
-    /// What is kept of the confirm screen: every choice, and no variable's value. A value lives on the
-    /// app's own environment rows once it is set, encrypted if it is a secret, and nowhere else.
+    /// What is kept of the confirm screen: every choice, and no variable's value in the open. A value
+    /// lives on the app's own environment rows once it is set, encrypted if it is a secret. Until then,
+    /// which can be a failed step and a retry later, what was typed rides along as one sealed value
+    /// (<paramref name="answers"/>), taken off again by <see cref="WithoutAnswers"/> the moment the
+    /// variables are on the app.
     /// </summary>
-    public static string WriteChoices(LaunchChoices choices) => Write(choices with
+    public static string WriteChoices(LaunchChoices choices, SealedAnswers? answers = null)
     {
-        EnvVars = choices.EnvVars.Select(v => v with { Value = null }).ToList()
-    });
+        var node = JsonSerializer.SerializeToNode(choices with
+        {
+            EnvVars = choices.EnvVars.Select(v => v with { Value = null }).ToList()
+        }, Options)!.AsObject();
+        if (answers is not null) node[AnswersProperty] = JsonSerializer.SerializeToNode(answers, Options);
+        return node.ToJsonString(Options);
+    }
+
+    /// <summary>
+    /// The property <see cref="WriteChoices"/> puts the sealed answers under. A reader of
+    /// <see cref="LaunchChoices"/> skips it, and the tick looks for it by name to find a failed launch
+    /// still holding some.
+    /// </summary>
+    public const string AnswersProperty = "sealedAnswers";
+
+    /// <summary>The marker a query can look for in the column without parsing it.</summary>
+    public const string AnswersMarker = "\"" + AnswersProperty + "\"";
+
+    public static SealedAnswers? ReadAnswers(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json) || !json.Contains(AnswersMarker, StringComparison.Ordinal)) return null;
+        try
+        {
+            var answers = JsonNode.Parse(json)?[AnswersProperty]?.Deserialize<SealedAnswers>(Options);
+            return answers is { Sealed.Length: > 0 } ? answers with { Names = answers.Names ?? [] } : null;
+        }
+        catch (JsonException) { return null; }
+    }
+
+    /// <summary>The same choices with the sealed answers taken off, or the column as it was when it holds none.</summary>
+    public static string? WithoutAnswers(string? json)
+    {
+        if (ReadAnswers(json) is null) return json;
+        var node = JsonNode.Parse(json!)!.AsObject();
+        node.Remove(AnswersProperty);
+        return node.ToJsonString(Options);
+    }
 
     public static List<Guid> ReadIds(string? json) => Read<List<Guid>>(json) ?? [];
 

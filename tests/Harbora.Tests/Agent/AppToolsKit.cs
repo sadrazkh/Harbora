@@ -94,7 +94,8 @@ internal sealed class AppToolsHarness : IDisposable
     private ResourceCreationBilling CreationBilling() => new(Db, Agent.Clock, Options.Create(Billing));
 
     public AppProvisioningService Provisioning() => new(
-        Db, Quota(), Scheduler, Agent.Protector, Agent.Audit, Deployments, Projects(), Agent.Access, Addresses(), CreationBilling());
+        Db, Quota(), Scheduler, Agent.Protector, Agent.Audit, Deployments, Projects(), Agent.Access, Addresses(), CreationBilling(),
+        new FakeGitProviders().HookService(Db, Agent.Protector, Agent.Audit, Agent.Clock, PanelDomain));
 
     public AppConfigurationService Configuration() => new(
         Db, Quota(), Agent.Protector, Agent.Audit, Agent.Access, Addresses(),

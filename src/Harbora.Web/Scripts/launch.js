@@ -1,4 +1,5 @@
-// The launch pages' small script: the poll, the cost refresh, the address preview, the drop zone.
+// The launch pages' small script: the poll, the cost refresh, the address preview, the drop zone,
+// the repository search.
 //
 // Everything here is an improvement on a page that already works. /launch posts as an ordinary form,
 // the progress page is a complete page with a refresh link, and the server refuses honestly whatever
@@ -196,6 +197,19 @@ export function addressFor(name, slug, rootDomain, suggested) {
 /** Whether a ticked service would set a name, given the space-separated services that could. */
 export function isAnswered(answeredBy, ticked) {
   return (answeredBy ?? '').split(' ').some((service) => ticked.has(service));
+}
+
+/**
+ * Whether a repository stays in the picker for what has been typed into its search: every word, in
+ * any order and any case, somewhere in its full name. Blank keeps everything.
+ *
+ * @param {string} fullName
+ * @param {string} query
+ */
+export function repositoryMatches(fullName, query) {
+  const words = (query || '').toLowerCase().split(/\s+/).filter(Boolean);
+  const name = (fullName || '').toLowerCase();
+  return words.every((word) => name.includes(word));
 }
 
 export function isTooBig(file, maxBytes) {
@@ -407,8 +421,32 @@ function initUpload(doc, win) {
   });
 }
 
+// The picker's search, as somebody types. Without this the same box is a GET that the server narrows.
+function initRepositories(doc) {
+  const section = doc.querySelector('[data-launch-repos]');
+  if (!section) return;
+
+  const filter = section.querySelector('[data-launch-repo-filter]');
+  const paint = () => {
+    const query = filter?.value ?? '';
+    section.querySelectorAll('[data-launch-repo-list]').forEach((list) => {
+      let shown = 0;
+      list.querySelectorAll('[data-launch-repo]').forEach((row) => {
+        const keep = repositoryMatches(row.dataset.launchRepo, query);
+        row.classList.toggle('hidden', !keep);
+        if (keep) shown += 1;
+      });
+      list.classList.toggle('hidden', shown === 0);
+      list.parentElement?.querySelector('[data-launch-repo-none]')?.classList.toggle('hidden', shown > 0);
+    });
+  };
+
+  filter?.addEventListener('input', paint);
+}
+
 export function initLaunch(doc = document, win = window) {
   initPoll(doc, win);
   initConfirm(doc, win);
   initUpload(doc, win);
+  initRepositories(doc);
 }
