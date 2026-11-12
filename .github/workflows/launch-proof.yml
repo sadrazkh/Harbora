@@ -4,11 +4,16 @@ name: Launch proof
 # deploy/launch-proof.sh, which runs by hand on any throwaway Linux host with no GitHub involved.
 #
 # It is deliberately not part of ci.yml's `complete` gate. It builds the panel from nothing and launches
-# a dozen apps, so it takes much longer than the suite, and its job is to answer a question about one
-# ref, not to block every push.
+# some thirty apps, so it takes much longer than the suite, and its job is to answer a question about
+# one ref, not to block every push.
+#
+# The cases come in three sets that need nothing from one another, and each gets a runner of its own:
+# one host has four cores, which is fewer than thirty apps and their databases want, and side by side
+# the whole question is answered in about the time the longest set takes.
 #
 # The answer can be read with no login: every failure is an annotation (`::error title=step N::…`) and a
-# pass ends on a `::notice`, and GET /repos/{owner}/{repo}/check-runs/{job}/annotations returns both.
+# pass ends on a `::notice`, and GET /repos/{owner}/{repo}/check-runs/{job}/annotations returns both,
+# for each of the three jobs.
 
 on:
   push:
@@ -61,7 +66,7 @@ jobs:
           echo "$changed"
           pattern='^(deploy/launch-proof\.sh|deploy/proof-fixtures/|deploy/install\.sh|deploy/docker-compose\.yml|Dockerfile$|\.github/workflows/launch-proof\.yml'
           pattern="$pattern|src/Harbora\.Cli/|src/Harbora\.Shared/Inspection/|src/Harbora\.Domain/Launch/"
-          pattern="$pattern|src/Harbora\.Infrastructure/(Launch|Verification|Deployments|Services|Docker)/"
+          pattern="$pattern|src/Harbora\.Infrastructure/(Launch|Verification|Deployments|Services|Docker|Networking|Git)/"
           pattern="$pattern|src/Harbora\.Data/Migrations/"
           pattern="$pattern|src/Harbora\.Web/Controllers/(Api/)?Launch|src/Harbora\.Web/Views/Launch/)"
           if printf '%s\n' "$changed" | grep -qE "$pattern"; then
@@ -72,11 +77,18 @@ jobs:
           fi
 
   proof:
-    name: A launch, end to end
+    name: A launch, end to end (${{ matrix.group }})
     needs: decide
     if: needs.decide.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 120
+
+    # One set failing says nothing about the others, and stopping them would throw away what they
+    # were about to say.
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [core, stacks, flows]
 
     steps:
       - uses: actions/checkout@v4
@@ -85,6 +97,7 @@ jobs:
       # branch that moved during the run cannot pass for the commit this run is named after.
       - name: Install, launch and check, on this runner
         env:
+          LP_GROUPS: ${{ matrix.group }}
           LP_REF: ${{ github.ref_name }}
           LP_EXPECT_SHA: ${{ github.sha }}
           LP_REPO_URL: https://github.com/${{ github.repository }}

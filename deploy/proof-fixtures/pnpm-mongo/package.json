@@ -1,0 +1,11 @@
+{
+  "name": "pnpm-mongo",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "mongodb": "7.8.0"
+  }
+}
