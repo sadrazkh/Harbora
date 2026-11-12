@@ -163,10 +163,14 @@ public sealed class CreateDatabaseTool(
                 project = target.ProjectSlug,
                 environment = target.EnvironmentSlug,
                 size = input.Size?.Key,
-                status = "provisioning queued"
+                status = "provisioning queued",
+                // Round nine: whether it was given its daily backup, so the assistant can say so.
+                dailyBackup = created.Backup?.Scheduled
             }),
-            $"Created database {created.Name} ({input.Entry.DisplayName} {created.Version}) in {target.Place}; provisioning is queued.",
-            $"دیتابیس {created.Name} ({input.Entry.DisplayNameFa} نسخهٔ {created.Version}) در {target.Place} ساخته شد؛ آماده‌سازی آن در صف است.",
+            $"Created database {created.Name} ({input.Entry.DisplayName} {created.Version}) in {target.Place}; provisioning is queued." +
+            (created.Backup is { } backup ? " " + backup.Message : ""),
+            $"دیتابیس {created.Name} ({input.Entry.DisplayNameFa} نسخهٔ {created.Version}) در {target.Place} ساخته شد؛ آماده‌سازی آن در صف است." +
+            (created.Backup is { } backupFa ? " " + backupFa.MessageFa : ""),
             Links: links);
     }
 

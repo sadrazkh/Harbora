@@ -36,12 +36,16 @@
     }
 
     <form asp-controller="Databases" asp-action="ImportDatabase" asp-route-id="@svc.Id"
-          asp-route-databaseId="@database.Id" method="post" enctype="multipart/form-data" class="space-y-4">
+          asp-route-databaseId="@database.Id" method="post" enctype="multipart/form-data" class="space-y-4"
+          data-upload-limit data-max-bytes="@Harbora.Web.Controllers.DatabasesController.MaxImportBytes"
+          data-too-big="@UploadLimit.TooLarge(Harbora.Web.Controllers.DatabasesController.MaxImportBytes, isFa)">
         @Html.AntiForgeryToken()
 
         <div>
             <label class="block text-sm text-ink-muted mb-1">@(isFa ? "فایل پشتیبان" : "Backup file")</label>
             <input type="file" name="file" class="form-control text-sm" required />
+            <p class="mt-1 text-[11px] text-ink-faint">@UploadLimit.UpTo(Harbora.Web.Controllers.DatabasesController.MaxImportBytes, isFa)</p>
+            <p class="field-error hidden" data-upload-limit-error></p>
         </div>
 
         <div>

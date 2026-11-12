@@ -46,7 +46,9 @@
                 ? "فایلی که قبلاً از همین‌جا — یا از یک Harbora دیگر — دانلود شده. Harbora داخل فایل را نمی‌بیند، پس پیش از اتکا به آن «بررسی بازیابی» را اجرا کنید."
                 : "A file downloaded from here, or from another Harbora. Harbora cannot see inside it, so run the restore check before relying on it.")
         </p>
-        <form asp-controller="Backups" asp-action="Upload" method="post" enctype="multipart/form-data" class="space-y-3">
+        <form asp-controller="Backups" asp-action="Upload" method="post" enctype="multipart/form-data" class="space-y-3"
+              data-upload-limit data-max-bytes="@Harbora.Web.Controllers.BackupsController.ImportSizeLimitBytes"
+              data-too-big="@UploadLimit.TooLarge(Harbora.Web.Controllers.BackupsController.ImportSizeLimitBytes, isFa)">
             @Html.AntiForgeryToken()
             <label class="form-field">
                 <span>@(isFa ? "این نسخه، پشتیبانِ چه چیزی است؟" : "What is this a backup of?")</span>
@@ -68,6 +70,8 @@
             <label class="form-field">
                 <span>@(isFa ? "فایل" : "File")</span>
                 <input name="file" type="file" required class="form-control text-sm" />
+                <small>@UploadLimit.UpTo(Harbora.Web.Controllers.BackupsController.ImportSizeLimitBytes, isFa)</small>
+                <span class="field-error hidden" data-upload-limit-error></span>
             </label>
             <button class="btn-secondary w-full justify-center">
                 <i data-lucide="upload-cloud" class="h-4 w-4"></i>@(isFa ? "بارگذاری" : "Upload")

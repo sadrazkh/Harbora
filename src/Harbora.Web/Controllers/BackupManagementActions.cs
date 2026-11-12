@@ -1,6 +1,7 @@
 using Harbora.Domain.Authorization;
 using Harbora.Domain.Backups;
 using Harbora.Domain.Common;
+using Harbora.Web.Infrastructure;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -89,7 +90,10 @@ public sealed partial class BackupsController
     [HttpPost("upload")]
     [ValidateAntiForgeryToken]
     [Authorize(Policy = Capabilities.BackupsManage)]
-    [RequestSizeLimit(ImportSizeLimitBytes)]
+    // The same three as a database import, for the same 128 MB default — see UploadLimit.
+    [RequestSizeLimit(ImportSizeLimitBytes + UploadLimit.FormOverheadBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = ImportSizeLimitBytes + UploadLimit.FormOverheadBytes)]
+    [RefuseOversizedUpload(ImportSizeLimitBytes, nameof(Index))]
     public async Task<IActionResult> Upload(
         string target, Guid destinationId, IFormFile? file, CancellationToken ct)
     {
@@ -380,5 +384,5 @@ public sealed partial class BackupsController
     /// backups themselves live on.
     /// </para>
     /// </summary>
-    private const long ImportSizeLimitBytes = 8L * 1024 * 1024 * 1024;
+    internal const long ImportSizeLimitBytes = 8L * 1024 * 1024 * 1024;
 }

@@ -163,6 +163,9 @@ public static class DependencyInjection
         // process), so it is settled as the panel starts — or its conversation could never be deleted. A
         // startup reconciler like the ones above, so it is registered above the gate, as the line below asks.
         services.AddHostedService<Agent.AgentPlanStartupReconciler>();
+        // Round nine: a database a restart left reading Provisioning is set going again or failed with
+        // a sentence, above the gate like the others, and swept again every few minutes after it.
+        services.AddHostedService<Services.StrandedProvisionReconciler>();
         // Lets the job worker start claiming. Hosted services start in registration order, so every
         // startup reconciler — including any added later — must be registered ABOVE this line; that
         // is the whole guarantee, and it is on the reconciler's registration, not on this one.
@@ -329,6 +332,8 @@ public static class DependencyInjection
         // Round six, phase 0b (in-panel agent): database creation, removal and attach/detach, moved out
         // of DatabasesController so the panel and the agent's tools run one set of checks and audits.
         services.AddScoped<Services.IDatabaseProvisioningService, Services.DatabaseProvisioningService>();
+        // Round nine: the daily backup every new database is given, after its creation has committed.
+        services.AddScoped<Services.AutomaticDatabaseBackup>();
         services.AddScoped<Services.IDatabaseAttachmentService, Services.DatabaseAttachmentService>();
         // Round six, wave B, agent G (in-panel agent): the assistant's project and database write tools,
         // each over the service the matching ProjectsController/DatabasesController action calls. Here,

@@ -4,6 +4,7 @@ using Harbora.Domain.Backups;
 using Harbora.Domain.Common;
 using Harbora.Domain.Services;
 using Harbora.Infrastructure.Services;
+using Harbora.Web.Infrastructure;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -180,7 +181,9 @@ public sealed partial class DatabasesController
     /// </summary>
     [HttpPost("{id:guid}/logical-databases/{databaseId:guid}/import")]
     [ValidateAntiForgeryToken]
-    [RequestSizeLimit(MaxImportBytes + 1024 * 1024)]
+    [RequestSizeLimit(MaxImportBytes + UploadLimit.FormOverheadBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = MaxImportBytes + UploadLimit.FormOverheadBytes)]
+    [RefuseOversizedUpload(MaxImportBytes, nameof(ConfirmImport))]
     [Authorize(Policy = Capabilities.BackupsRestore)]
     public async Task<IActionResult> ImportDatabase(
         Guid id, Guid databaseId, IFormFile? file, string? confirmName, CancellationToken ct)
@@ -206,9 +209,7 @@ public sealed partial class DatabasesController
         }
         if (file.Length > MaxImportBytes)
         {
-            TempData["Error"] = IsFa
-                ? $"فایل بزرگ‌تر از {MaxImportBytes / 1024 / 1024 / 1024} گیگابایت است."
-                : $"The file is larger than {MaxImportBytes / 1024 / 1024 / 1024} GB.";
+            TempData["Error"] = UploadLimit.TooLarge(MaxImportBytes, IsFa);
             return RedirectToAction(nameof(ConfirmImport), new { id, databaseId });
         }
 
